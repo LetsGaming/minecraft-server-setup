@@ -3,6 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+export USER="$USER"
 export MAIN_DIR="$HOME"
 export SCRIPT_DIR="$SCRIPT_DIR"
 
