@@ -18,7 +18,16 @@ fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
 fs.readdirSync(sourceDir).forEach(file => {
   const sourceFile = path.join(sourceDir, file);
   const targetFile = path.join(SCRIPTS_DIR, file);
-  fs.copyFileSync(sourceFile, targetFile);
+  
+  // Prüfen, ob es sich um eine Datei oder ein Verzeichnis handelt
+  const stats = fs.statSync(sourceFile);
+  if (stats.isDirectory()) {
+    // Falls es ein Verzeichnis ist, es rekursiv kopieren
+    fs.cpSync(sourceFile, targetFile, { recursive: true });
+  } else if (stats.isFile()) {
+    // Falls es eine Datei ist, sie kopieren
+    fs.copyFileSync(sourceFile, targetFile);
+  }
 });
 
 console.log('Scripts copied successfully.');

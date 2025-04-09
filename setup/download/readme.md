@@ -63,7 +63,3 @@ The script will display the download progress in the terminal as a percentage an
 - **File not found error**: Make sure that the `variables.txt` file is in the same directory as the script.
 - **Invalid pack ID or API key**: Double-check the values in `variables.txt`. Ensure the `pack_id` is correct (find it in the **About Project** section on the CurseForge modpack page) and that the API key is valid.
 - **Missing dependencies**: If you haven't installed `axios`, run `npm install axios` to install the required package.
-
---- 
-
-Now the README correctly mentions the location of the **pack ID** in the **About Project** section.
