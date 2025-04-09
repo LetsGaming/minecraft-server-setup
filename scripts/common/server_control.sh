@@ -9,15 +9,15 @@ if [ -z "$MODPACK_NAME" ]; then
     exit 1
 fi
 
+export MODPACK_NAME="$MODPACK_NAME"
 # Set the name of the screen session (adjust if needed)
-SCREEN_SESSION_NAME="$MODPACK_NAME"
 SERVER_FOLDER="/home/minecraft/minecraft-server/$MODPACK_NAME"  # Base folder for the server
 LOG_FILE="$SERVER_FOLDER/logs/latest.log"    # Combine to get the full log file path
 
 # Function to send a message to the server via /say command in the Minecraft server
 send_message() {
     message=$1
-    screen -S $SCREEN_SESSION_NAME -p 0 -X stuff "/say $message$(printf \\r)"
+    screen -S $MODPACK_NAME -p 0 -X stuff "/say $message$(printf \\r)"
 }
 
 # Function to check if the server has completed the save-all process by monitoring the log file
@@ -44,6 +44,6 @@ countdown() {
 # Function to perform server save and wait for completion
 save_and_wait() {
     send_message "Saving the server now to ensure no data is lost..."
-    screen -S $SCREEN_SESSION_NAME -p 0 -X stuff "/save-all$(printf \\r)"
+    screen -S $MODPACK_NAME -p 0 -X stuff "/save-all$(printf \\r)"
     wait_for_save_completion
 }

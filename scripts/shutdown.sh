@@ -21,6 +21,6 @@ save_and_wait
 send_message "Server §6is shutting down§r now!"
 
 # Stop the server
-sudo systemctl stop minecraft.service
+sudo systemctl stop "$MODPACK_NAME".service
 
 echo "Server stopped."
