@@ -39,7 +39,11 @@ Before you begin, ensure you have the following installed on your system:
    cd minecraft-server-setup
    ```
 
-2. **Review and Customize Configurations:**
+2. **Get API Key**
+   Navigate to [curseforge API](https://console.curseforge.com/#/api-keys) and generate a new API Key
+   Copy it for the next step
+
+3. **Review and Customize Configurations:**
 
    Change the variables in [variables.json](./setup/variables.json) to match your desired configuration
    Set the pack_id and your api_key in [curseforge_variables.json](./setup/download/curseforge_variables.json)
