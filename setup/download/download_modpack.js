@@ -1,37 +1,18 @@
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
+import {pack_id, api_key} from './curseforge_variables.json';
+// Load pack_id and api_key from curseforge_variables.json
 
-// Load pack_id and api_key from variables.txt
-const variablesFilePath = path.join(__dirname, 'variables.txt');
-let packID, curseforgeAPIKey;
+let packID = pack_id;
+let curseforgeAPIKey = api_key;
 
-fs.readFile(variablesFilePath, 'utf8', (err, data) => {
-    if (err) {
-        console.error('Error reading variables.txt:', err);
-        return;
-    }
+// Check if pack_id or api_key are missing or set to 'none'
+if (!packID || !curseforgeAPIKey || packID === 'none' || curseforgeAPIKey === 'none') {
+    console.error('Error: pack_id or api_key is missing or set to "none". Please check the "curseforge_variables.json" file.');
+    return;
+}
 
-    // Parse the variables.txt file
-    const lines = data.split('\n');
-    lines.forEach(line => {
-        const [key, value] = line.split('=');
-        if (key === 'pack_id') {
-            packID = value.trim();
-        } else if (key === 'api_key') {
-            curseforgeAPIKey = value.trim();
-        }
-    });
-
-    // Check if pack_id or api_key are missing or set to 'none'
-    if (!packID || !curseforgeAPIKey || packID === 'none' || curseforgeAPIKey === 'none') {
-        console.error('Error: pack_id or api_key is missing or set to "none". Please check the "variables.txt" file.');
-        return;
-    }
-
-    // Now call the API with the loaded values
-    fetchModPackInfo();
-});
+// Now call the API with the loaded values
+fetchModPackInfo();
 
 function fetchModPackInfo() {
     axios.get(`https://api.curseforge.com/v1/mods/${packID}`, {

@@ -12,10 +12,10 @@ node "$SCRIPT_DIR/setup/download/download_modpack.js"
 node "$SCRIPT_DIR/setup/create_directories.js"
 node "$SCRIPT_DIR/setup/unpack_modpack.js"
 node "$SCRIPT_DIR/setup/copy_scripts.js"
-service_name=$(node path_to_script.js)
-
-export SERVICE_NAME="$service_name"
 
 echo "Cleaning up..."
 sudo rm -rf "$SCRIPT_DIR/server-pack.zip"
 echo "Setup completed successfully."
+
+echo "Starting server..."
+bash "$SCRIPT_DIR/start_server.sh"

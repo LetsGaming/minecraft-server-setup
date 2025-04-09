@@ -1,2 +1,0 @@
-pack_id=466901
-api_key=
