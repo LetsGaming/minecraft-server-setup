@@ -3,8 +3,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-export MAIN_DIR = $HOME 
-export SCRIPT_DIR
+export MAIN_DIR="$HOME"
+export SCRIPT_DIR="$SCRIPT_DIR"
 
 bash "$SCRIPT_DIR/setup/download_packages.sh"
 bash "$SCRIPT_DIR/setup/download_modpack.sh"
