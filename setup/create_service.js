@@ -1,6 +1,6 @@
-const fs = require('fs');
 const path = require('path');
 const loadVariables = require('./common/loadVariables');
+const { exec } = require('child_process');
 
 const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
 
@@ -31,7 +31,8 @@ LimitNOFILE=4096
 WantedBy=multi-user.target
 `;
 
-fs.writeFile(serviceFilePath, serviceContent, (err) => {
+// Use exec to run the command with sudo privileges
+exec(`echo "${serviceContent}" | sudo tee ${serviceFilePath} > /dev/null`, (err, stdout, stderr) => {
   if (err) {
     console.error('Error writing the service file:', err);
     return;
