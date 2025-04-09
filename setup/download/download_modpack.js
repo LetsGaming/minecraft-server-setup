@@ -70,7 +70,7 @@ function downloadServerPack(downloadUrl, totalSize) {
             let progress = (downloaded / totalSize * 100).toFixed(2);
 
             // Update progress every 10%
-            if (progress >= lastProgress + 10) {
+            if (progress >= lastProgress + 1) {
                 let elapsedTime = (Date.now() - startTime) / 1000; // Time in seconds
                 downloadSpeed = downloaded / elapsedTime; // Calculate download speed in bytes per second
                 let remainingTime = (totalSize - downloaded) / downloadSpeed; // Remaining time in seconds
