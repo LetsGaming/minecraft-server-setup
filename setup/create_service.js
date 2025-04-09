@@ -8,7 +8,8 @@ const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
 const MODPACK_DIR = path.join(BASE_DIR, MODPACK_NAME);
 
 const startScript = path.join(MODPACK_DIR, 'start.sh');
-const serviceFilePath = `/etc/systemd/system/${MODPACK_NAME}.service`;
+const serviceName = `${MODPACK_NAME}.service`;
+const serviceFilePath = `/etc/systemd/system/${serviceName}`;
 
 // Get the user executing the script
 const currentUser = process.env.USER;

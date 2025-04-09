@@ -46,4 +46,6 @@ else
     echo "node is already installed."
 fi
 
+npm i --no-package-lock --omit=dev
+
 echo "All packages installed."

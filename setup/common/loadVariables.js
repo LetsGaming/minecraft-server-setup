@@ -19,7 +19,9 @@ function loadVariables() {
     }
   }
 
+  // Output the variables in a format bash can capture
+  console.log(JSON.stringify(data));
   return data;
 }
 
-module.exports = loadVariables;
+loadVariables();
