@@ -1,0 +1,2 @@
+MODPACK_NAME=prominence-rpg
+TARGET_DIR_NAME=minecraft-server
