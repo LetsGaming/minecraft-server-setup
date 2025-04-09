@@ -36,24 +36,27 @@ Before you begin, ensure you have the following installed on your system:
 
    ```bash
    git clone https://github.com/LetsGaming/minecraft-server-setup.git
+   ```
+   ```bash
    cd minecraft-server-setup
    ```
 
 2. **Get API Key**
-   Navigate to [curseforge API](https://console.curseforge.com/#/api-keys) and generate a new API Key
-   Copy it for the next step
 
-3. **Review and Customize Configurations:**
+   - Navigate to [curseforge API](https://console.curseforge.com/#/api-keys) and generate a new API Key
+   - Copy it for the next step
 
-   Change the variables in [variables.json](./setup/variables.json) to match your desired configuration
-   Set the pack_id and your api_key in [curseforge_variables.json](./setup/download/curseforge_variables.json)
+4. **Review and Customize Configurations:**
+
+   - Change the variables in [variables.json](./setup/variables.json) to match your desired configuration
+   - Set the pack_id and your api_key in [curseforge_variables.json](./setup/download/curseforge_variables.json)
 
 ## Usage
 
 Once the above steps are completed, you can run the main setup script to start the server installation process:
 
 ```bash
-./main.sh
+bash main.sh
 ```
 
 The `main.sh` script will automatically setup everything needed for the server and start it once finished.
