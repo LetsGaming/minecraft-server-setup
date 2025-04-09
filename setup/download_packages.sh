@@ -46,4 +46,4 @@ else
     echo "node is already installed."
 fi
 
-echo "Script execution completed."
+echo "All packages installed."
