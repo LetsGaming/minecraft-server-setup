@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const loadVariables = require('../common/loadVariables');
+const loadVariables = require('./common/loadVariables');
 
 const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
 

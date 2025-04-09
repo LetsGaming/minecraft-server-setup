@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const unzipper = require('unzipper');
-const loadVariables = require('../common/loadVariables');
+const loadVariables = require('./common/loadVariables');
 
 const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
 // Ensure required variables are defined
