@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Source the common server control functions
-source ./common/server_control.sh
+source "$(dirname "$0")/common/server_control.sh"
 
 echo "Starting server restart script..."
 
