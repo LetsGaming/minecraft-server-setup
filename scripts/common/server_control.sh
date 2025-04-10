@@ -1,9 +1,15 @@
 #!/bin/bash
 
 set -e
-source "$(dirname "$0")/load_variables.sh"  # Load variables from the specified file
 
-LOG_FILE="$SERVER_PATH/logs/latest.log"    # Combine to get the full log file path
+# Get the absolute path of the directory where *this script* resides
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load variables from the common folder
+source "$SCRIPT_DIR/load_variables.sh"
+
+# Reference log file based on loaded variable
+LOG_FILE="$SERVER_PATH/logs/latest.log"
 
 send_command() {
     command=$1

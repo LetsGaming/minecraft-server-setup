@@ -2,8 +2,11 @@
 
 set -e
 
-# Load variables from variables.txt
-source "$(dirname "$0")/variables.txt"
+# Get the absolute path of the directory where *this script* resides
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load variables from the common folder
+source "$SCRIPT_DIR/variables.txt"
 
 # Check if MODPACK_NAME is set
 if [ -z "$MODPACK_NAME" ]; then

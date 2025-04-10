@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-source "$(dirname "$0")/common/load_variables.sh"  # Load variables from the specified file
+source "$(dirname "$0")/common/load_variables.sh"
 
 echo "Starting $MODPACK_NAME server..."
 
