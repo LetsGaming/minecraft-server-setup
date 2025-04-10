@@ -1,6 +1,6 @@
 # CurseForge Modpack Downloader
 
-This JavaScript script allows you to download a modpack from CurseForge using the CurseForge API. It reads configuration details (like the `pack_id` and `api_key`) from a `variables.txt` file. If these details are missing or incorrect, the script will notify you and exit gracefully.
+This JavaScript script allows you to download a modpack from CurseForge using the CurseForge API. It reads configuration details (like the `pack_id` and `api_key`) from a `curseforge_variables.json` file. If these details are missing or incorrect, the script will notify you and exit gracefully.
 
 ## Requirements
 
@@ -9,32 +9,32 @@ This JavaScript script allows you to download a modpack from CurseForge using th
 
 ## Instructions
 
-### Step 1: Set up your `variables.txt` file
+### Step 1: Set up your `curseforge_variables.json` file
 
-You will need to create a `variables.txt` file to store your CurseForge **pack ID** and **API key**. The file should be in the following format:
+You will need to change the `curseforge_variables.json` file to store your CurseForge **pack ID** and **API key**. The file should be in the following format:
 
 ```
-pack_id=YOUR_pack_id
-api_key=YOUR_API_KEY
+{
+    "pack_id": "none",
+    "api_key": "none"
+}
 ```
+#### Get needed CurseForge Information
 
+##### Get Pack ID
 - **pack_id**: This is the numeric ID of the modpack you want to download. To find it:
   1. Go to the [CurseForge website](https://www.curseforge.com/minecraft/modpacks).
   2. Browse to the modpack page you're interested in.
   3. On the left side of the page, under the **About Project** section, you will find the **Project ID** (e.g., `Project ID: 123456`).
 
-- **api_key**: To use the CurseForge API, you'll need an API key. You can obtain your API key by creating an account and logging into the [CurseForge website](https://www.curseforge.com/). Then, go to the [API page](https://console.curseforge.com/) to generate a new key.
-
-**Example `variables.txt` file**:
-
-```
-pack_id=123456
-api_key=your_api_key_here
-```
+#### Get API Key
+- **api_key**: To use the CurseForge API, you'll need an API key.
+  1. You can obtain your API key by creating an account and logging into the [CurseForge website](https://www.curseforge.com/).
+  2. Then, go to the [API page](https://console.curseforge.com/) to generate a new key.
 
 ### Step 2: Download the Modpack
 
-Once you have set up your `variables.txt` file, run the JavaScript script:
+Once you have set up your `curseforge_variables.json` file, run the JavaScript script:
 
 ```bash
 node download_modpack.js
@@ -42,12 +42,12 @@ node download_modpack.js
 
 ### Step 3: Handling Missing or Incorrect Values
 
-If the `pack_id` or `api_key` is missing or incorrect in the `variables.txt` file, the script will print an error message and stop.
+If the `pack_id` or `api_key` is missing or incorrect in the `curseforge_variables.json` file, the script will print an error message and stop.
 
 Example error message:
 
 ```
-Error: pack_id or api_key is missing or incorrect. Please check the 'variables.txt' file.
+Error: pack_id or api_key is missing or incorrect. Please check the 'curseforge_variables.json' file.
 ```
 
 ### Step 4: Download Location
@@ -60,6 +60,6 @@ The script will display the download progress in the terminal as a percentage an
 
 ## Troubleshooting
 
-- **File not found error**: Make sure that the `variables.txt` file is in the same directory as the script.
-- **Invalid pack ID or API key**: Double-check the values in `variables.txt`. Ensure the `pack_id` is correct (find it in the **About Project** section on the CurseForge modpack page) and that the API key is valid.
+- **File not found error**: Make sure that the `curseforge_variables.json` file is in the same directory as the script.
+- **Invalid pack ID or API key**: Double-check the values in `curseforge_variables.json`. Ensure the `pack_id` is correct (find it in the **About Project** section on the CurseForge modpack page) and that the API key is valid.
 - **Missing dependencies**: If you haven't installed `axios`, run `npm install axios` to install the required package.
