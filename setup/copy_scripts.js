@@ -12,13 +12,6 @@ const SCRIPTS_DIR = path.join(BASE_DIR, 'scripts', MODPACK_NAME);
 // Quelle der Scripts liegt im Projekt-Root unter /scripts
 const sourceDir = path.resolve(__dirname, '..', 'scripts');
 
-// Schreiben des MODPACK_NAME in die variables.txt im /scripts/common Verzeichnis
-const variablesFilePath = path.join(sourceDir, 'common', 'variables.txt');
-
-// Erstellen oder Überschreiben der variables.txt Datei
-const variablesContent = `MODPACK_NAME="${MODPACK_NAME}"\n`;
-fs.writeFileSync(variablesFilePath, variablesContent, { flag: 'w' });
-
 // Sicherstellen, dass das Zielverzeichnis existiert
 fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
 

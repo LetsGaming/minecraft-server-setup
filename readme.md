@@ -59,6 +59,12 @@ Once the above steps are completed, you can run the main setup script to start t
 bash main.sh
 ```
 
+If you dont wish to automatically start the server:
+
+```bash
+bash main.sh --no-start
+```
+
 The `main.sh` script will automatically setup everything needed for the server and start it once finished.
 
 ## Folder Structure

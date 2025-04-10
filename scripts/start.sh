@@ -1,9 +1,7 @@
 #!/bin/bash
 set -e
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-variables=$(node "$SCRIPT_DIR/setup/common/loadVariables.js")
-MODPACK_NAME=$(echo "$variables" | jq -r .MODPACK_NAME)
+source "$(dirname "$0")/common/load_variables.sh"  # Load variables from the specified file
 
 echo "Starting $MODPACK_NAME server..."
 

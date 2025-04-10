@@ -1,23 +1,19 @@
 #!/bin/bash
 
-# Load variables from variables.txt
-source "$(dirname "$0")/variables.txt"
+set -e
+source "$(dirname "$0")/load_variables.sh"  # Load variables from the specified file
 
-# Check if MODPACK_NAME is set
-if [ -z "$MODPACK_NAME" ]; then
-    echo "Error: MODPACK_NAME is not set in variables.txt"
-    exit 1
-fi
+LOG_FILE="$SERVER_PATH/logs/latest.log"    # Combine to get the full log file path
 
-export MODPACK_NAME="$MODPACK_NAME"
-# Set the name of the screen session (adjust if needed)
-SERVER_FOLDER="/home/minecraft/minecraft-server/$MODPACK_NAME"  # Base folder for the server
-LOG_FILE="$SERVER_FOLDER/logs/latest.log"    # Combine to get the full log file path
+send_command() {
+    command=$1
+    screen -S $MODPACK_NAME -p 0 -X stuff "$command$(printf \\r)"
+}
 
 # Function to send a message to the server via /say command in the Minecraft server
 send_message() {
     message=$1
-    screen -S $MODPACK_NAME -p 0 -X stuff "/say $message$(printf \\r)"
+    send_command "/say $message"
 }
 
 # Function to check if the server has completed the save-all process by monitoring the log file
