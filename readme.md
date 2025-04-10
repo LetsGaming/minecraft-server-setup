@@ -56,7 +56,7 @@ Before you begin, ensure you have the following installed on your system:
 Once the above steps are completed, you can run the main setup script to start the server installation process:
 
 ```bash
-bash main.sh
+sudo -u <username> bash main.sh
 ```
 
 If you dont wish to automatically start the server:
