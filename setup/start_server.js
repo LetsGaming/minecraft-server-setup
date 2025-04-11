@@ -8,8 +8,11 @@ const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
 const serverScriptsPath = path.join(BASE_DIR, "scripts", MODPACK_NAME);
 const scriptPath = path.join(serverScriptsPath, "start.sh");
 
-// Wrap the start.sh script execution in a screen session
-const screenCommand = `screen -S "${MODPACK_NAME}" -dm bash ${scriptPath}`;
+// Get the current user
+const currentUser = process.env.USER;
+
+// Wrap the start.sh script execution in a screen session, run as the current user
+const screenCommand = `sudo -u ${currentUser} screen -S "${MODPACK_NAME}" -dm bash ${scriptPath}`;
 
 execFile("bash", ["-c", screenCommand], (error, stdout, stderr) => {
   if (error) {
