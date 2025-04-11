@@ -12,6 +12,7 @@ const variablesFilePath = path.resolve(__dirname, "..", "scripts", "common", "va
 
 // Prepare content
 const variablesContent = [
+  `USER="${process.env.USER}"`,
   `MODPACK_NAME="${MODPACK_NAME}"`,
   `SERVER_PATH="${serverPath}"`
 ].join("\n");

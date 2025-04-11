@@ -8,9 +8,12 @@ const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
 const serverScriptsPath = path.join(BASE_DIR, "scripts", MODPACK_NAME);
 const scriptPath = path.join(serverScriptsPath, "start.sh");
 
-execFile(scriptPath, (error, stdout, stderr) => {
+// Wrap the start.sh script execution in a screen session
+const screenCommand = `screen -S "${MODPACK_NAME}" -dm bash ${scriptPath}`;
+
+execFile("bash", ["-c", screenCommand], (error, stdout, stderr) => {
   if (error) {
-    console.error(`Error executing script: ${error.message}`);
+    console.error(`Error executing screen command: ${error.message}`);
     return;
   }
   if (stderr) {

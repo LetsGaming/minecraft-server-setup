@@ -52,5 +52,5 @@ if [ "$NO_START" = false ]; then
   fi
 else
   echo "Remember to run the following commands to start the server:"
-  echo "bash \$MAIN_DIR/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
+  echo "bash screen $MAIN_DIR/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
 fi

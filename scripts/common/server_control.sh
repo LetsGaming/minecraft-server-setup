@@ -13,7 +13,13 @@ LOG_FILE="$SERVER_PATH/logs/latest.log"
 
 send_command() {
     command=$1
-    screen -S $MODPACK_NAME -p 0 -X stuff "$command$(printf \\r)"
+    if [ "$(id -u)" -eq 0 ]; then
+        # If running as root (sudo), use sudo -u to run the command as the specified user
+        sudo -u $USER screen -S $MODPACK_NAME -p 0 -X stuff "$command$(printf \\r)"
+    else
+        # If not running as root, just run the command normally
+        screen -S $MODPACK_NAME -p 0 -X stuff "$command$(printf \\r)"
+    fi
 }
 
 # Function to send a message to the server via /say command in the Minecraft server
@@ -46,6 +52,6 @@ countdown() {
 # Function to perform server save and wait for completion
 save_and_wait() {
     send_message "Saving the server now to ensure no data is lost..."
-    screen -S $MODPACK_NAME -p 0 -X stuff "/save-all$(printf \\r)"
+    send_command "/save-all"
     wait_for_save_completion
 }

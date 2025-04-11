@@ -1,2 +1,3 @@
+USER=minecraft
 MODPACK_NAME=prominence-rpg
 SERVER_PATH=/home/minecraft/minecraft-server/prominence-rpg
