@@ -1,75 +1,86 @@
-const fs = require("fs");
 const path = require("path");
-const loadVariables = require("../common/loadVariables");
+const fs = require("fs");
+const loadVariables = require("./common/loadVariables");
 
-const { TARGET_DIR_NAME, MODPACK_NAME, JAVA_ARGS_CONFIG } = loadVariables();
+const { TARGET_DIR_NAME, MODPACK_NAME, JAVA_ARGS_CONFIG, chosenGC } = loadVariables();
 
-const MODPACK_DIR = path.join(
-  process.env.MAIN_DIR,
-  TARGET_DIR_NAME,
-  MODPACK_NAME
-);
-const VARIABLES_PATH = path.join(MODPACK_DIR, "variables.txt");
+const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, MODPACK_NAME);
+const variablesTxtPath = path.join(MODPACK_DIR, "variables.txt");
 
-function buildJavaArgs(config) {
-  const args = [];
+function buildJavaArgs(config, gcChoice) {
+  const flags = [];
 
-  args.push(`-Xms${config.minMemory}`);
-  args.push(`-Xmx${config.maxMemory}`);
-  args.push(`-XX:MaxMetaspaceSize=${config.metaspaceLimit}`);
+  // Memory settings
+  if (config.minMemory) flags.push(`-Xms${config.minMemory}`);
+  if (config.maxMemory) flags.push(`-Xmx${config.maxMemory}`);
+  if (config.metaspaceLimit) flags.push(`-XX:MaxMetaspaceSize=${config.metaspaceLimit}`);
 
-  switch (config.garbageCollector.toLowerCase()) {
-    case "zgc":
-      args.push("-XX:+UseZGC");
-      args.push("-XX:+UnlockExperimentalVMOptions");
-      args.push("-XX:+ZUncommit");
-      if (config.zgc?.uncommitDelay)
-        args.push(`-XX:ZUncommitDelay=${config.zgc.uncommitDelay}`);
-      if (config.zgc?.uncommitDelayOnIdle)
-        args.push(`-XX:ZUncommitDelayOnIdle=${config.zgc.uncommitDelayOnIdle}`);
-      break;
-
-    case "g1gc":
-      args.push("-XX:+UseG1GC");
-      if (config.enableStringDeduplication)
-        args.push("-XX:+UseStringDeduplication");
-      if (config.g1gc?.maxPauseMillis)
-        args.push(`-XX:MaxGCPauseMillis=${config.g1gc.maxPauseMillis}`);
-      if (config.g1gc?.parallelGCThreads)
-        args.push(`-XX:ParallelGCThreads=${config.g1gc.parallelGCThreads}`);
-      if (config.g1gc?.concGCThreads)
-        args.push(`-XX:ConcGCThreads=${config.g1gc.concGCThreads}`);
-      break;
-
-    default:
-      throw new Error(
-        `Unsupported garbageCollector: ${config.garbageCollector}`
-      );
+  // Garbage collector choice
+  if (gcChoice === "g1gc") {
+    flags.push("-XX:+UseG1GC");
+    const g1gc = config.g1gc;
+    if (g1gc) {
+      if (g1gc.maxPauseMillis) flags.push(`-XX:MaxGCPauseMillis=${g1gc.maxPauseMillis}`);
+      if (g1gc.g1NewSizePercent) flags.push(`-XX:G1NewSizePercent=${g1gc.g1NewSizePercent}`);
+      if (g1gc.g1MaxNewSizePercent) flags.push(`-XX:G1MaxNewSizePercent=${g1gc.g1MaxNewSizePercent}`);
+      if (g1gc.heapRegionSize) flags.push(`-XX:G1HeapRegionSize=${g1gc.heapRegionSize}`);
+      if (g1gc.reservePercent) flags.push(`-XX:G1ReservePercent=${g1gc.reservePercent}`);
+      if (g1gc.heapWastePercent) flags.push(`-XX:G1HeapWastePercent=${g1gc.heapWastePercent}`);
+      if (g1gc.mixedGCCountTarget) flags.push(`-XX:G1MixedGCCountTarget=${g1gc.mixedGCCountTarget}`);
+      if (g1gc.initiatingHeapOccupancyPercent) flags.push(`-XX:InitiatingHeapOccupancyPercent=${g1gc.initiatingHeapOccupancyPercent}`);
+      if (g1gc.survivorRatio) flags.push(`-XX:SurvivorRatio=${g1gc.survivorRatio}`);
+      if (g1gc.parallelRefProcEnabled) flags.push("-XX:+ParallelRefProcEnabled");
+      if (g1gc.disableExplicitGC) flags.push("-XX:+DisableExplicitGC");
+      if (g1gc.alwaysPreTouch) flags.push("-XX:+AlwaysPreTouch");
+      if (g1gc.perfDisableSharedMem) flags.push("-XX:+PerfDisableSharedMem");
+    }
+  } else if (gcChoice === "zgc") {
+    flags.push("-XX:+UseZGC", "-XX:+UnlockExperimentalVMOptions");
+    const zgc = config.zgc;
+    if (zgc) {
+      if (zgc.uncommitDelay) flags.push(`-XX:ZUncommitDelay=${zgc.uncommitDelay}`);
+      if (zgc.uncommitDelayOnIdle) flags.push(`-XX:ZUncommitDelayOnIdle=${zgc.uncommitDelayOnIdle}`);
+      if (zgc.heapReservePercent) flags.push(`-XX:ZHeapReservePercent=${zgc.heapReservePercent}`);
+      if (zgc.concurrentGCThreads) flags.push(`-XX:ConcGCThreads=${zgc.concurrentGCThreads}`);
+      if (zgc.softMaxHeapSize) flags.push(`-XX:SoftMaxHeapSize=${zgc.softMaxHeapSize}`);
+    }
   }
 
-  // Optional: suppress RMI GC
-  args.push(`-Dsun.rmi.dgc.server.gcInterval=9223372036854775807`);
+  // String Deduplication flag
+  if (config.enableStringDeduplication) flags.push("-XX:+UseStringDeduplication");
 
-  return args.join(" ");
+  // Misc flags (e.g., sun.rmi.dgc.server.gcInterval)
+  if (Array.isArray(config.miscFlags)) {
+    flags.push(...config.miscFlags);
+  }
+
+  return flags.join(" ");
 }
 
-// Generate the JAVA_ARGS string
-const javaArgsString = `"${buildJavaArgs(JAVA_ARGS_CONFIG)}"`;
+function updateJavaArgsInVariablesFile() {
+  if (!JAVA_ARGS_CONFIG || !chosenGC) {
+    throw new Error("JAVA_ARGS_CONFIG or chosenGC is not defined in variables.json.");
+  }
 
-// Check if variables.txt exists
-if (!fs.existsSync(VARIABLES_PATH)) {
-  console.error(`Error: ${VARIABLES_PATH} does not exist.`);
-  process.exit(1);
+  const javaArgsString = `"${buildJavaArgs(JAVA_ARGS_CONFIG, chosenGC)}"`; // wrap in quotes
+
+  if (!fs.existsSync(variablesTxtPath)) {
+    throw new Error(`variables.txt not found at ${variablesTxtPath}`);
+  }
+
+  let variablesContent = fs.readFileSync(variablesTxtPath, "utf-8");
+
+  // Replace the JAVA_ARGS line
+  const regex = /^JAVA_ARGS=.*$/m;
+  if (regex.test(variablesContent)) {
+    variablesContent = variablesContent.replace(regex, `JAVA_ARGS=${javaArgsString}`);
+  } else {
+    // If JAVA_ARGS isn't present, append it
+    variablesContent += `\nJAVA_ARGS=${javaArgsString}`;
+  }
+
+  fs.writeFileSync(variablesTxtPath, variablesContent, "utf-8");
+  console.log("JAVA_ARGS updated in variables.txt with chosen GC.");
 }
 
-// Inject into variables.txt
-let variablesContent = fs.readFileSync(VARIABLES_PATH, "utf-8");
-
-variablesContent = variablesContent.replace(
-  /^JAVA_ARGS=.*$/m,
-  `JAVA_ARGS=${javaArgsString}`
-);
-
-fs.writeFileSync(VARIABLES_PATH, variablesContent, "utf-8");
-
-console.log(`Injected JAVA_ARGS into ${VARIABLES_PATH}`);
+updateJavaArgsInVariablesFile();
