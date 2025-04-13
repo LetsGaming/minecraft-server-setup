@@ -32,7 +32,7 @@ done
 bash "$SCRIPT_DIR/setup/download/download_packages.sh"
 node "$SCRIPT_DIR/setup/download/download_modpack.js"
 
-node "$SCRIPT_DIR/setup/sructure/reate_directories.js"
+node "$SCRIPT_DIR/setup/sructure/create_directories.js"
 node "$SCRIPT_DIR/setup/sructure/unpack_modpack.js"
 
 # Set up server variables
