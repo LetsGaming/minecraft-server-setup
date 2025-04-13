@@ -12,7 +12,7 @@ function loadVariables() {
 
   const data = JSON.parse(fs.readFileSync(variablesPath, "utf-8"));
 
-  const requiredVars = ["TARGET_DIR_NAME", "MODPACK_NAME"];
+  const requiredVars = ["TARGET_DIR_NAME", "MODPACK_NAME", "JAVA_ARGS_CONFIG"];
   for (const key of requiredVars) {
     if (!data[key]) {
       throw new Error(`Missing required variable: ${key}`);

@@ -1,4 +1,20 @@
 {
     "MODPACK_NAME": "prominence-rpg",
-    "TARGET_DIR_NAME": "minecraft-server"
+    "TARGET_DIR_NAME": "minecraft-server",
+    "JAVA_ARGS_CONFIG": {
+        "minMemory": "6G",
+        "maxMemory": "8G",
+        "garbageCollector": "zgc",
+        "metaspaceLimit": "512M",
+        "enableStringDeduplication": true,
+        "zgc": {
+          "uncommitDelay": "30m",
+          "uncommitDelayOnIdle": "5m"
+        },
+        "g1gc": {
+          "maxPauseMillis": 50,
+          "parallelGCThreads": 4,
+          "concGCThreads": 2
+        }
+      }
 }

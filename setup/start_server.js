@@ -11,6 +11,12 @@ const scriptPath = path.join(serverScriptsPath, "start.sh");
 // Get the current user
 const currentUser = process.env.USER;
 
+// Check if the start.sh script exists
+if (!fs.existsSync(scriptPath)) {
+  console.error(`start.sh script not found at ${scriptPath}`);
+  return;
+}
+
 // Wrap the start.sh script execution in a screen session, run as the current user
 const screenCommand = `sudo -u ${currentUser} screen -S "${MODPACK_NAME}" -dm bash ${scriptPath}`;
 
