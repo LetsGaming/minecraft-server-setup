@@ -1,6 +1,6 @@
 const fs = require("fs");
 const path = require("path");
-const loadVariables = require("./common/loadVariables");
+const loadVariables = require("../common/loadVariables");
 
 const { TARGET_DIR_NAME, MODPACK_NAME, JAVA_ARGS_CONFIG } = loadVariables();
 
@@ -72,4 +72,4 @@ variablesContent = variablesContent.replace(
 
 fs.writeFileSync(VARIABLES_PATH, variablesContent, "utf-8");
 
-console.log(`✓ Injected JAVA_ARGS into ${VARIABLES_PATH}`);
+console.log(`Injected JAVA_ARGS into ${VARIABLES_PATH}`);

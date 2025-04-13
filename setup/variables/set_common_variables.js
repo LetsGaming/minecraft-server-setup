@@ -1,6 +1,6 @@
 const path = require("path");
 const fs = require("fs");
-const loadVariables = require("./common/loadVariables");
+const loadVariables = require("../common/loadVariables");
 
 // Load variables
 const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
@@ -19,3 +19,5 @@ const variablesContent = [
 
 // Write to file
 fs.writeFileSync(variablesFilePath, variablesContent);
+
+console.log(`Variables written to ${variablesFilePath}`);

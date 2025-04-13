@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const loadVariables = require('./common/loadVariables');
+const loadVariables = require('../common/loadVariables');
 
 // Load the existing variables
 const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
@@ -31,4 +31,4 @@ fs.readdirSync(sourceDir).forEach(file => {
   }
 });
 
-console.log('Scripts copied successfully and MODPACK_NAME written to variables.txt.');
+console.log('Scripts copied successfully and MODPACK_NAME written to common/variables.txt.');

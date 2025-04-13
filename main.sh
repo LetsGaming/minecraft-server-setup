@@ -29,12 +29,19 @@ for arg in "$@"; do
 done
 
 # Run setup scripts
-bash "$SCRIPT_DIR/setup/download_packages.sh"
+bash "$SCRIPT_DIR/setup/download/download_packages.sh"
 node "$SCRIPT_DIR/setup/download/download_modpack.js"
-node "$SCRIPT_DIR/setup/create_directories.js"
-node "$SCRIPT_DIR/setup/unpack_modpack.js"
-node "$SCRIPT_DIR/setup/set_common_variables.js"
-node "$SCRIPT_DIR/setup/copy_scripts.js"
+
+node "$SCRIPT_DIR/setup/sructure/reate_directories.js"
+node "$SCRIPT_DIR/setup/sructure/unpack_modpack.js"
+
+# Set up server variables
+node "$SCRIPT_DIR/setup/variables/set_common_variables.js"
+node "$SCRIPT_DIR/setup/variables/set_server_variables.js"
+
+node "$SCRIPT_DIR/setup/sructure/copy_scripts.js"
+
+node "$SCRIPT_DIR/setup/management/create_service.js"
 
 echo "Cleaning up..."
 sudo rm -rf "$SCRIPT_DIR/server-pack.zip"
@@ -48,9 +55,11 @@ if [ "$NO_START" = false ]; then
     exit 1
   else
     echo "Starting the server..."
-    node "$SCRIPT_DIR/setup/start_server.js"
+    node "$SCRIPT_DIR/setup/management/start_server.js"
   fi
 else
   echo "Remember to run the following commands to start the server:"
-  echo "bash screen $MAIN_DIR/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
+  echo "bash $MAIN_DIR/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
+  echo "Or use the following command to start the server:"
+  echo "sudo systemctl start $MODPACK_NAME.service"
 fi
