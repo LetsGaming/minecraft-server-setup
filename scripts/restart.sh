@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 # Source the common server control functions
 source "$(dirname "$0")/common/server_control.sh"
 

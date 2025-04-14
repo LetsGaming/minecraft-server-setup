@@ -1,65 +1,83 @@
 #!/bin/bash
 set -e
 
-# Check if the user is root
+# --- Root Check ---
 if [ "$(id -u)" -eq 0 ]; then
-  echo "You are running the script as root. Try the script like follows:"
-  echo "sudo -u <username> bash main.sh"
+  echo "Do not run this script as root."
+  echo "Try: sudo -u <username> bash main.sh"
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
+# --- Environment Variables ---
 export USER="$USER"
+export SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export MAIN_DIR="$HOME"
-export SCRIPT_DIR="$SCRIPT_DIR"
 
+# --- Options ---
 NO_START=false
+NO_SERVICE=false
 
-# Argument parsing
-for arg in "$@"; do
-  case $arg in
+# --- Parse Arguments ---
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --no-start)
       NO_START=true
-      shift
+      ;;
+    --no-service)
+      NO_SERVICE=true
+      ;;
+    --help)
+      echo "Usage: $0 [--no-start] [--no-service] [--help]"
+      echo "Options:"
+      echo "  --no-start     Do not start the server after setup."
+      echo "  --no-service   Skip creating the systemd service."
+      echo "  --help         Show this help message."
+      exit 0
       ;;
     *)
+      echo "Unknown option: $1"
       ;;
   esac
+  shift
 done
 
-# Run setup scripts
+# --- Setup Steps ---
 bash "$SCRIPT_DIR/setup/download/download_packages.sh"
 node "$SCRIPT_DIR/setup/download/download_modpack.js"
 
 node "$SCRIPT_DIR/setup/sructure/create_directories.js"
 node "$SCRIPT_DIR/setup/sructure/unpack_modpack.js"
 
-# Set up server variables
 node "$SCRIPT_DIR/setup/variables/set_common_variables.js"
 node "$SCRIPT_DIR/setup/variables/set_server_variables.js"
-
 node "$SCRIPT_DIR/setup/sructure/copy_scripts.js"
 
-node "$SCRIPT_DIR/setup/management/create_service.js"
+# --- Systemd Service ---
+if [ "$NO_SERVICE" = false ]; then
+  echo "Creating systemd service..."
+  node "$SCRIPT_DIR/setup/systemd/create_service.js"
+else
+  echo "Skipping systemd service creation."
+fi
 
+# --- Cleanup ---
 echo "Cleaning up..."
-sudo rm -rf "$SCRIPT_DIR/server-pack.zip"
+sudo rm -f "$SCRIPT_DIR/server-pack.zip"
 
 echo "Setup completed successfully."
 
-# Check for sudo privileges before starting the server
+# --- Start Server ---
 if [ "$NO_START" = false ]; then
-  if ! sudo -v &>/dev/null; then
-    echo "This script does not have sudo privileges, and the --no-start option was not set. The server will not start."
-    exit 1
-  else
+  if sudo -v &>/dev/null; then
     echo "Starting the server..."
     node "$SCRIPT_DIR/setup/management/start_server.js"
+  else
+    echo "Insufficient sudo privileges to start the server."
+    exit 1
   fi
 else
-  echo "Remember to run the following commands to start the server:"
-  echo "bash $MAIN_DIR/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
-  echo "Or use the following command to start the server:"
-  echo "sudo systemctl start $MODPACK_NAME.service"
+  echo "To start the server manually, run:"
+  echo "bash \$HOME/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
+  echo "Or:"
+  echo "sudo systemctl start \$MODPACK_NAME.service"
 fi
