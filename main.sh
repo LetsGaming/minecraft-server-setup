@@ -15,6 +15,7 @@ export MAIN_DIR="$HOME"
 
 # --- Options ---
 NO_START=false
+EULA=false
 NO_SERVICE=false
 NO_BACKUP=false
 
@@ -23,6 +24,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-start)
       NO_START=true
+      ;;
+    --agree-eula)
+      EULA=true
       ;;
     --no-service)
       NO_SERVICE=true
@@ -33,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --help)
       echo "Usage: $0 [options]"
       echo "Options:"
+      echo "  --agree-eula   Accept the EULA and set the variable."
       echo "  --no-start     Do not start the server after setup."
       echo "  --no-service   Skip creating the systemd service."
       echo "  --no-backup    Skip creating the backup job."
@@ -81,11 +86,24 @@ sudo rm -f "$SCRIPT_DIR/server-pack.zip"
 
 echo "Setup completed successfully."
 
+# --- EULA ---
+if [ "$EULA" = true ]; then
+  echo "EULA accepted. Setting variable"
+  node "$SCRIPT_DIR/setup/management/agree_eula.js"
+else
+  echo "EULA not accepted. Please accept it before starting the server."
+fi
+
 # --- Start Server ---
 if [ "$NO_START" = false ]; then
   if sudo -v &>/dev/null; then
     echo "Starting the server..."
     node "$SCRIPT_DIR/setup/management/start_server.js"
+    if [ "$EULA" = false ]; then
+      echo "Server started. Please accept the EULA by running:"
+      echo "screen -r MODPACK_NAME"
+      echo "Then, type 'I agree' and press Enter."
+    fi
   else
     echo "Insufficient sudo privileges to start the server."
     exit 1
