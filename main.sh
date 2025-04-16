@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
       NO_BACKUP=true
       ;;
     --help)
-      echo "Usage: $0 [--no-start] [--no-service] [--help]"
+      echo "Usage: $0 [options]"
       echo "Options:"
       echo "  --no-start     Do not start the server after setup."
       echo "  --no-service   Skip creating the systemd service."
@@ -40,6 +40,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1"
+      echo "Try '$0 --help' for usage information."
       ;;
   esac
   shift

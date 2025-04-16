@@ -8,36 +8,112 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source the server_control.sh script from the common folder
 source "$SCRIPT_DIR/../common/server_control.sh"
 
-# Backup directory
-BACKUP_DIR="$SERVER_PATH/backups"
+# Default backup directory (can change if --from-archive is passed)
+BASE_BACKUP_DIR="$SERVER_PATH/backups"
+BACKUP_DIR="$BASE_BACKUP_DIR"
 
-# Function to restart the server
-restart() {
-    bash "$SCRIPT_DIR/../restart.sh"
+# Defaults
+SKIP_CONFIRMATION=false
+SPECIFIC_BACKUP=""
+RELATIVE_TIME=""
+FROM_ARCHIVE=false
+
+# Help function
+print_help() {
+    echo "Usage: $0 [options]"
+    echo ""
+    echo "Options:"
+    echo "  --y                   Skip confirmation prompt"
+    echo "  --file <filename>     Restore a specific backup file"
+    echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '2d')"
+    echo "  --archive             Restore from the archive folder instead of normal backups"
+    echo "  --help                Show this help message and exit"
+    echo ""
+    echo "Examples:"
+    echo "  $0 --y"
+    echo "  $0 --file backup-2024-12-01_01-00.tar.gz"
+    echo "  $0 --ago 5h --archive"
 }
 
-# Parse flags
-SKIP_CONFIRMATION=false
-for arg in "$@"; do
-    case "$arg" in
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --y)
             SKIP_CONFIRMATION=true
+            shift
+            ;;
+        --file)
+            SPECIFIC_BACKUP="$2"
+            shift 2
+            ;;
+        --ago)
+            RELATIVE_TIME="$2"
+            shift 2
+            ;;
+        --archive)
+            FROM_ARCHIVE=true
+            shift
+            ;;
+        --help)
+            print_help
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            echo "Try '$0 --help' for usage information."
+            exit 1
             ;;
     esac
 done
 
-# Find the latest backup file (safely, even with spaces in filenames)
-LATEST_BACKUP=$(find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+# Use archive folder if requested
+if [ "$FROM_ARCHIVE" = true ]; then
+    BACKUP_DIR="$BASE_BACKUP_DIR/archives"
+    echo "Restoring from archive backups: $BACKUP_DIR"
+fi
 
-# Check if a backup was found and is readable
-if [ -z "$LATEST_BACKUP" ] || [ ! -r "$LATEST_BACKUP" ]; then
-    echo "Error: No readable backup file found in $BACKUP_DIR."
+# Determine which backup to use
+if [[ -n "$SPECIFIC_BACKUP" ]]; then
+    BACKUP_TO_RESTORE="$BACKUP_DIR/$SPECIFIC_BACKUP"
+    if [[ ! -f "$BACKUP_TO_RESTORE" ]]; then
+        echo "Error: Specified backup file does not exist: $BACKUP_TO_RESTORE"
+        exit 1
+    fi
+elif [[ -n "$RELATIVE_TIME" ]]; then
+    TARGET_TIMESTAMP=$(date -d "$RELATIVE_TIME ago" +%s 2>/dev/null || true)
+    if [[ -z "$TARGET_TIMESTAMP" ]]; then
+        echo "Error: Invalid time format for --ago: $RELATIVE_TIME"
+        exit 1
+    fi
+    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@ %p\n' \
+        | awk -v tgt="$TARGET_TIMESTAMP" '
+            {
+                diff = ($1 - tgt); if (diff < 0) diff = -diff;
+                print diff, $0;
+            }' \
+        | sort -n | head -n1 | cut -d' ' -f2-)
+    if [[ -z "$BACKUP_TO_RESTORE" ]]; then
+        echo "Error: No suitable backup found for --ago $RELATIVE_TIME"
+        exit 1
+    fi
+else
+    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@ %p\n' \
+        | sort -nr | head -n1 | cut -d' ' -f2-)
+    if [[ -z "$BACKUP_TO_RESTORE" ]]; then
+        echo "Error: No backup found in $BACKUP_DIR."
+        exit 1
+    fi
+fi
+
+# Double-check file is readable
+if [[ ! -r "$BACKUP_TO_RESTORE" ]]; then
+    echo "Error: Cannot read backup file: $BACKUP_TO_RESTORE"
     exit 1
 fi
 
-echo "Found backup: $LATEST_BACKUP"
+echo "Selected backup: $BACKUP_TO_RESTORE"
 
-# Check if the target directory is non-empty and warn the user
+# Warn if restoring into non-empty server dir
 if [ "$(ls -A "$SERVER_PATH")" ]; then
     echo "Warning: $SERVER_PATH is not empty and may be overwritten by the restore."
     if [ "$SKIP_CONFIRMATION" = false ]; then
@@ -51,10 +127,10 @@ if [ "$(ls -A "$SERVER_PATH")" ]; then
     fi
 fi
 
-# Extract the backup
+# Extract backup
 echo "Restoring backup..."
-tar -xzf "$LATEST_BACKUP" -C "$SERVER_PATH"
-echo "Restore completed successfully from $LATEST_BACKUP"
+tar -xzf "$BACKUP_TO_RESTORE" -C "$SERVER_PATH"
+echo "Restore completed successfully from $BACKUP_TO_RESTORE"
 
-# Restart the server
-restart
+# Restart server
+bash "$SCRIPT_DIR/../restart.sh"

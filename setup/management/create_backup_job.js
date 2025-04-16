@@ -11,7 +11,7 @@ try {
   const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", MODPACK_NAME);
 
   // Define what the cronjob should do
-  const scriptPath = path.resolve(SCRIPTS_DIR, "backup", "backup.sh"); // replace with the actual script you want to run
+  const scriptPath = path.resolve(SCRIPTS_DIR, "backup", "backup.sh");
 
   if (!fs.existsSync(scriptPath)) {
     throw new Error(`Script file not found at: ${scriptPath}`);
