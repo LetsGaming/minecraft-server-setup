@@ -38,7 +38,7 @@ fi
 mkdir -p "$BACKUP_DIR"
 BACKUP_ARCHIVE="$BACKUP_DIR/minecraft_backup_$DATE.tar.gz"
 
-# ——— disable auto-save ———
+# ——— disable auto‑save ———
 echo "$(date +'%F %T') [INFO] Disabling auto-save..."
 if ! disable_auto_save; then
   echo "$(date +'%F %T') [WARN] disable_auto_save failed (continuing anyway)"
@@ -50,13 +50,16 @@ save_and_wait
 
 # ——— build include list ———
 cd "$SERVER_PATH"
-INCLUDE_PATHS=(world server.properties)
-[ -d plugins ] && INCLUDE_PATHS+=(plugins)
-[ -d configs ] && INCLUDE_PATHS+=(configs)
+INCLUDE_PATHS=()
+for item in * .*; do
+  # Skip . and .. and backups folder
+  [[ "$item" == "." || "$item" == ".." || "$item" == "backups" ]] && continue
+  INCLUDE_PATHS+=("$item")
+done
 
 echo "$(date +'%F %T') [INFO] Creating backup archive:"
 echo "               ${BACKUP_ARCHIVE}"
-echo "               Includes: ${INCLUDE_PATHS[*]}"
+echo "               Including: ${INCLUDE_PATHS[*]}"
 
 # ——— run tar but don’t exit on non-zero ———
 set +e
@@ -73,7 +76,7 @@ else
   echo "$(date +'%F %T') [INFO] Archive created successfully"
 fi
 
-# ——— re-enable auto-save ———
+# ——— re‑enable auto‑save ———
 echo "$(date +'%F %T') [INFO] Re-enabling auto-save..."
 if ! enable_auto_save; then
   echo "$(date +'%F %T') [WARN] enable_auto_save failed — run /save-on manually!"
