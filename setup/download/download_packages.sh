@@ -5,7 +5,20 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Install sudo if not installed
+# Function to install a package if its command is missing
+install_if_missing() {
+    local cmd="$1"
+    local pkg="$2"
+
+    if ! command_exists "$cmd"; then
+        echo "Installing $pkg..."
+        sudo apt install -y "$pkg"
+    else
+        echo "$pkg is already installed."
+    fi
+}
+
+# Install sudo if needed (before we use it)
 if ! command_exists sudo; then
     echo "Installing sudo..."
     apt install -y sudo
@@ -17,35 +30,28 @@ fi
 echo "Updating package list..."
 sudo apt update
 
-# Update all packages
-echo "Updating all installed packages..."
+# Upgrade all packages
+echo "Upgrading all installed packages..."
 sudo apt upgrade -y
 
-# Install screen if not installed
-if ! command_exists screen; then
-    echo "Installing screen..."
-    sudo apt install -y screen
+# Install required packages
+install_if_missing screen screen
+install_if_missing unzip unzip
+install_if_missing node nodejs
+install_if_missing npm npm
+install_if_missing cron cron
+
+# Check if cron service is running
+if sudo systemctl is-active --quiet cron; then
+    echo "cron service is running."
 else
-    echo "screen is already installed."
+    echo "cron service is not running. Starting it now..."
+    sudo systemctl start cron
+    sudo systemctl enable cron
 fi
 
-# Install node if not installed
-if ! command_exists unzip; then
-    echo "Installing node..."
-    sudo apt install -y unzip
-else
-    echo "unzip is already installed."
-fi
+# Install Node.js dependencies
+echo "Installing Node.js packages..."
+npm install --no-package-lock --omit=dev
 
-# Install node if not installed
-if ! command_exists node; then
-    echo "Installing node..."
-    sudo apt install -y nodejs
-    sudo apt install -y npm
-else
-    echo "node is already installed."
-fi
-
-npm i --no-package-lock --omit=dev
-
-echo "All packages installed."
+echo "All packages installed and up to date."

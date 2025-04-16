@@ -2,7 +2,6 @@
 
 set -e
 
-
 # Get the absolute path of the directory where *this script* resides
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -30,6 +29,14 @@ if [ -z "$SERVER_PATH" ]; then
     exit 1
 fi
 
+if [ -z "$MAX_BACKUPS" ]; then
+    echo "Error: MAX_BACKUPS is not set in variables.txt"
+    echo "Setting default value to 3."
+    echo "MAX_BACKUPS=3" >> variables.txt
+    MAX_BACKUPS=3
+fi
+
 export USER="$USER"
 export SERVER_PATH="$SERVER_PATH"
 export MODPACK_NAME="$MODPACK_NAME"
+export MAX_BACKUPS="$MAX_BACKUPS"

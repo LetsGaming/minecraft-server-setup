@@ -15,6 +15,7 @@ const variablesContent = [
   `USER="${process.env.USER}"`,
   `MODPACK_NAME="${MODPACK_NAME}"`,
   `SERVER_PATH="${serverPath}"`
+  `MAX_BACKUPS=3`,
 ].join("\n");
 
 // Write to file

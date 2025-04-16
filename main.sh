@@ -26,11 +26,15 @@ while [[ $# -gt 0 ]]; do
     --no-service)
       NO_SERVICE=true
       ;;
+    --no-backup)
+      NO_BACKUP=true
+      ;;
     --help)
       echo "Usage: $0 [--no-start] [--no-service] [--help]"
       echo "Options:"
       echo "  --no-start     Do not start the server after setup."
       echo "  --no-service   Skip creating the systemd service."
+      echo "  --no-backup    Skip creating the backup job."
       echo "  --help         Show this help message."
       exit 0
       ;;
@@ -55,9 +59,16 @@ node "$SCRIPT_DIR/setup/sructure/copy_scripts.js"
 # --- Systemd Service ---
 if [ "$NO_SERVICE" = false ]; then
   echo "Creating systemd service..."
-  node "$SCRIPT_DIR/setup/systemd/create_service.js"
+  node "$SCRIPT_DIR/setup/management/create_service.js"
 else
   echo "Skipping systemd service creation."
+fi
+
+if [ "$NO_BACKUP" = false ]; then
+  echo "Creating backup job..."
+  node "$SCRIPT_DIR/setup/management/create_backup_job.js"
+else
+  echo "Skipping backup job creation."
 fi
 
 # --- Cleanup ---
@@ -77,7 +88,7 @@ if [ "$NO_START" = false ]; then
   fi
 else
   echo "To start the server manually, run:"
-  echo "bash \$HOME/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
+  echo "bash $HOME/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
   echo "Or:"
-  echo "sudo systemctl start \$MODPACK_NAME.service"
+  echo "sudo systemctl start MODPACK_NAME.service"
 fi
