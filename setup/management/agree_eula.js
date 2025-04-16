@@ -11,7 +11,6 @@ function setEulaToTrue() {
 
     if (!fs.existsSync(eulaFilePath)) {
         fs.writeFileSync(eulaFilePath, 'eula=false', 'utf8');
-        return;
     }
 
     try {
