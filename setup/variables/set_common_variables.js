@@ -14,7 +14,7 @@ const variablesFilePath = path.resolve(__dirname, "..", "scripts", "common", "va
 const variablesContent = [
   `USER="${process.env.USER}"`,
   `MODPACK_NAME="${MODPACK_NAME}"`,
-  `SERVER_PATH="${serverPath}"`
+  `SERVER_PATH="${serverPath}"`,
   `MAX_BACKUPS="${MAX_BACKUPS}"`,
 ].join("\n");
 

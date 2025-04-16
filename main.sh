@@ -55,6 +55,8 @@ node "$SCRIPT_DIR/setup/structure/unpack_modpack.js"
 
 node "$SCRIPT_DIR/setup/variables/set_common_variables.js"
 node "$SCRIPT_DIR/setup/variables/set_server_variables.js"
+node "$SCRIPT_DIR/setup/variables/set_server_properties.js"
+
 node "$SCRIPT_DIR/setup/structure/copy_scripts.js"
 
 # --- Systemd Service ---
