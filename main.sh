@@ -50,12 +50,12 @@ done
 bash "$SCRIPT_DIR/setup/download/download_packages.sh"
 node "$SCRIPT_DIR/setup/download/download_modpack.js"
 
-node "$SCRIPT_DIR/setup/sructure/create_directories.js"
-node "$SCRIPT_DIR/setup/sructure/unpack_modpack.js"
+node "$SCRIPT_DIR/setup/structure/create_directories.js"
+node "$SCRIPT_DIR/setup/structure/unpack_modpack.js"
 
 node "$SCRIPT_DIR/setup/variables/set_common_variables.js"
 node "$SCRIPT_DIR/setup/variables/set_server_variables.js"
-node "$SCRIPT_DIR/setup/sructure/copy_scripts.js"
+node "$SCRIPT_DIR/setup/structure/copy_scripts.js"
 
 # --- Systemd Service ---
 if [ "$NO_SERVICE" = false ]; then
