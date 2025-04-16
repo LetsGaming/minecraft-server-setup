@@ -123,4 +123,4 @@ function loadVariables() {
   return data;
 }
 
-loadVariables();
+module.exports = loadVariables;
