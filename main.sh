@@ -16,6 +16,7 @@ export MAIN_DIR="$HOME"
 # --- Options ---
 NO_START=false
 NO_SERVICE=false
+NO_BACKUP=false
 
 # --- Parse Arguments ---
 while [[ $# -gt 0 ]]; do
