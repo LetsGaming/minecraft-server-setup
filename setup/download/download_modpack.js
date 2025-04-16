@@ -1,5 +1,5 @@
 const axios = require('axios');
-import {pack_id, api_key} from './curseforge_variables.json';
+const { pack_id, api_key } = require('./curseforge_variables.json');
 // Load pack_id and api_key from curseforge_variables.json
 
 let packID = pack_id;
