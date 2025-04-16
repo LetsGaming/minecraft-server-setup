@@ -1,6 +1,6 @@
 const path = require("path");
 const fs = require("fs");
-const loadVariables = require("./common/loadVariables");
+const loadVariables = require("../common/loadVariables");
 
 const {
   TARGET_DIR_NAME,
