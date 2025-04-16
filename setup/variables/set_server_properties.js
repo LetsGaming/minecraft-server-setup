@@ -24,7 +24,7 @@ const serverPropsPath = path.join(MODPACK_DIR, "server.properties");
 
 function updateServerProperties() {
   if (!fs.existsSync(serverPropsPath)) {
-    throw new Error(`server.properties not found at ${serverPropsPath}`);
+    fs.writeFileSync(serverPropsPath, "", "utf-8");
   }
 
   let content = fs.readFileSync(serverPropsPath, "utf-8");
