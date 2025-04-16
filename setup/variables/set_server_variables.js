@@ -30,9 +30,19 @@ function buildJavaArgs(config) {
   if (gcChoice === "g1gc") {
     flags.push("-XX:+UseG1GC");
     const g1gc = config.g1gc || {};
+
+    // Collect experimental G1 options
+    const experimentalFlags = [];
+    if (g1gc.g1NewSizePercent) experimentalFlags.push(`-XX:G1NewSizePercent=${g1gc.g1NewSizePercent}`);
+    if (g1gc.g1MaxNewSizePercent) experimentalFlags.push(`-XX:G1MaxNewSizePercent=${g1gc.g1MaxNewSizePercent}`);
+
+    // If experimental flags are present, unlock experimental options first
+    if (experimentalFlags.length > 0) {
+      flags.push("-XX:+UnlockExperimentalVMOptions");
+      flags.push(...experimentalFlags);
+    }
+
     if (g1gc.maxPauseMillis) flags.push(`-XX:MaxGCPauseMillis=${g1gc.maxPauseMillis}`);
-    if (g1gc.g1NewSizePercent) flags.push(`-XX:G1NewSizePercent=${g1gc.g1NewSizePercent}`);
-    if (g1gc.g1MaxNewSizePercent) flags.push(`-XX:G1MaxNewSizePercent=${g1gc.g1MaxNewSizePercent}`);
     if (g1gc.heapRegionSize) flags.push(`-XX:G1HeapRegionSize=${g1gc.heapRegionSize}`);
     if (g1gc.reservePercent) flags.push(`-XX:G1ReservePercent=${g1gc.reservePercent}`);
     if (g1gc.heapWastePercent) flags.push(`-XX:G1HeapWastePercent=${g1gc.heapWastePercent}`);
@@ -43,6 +53,7 @@ function buildJavaArgs(config) {
     if (g1gc.disableExplicitGC) flags.push("-XX:+DisableExplicitGC");
     if (g1gc.alwaysPreTouch) flags.push("-XX:+AlwaysPreTouch");
     if (g1gc.perfDisableSharedMem) flags.push("-XX:+PerfDisableSharedMem");
+
   } else if (gcChoice === "zgc") {
     flags.push("-XX:+UseZGC", "-XX:+UnlockExperimentalVMOptions");
     const zgc = config.zgc || {};
