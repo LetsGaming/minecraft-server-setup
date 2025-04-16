@@ -66,6 +66,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+send_message "Restoring backup for $MODPACK_NAME"
+bash "$SCRIPT_DIR/../shutdown.sh"
+
 # Use archive folder if requested
 if [ "$FROM_ARCHIVE" = true ]; then
     BACKUP_DIR="$BASE_BACKUP_DIR/archives"
@@ -133,4 +136,4 @@ tar -xzf "$BACKUP_TO_RESTORE" -C "$SERVER_PATH"
 echo "Restore completed successfully from $BACKUP_TO_RESTORE"
 
 # Restart server
-bash "$SCRIPT_DIR/../restart.sh"
+bash "$SCRIPT_DIR/../start.sh"

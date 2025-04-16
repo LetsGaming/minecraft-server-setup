@@ -30,15 +30,12 @@ send_message() {
 
 # Function to disable auto saving
 disable_auto_save() {
-    message=$1
-    send_message "Auto-saving has been disabled $message"
     send_command "/save-off"
 }
 
 # Function to re-enable auto saving
 enable_auto_save() {
     send_command "/save-on"
-    send_message "Auto-saving has been re-enabled."
 }
 
 # Function to check if the server has completed the save-all process by monitoring the log file
