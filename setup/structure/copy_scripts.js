@@ -10,7 +10,7 @@ const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
 const SCRIPTS_DIR = path.join(BASE_DIR, 'scripts', MODPACK_NAME);
 
 // Quelle der Scripts liegt im Projekt-Root unter /scripts
-const sourceDir = path.resolve(__dirname, '..', 'scripts');
+const sourceDir = path.resolve(__dirname, '..', "..", 'scripts');
 
 // Sicherstellen, dass das Zielverzeichnis existiert
 fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
