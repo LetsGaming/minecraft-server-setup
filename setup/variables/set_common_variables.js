@@ -8,7 +8,7 @@ const { TARGET_DIR_NAME, MODPACK_NAME, MAX_BACKUPS } = loadVariables();
 // Construct paths
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
 const serverPath = path.join(BASE_DIR, MODPACK_NAME);
-const variablesFilePath = path.resolve(__dirname, "..", "scripts", "common", "variables.txt");
+const variablesFilePath = path.resolve(__dirname, "..", "..", "scripts", "common", "variables.txt");
 
 // Prepare content
 const variablesContent = [
