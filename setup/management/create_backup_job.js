@@ -11,17 +11,15 @@ try {
   const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", MODPACK_NAME);
 
   // Define what the cronjob should do
-  const scriptPath = path.resolve(SCRIPTS_DIR, "backup", "backup.sh");
+  const backupDir = path.join(SCRIPTS_DIR, "backups");
+  const scriptPath = path.resolve(backupDir, "backup.sh");
 
   if (!fs.existsSync(scriptPath)) {
     throw new Error(`Script file not found at: ${scriptPath}`);
   }
 
   // Define the cronjob line (once per hour)
-  const cronCommand = `0 * * * * ${scriptPath} >> ${path.resolve(
-    __dirname,
-    "cron.log"
-  )} 2>&1`;
+  const cronCommand = `0 * * * * ${scriptPath} >> ${backupDir}/backup.log 2>&1`;
 
   // Get existing crontab (if any)
   let existingCrontab = "";
