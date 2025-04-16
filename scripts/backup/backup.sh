@@ -84,7 +84,11 @@ fi
 
 # ——— success message ———
 echo "$(date +'%F %T') [SUCCESS] Backup complete: $BACKUP_ARCHIVE"
-send_message "Backup completed at $(date +'%H:%M:%S')"
+if $ARCHIVE_MODE; then
+    send_message "Archive backup completed at $(date +'%H:%M:%S')"
+else
+    send_message "Backup completed at $(date +'%H:%M:%S')"
+fi
 
 # ——— cleanup old backups ———
 if ! $ARCHIVE_MODE && [ -n "${MAX_BACKUPS:-}" ]; then
