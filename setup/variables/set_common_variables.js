@@ -3,7 +3,7 @@ const fs = require("fs");
 const loadVariables = require("../common/loadVariables");
 
 // Load variables
-const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
+const { TARGET_DIR_NAME, MODPACK_NAME, MAX_BACKUPS } = loadVariables();
 
 // Construct paths
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
@@ -15,7 +15,7 @@ const variablesContent = [
   `USER="${process.env.USER}"`,
   `MODPACK_NAME="${MODPACK_NAME}"`,
   `SERVER_PATH="${serverPath}"`
-  `MAX_BACKUPS=3`,
+  `MAX_BACKUPS="${MAX_BACKUPS}"`,
 ].join("\n");
 
 // Write to file

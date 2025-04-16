@@ -1,36 +1,49 @@
 {
   "MODPACK_NAME": "prominence-rpg",
   "TARGET_DIR_NAME": "minecraft-server",
-  "JAVA_ARGS_CONFIG": {
-    "minMemory": "12G",
-    "maxMemory": "12G",
-    "metaspaceLimit": "512M",
-    "garbageCollector": "g1gc",
-    "enableStringDeduplication": true,
-    "g1gc": {
-      "maxPauseMillis": 100,
-      "g1NewSizePercent": 30,
-      "g1MaxNewSizePercent": 40,
-      "heapRegionSize": "16M",
-      "reservePercent": 20,
-      "heapWastePercent": 5,
-      "mixedGCCountTarget": 8,
-      "initiatingHeapOccupancyPercent": 15,
-      "survivorRatio": 32,
-      "parallelRefProcEnabled": true,
-      "disableExplicitGC": true,
-      "alwaysPreTouch": true,
-      "perfDisableSharedMem": true
+  "MAX_BACKUPS": 3,
+  "JAVA": {
+    "SERVER": {
+      "MAX_PLAYERS": 10,
+      "MOTD": "A Minecraft RPG server",
+      "SEED": "",
+      "WHITELIST": "false",
+      "DIFFICULTY": "normal",
+      "PVP": "false",
+      "FLIGHT_ENABLED": "true",
+      "ALLOW_CRACKED": "false"
     },
-    "zgc": {
-      "uncommitDelay": "1h",
-      "uncommitDelayOnIdle": "30m",
-      "heapReservePercent": 5,
-      "concurrentGCThreads": 2,
-      "softMaxHeapSize": "12G"
-    },
-    "miscFlags": [
-      "-Dsun.rmi.dgc.server.gcInterval=9223372036854775807"
-    ]
+    "JAVA_ARGS_CONFIG": {
+      "minMemory": "12G",
+      "maxMemory": "12G",
+      "metaspaceLimit": "512M",
+      "garbageCollector": "g1gc",
+      "enableStringDeduplication": true,
+      "g1gc": {
+        "maxPauseMillis": 100,
+        "g1NewSizePercent": 30,
+        "g1MaxNewSizePercent": 40,
+        "heapRegionSize": "16M",
+        "reservePercent": 20,
+        "heapWastePercent": 5,
+        "mixedGCCountTarget": 8,
+        "initiatingHeapOccupancyPercent": 15,
+        "survivorRatio": 32,
+        "parallelRefProcEnabled": true,
+        "disableExplicitGC": true,
+        "alwaysPreTouch": true,
+        "perfDisableSharedMem": true
+      },
+      "zgc": {
+        "uncommitDelay": "1h",
+        "uncommitDelayOnIdle": "30m",
+        "heapReservePercent": 5,
+        "concurrentGCThreads": 2,
+        "softMaxHeapSize": "12G"
+      },
+      "miscFlags": [
+        "-Dsun.rmi.dgc.server.gcInterval=9223372036854775807"
+      ]
+    }
   }
 }
