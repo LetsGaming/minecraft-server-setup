@@ -42,12 +42,25 @@ fi
 mkdir -p "$BACKUP_DIR"
 BACKUP_ARCHIVE="$BACKUP_DIR/minecraft_backup_$DATE.tar.gz"
 
-# Perform server save before backup
+# Disable auto-save before saving
+disable_auto_save
+
+# Perform server save
 save_and_wait
 
 # Start the backup process
 echo "Starting backup of the Minecraft server world..."
-tar -czf "$BACKUP_ARCHIVE" -C "$SERVER_PATH" world server.properties plugins configs
+
+cd "$SERVER_PATH"
+
+INCLUDE_PATHS=("world" "server.properties")
+[[ -d "plugins" ]] && INCLUDE_PATHS+=("plugins")
+[[ -d "configs" ]] && INCLUDE_PATHS+=("configs")
+
+tar -czf "$BACKUP_ARCHIVE" --ignore-failed-read "${INCLUDE_PATHS[@]}"
+
+# Re-enable auto-saving
+enable_auto_save
 
 # Check if the backup was successful
 if [ $? -eq 0 ]; then

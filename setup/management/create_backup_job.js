@@ -19,7 +19,7 @@ try {
   }
 
   // Define the cronjob line (once per hour)
-  const cronCommand = `0 * * * * ${scriptPath} >> ${backupDir}/backup.log 2>&1`;
+  const cronCommand = `0 * * * * bash ${scriptPath} >> ${backupDir}/backup.log 2>&1`;
 
   // Get existing crontab (if any)
   let existingCrontab = "";
