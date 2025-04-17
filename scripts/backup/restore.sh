@@ -5,10 +5,10 @@ set -euo pipefail
 # Get the absolute path of the directory where *this script* resides
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source the server_control.sh script from the common folder
-source "$SCRIPT_DIR/../common/server_control.sh"
+# Load server control functions
+source "$SCRIPT_DIR/../common/load_variables.sh"
 
-# Default backup directory (can change if --from-archive is passed)
+# Default backup directory (can change if --archive is passed)
 BASE_BACKUP_DIR="$SERVER_PATH/backups"
 BACKUP_DIR="$BASE_BACKUP_DIR"
 
@@ -67,22 +67,26 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Stop the server before restoring
-send_message "Restoring backup for $MODPACK_NAME"
-bash "$SCRIPT_DIR/../shutdown.sh"
+sudo systemctl stop "$MODPACK_NAME" || true
 
 # Use archive folder if requested
 if [ "$FROM_ARCHIVE" = true ]; then
     BACKUP_DIR="$BASE_BACKUP_DIR/archives"
     echo "$(date +'%F %T') [INFO] Restoring from archive backups: $BACKUP_DIR"
+else
+    BACKUP_DIR="$BASE_BACKUP_DIR/hourly"
+fi
+
+# Decide on search depth
+if $FROM_ARCHIVE; then
+    FIND_DEPTH=""
+else
+    FIND_DEPTH="-maxdepth 1"
 fi
 
 # Determine which backup to use
 if [[ -n "$SPECIFIC_BACKUP" ]]; then
-    if $FROM_ARCHIVE; then
-        BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" -type f -name "$SPECIFIC_BACKUP" | head -n1)
-    else
-        BACKUP_TO_RESTORE="$BACKUP_DIR/$SPECIFIC_BACKUP"
-    fi
+    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" -type f -name "$SPECIFIC_BACKUP" | head -n1)
     if [[ -z "$BACKUP_TO_RESTORE" || ! -f "$BACKUP_TO_RESTORE" ]]; then
         echo "$(date +'%F %T') [ERROR] Specified backup file does not exist: $BACKUP_TO_RESTORE" >&2
         exit 1
@@ -93,7 +97,7 @@ elif [[ -n "$RELATIVE_TIME" ]]; then
         echo "$(date +'%F %T') [ERROR] Invalid time format for --ago: $RELATIVE_TIME" >&2
         exit 1
     fi
-    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@ %p\n' \
+    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" $FIND_DEPTH -type f -name '*.tar.gz' -printf '%T@ %p\n' \
         | awk -v tgt="$TARGET_TIMESTAMP" '
             {
                 diff = ($1 - tgt); if (diff < 0) diff = -diff;
@@ -105,7 +109,7 @@ elif [[ -n "$RELATIVE_TIME" ]]; then
         exit 1
     fi
 else
-    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" -maxdepth 1 -type f -name '*.tar.gz' -printf '%T@ %p\n' \
+    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" $FIND_DEPTH -type f -name '*.tar.gz' -printf '%T@ %p\n' \
         | sort -nr | head -n1 | cut -d' ' -f2-)
     if [[ -z "$BACKUP_TO_RESTORE" ]]; then
         echo "$(date +'%F %T') [ERROR] No backup found in $BACKUP_DIR." >&2

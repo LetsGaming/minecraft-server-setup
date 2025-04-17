@@ -11,7 +11,22 @@ source "$SCRIPT_DIR/load_variables.sh"
 # Reference log file based on loaded variable
 LOG_FILE="$SERVER_PATH/logs/latest.log"
 
+session_running() {
+    # Check if the screen session is running
+    if screen -list | grep -q "$MODPACK_NAME"; then
+        return 0  # Session is running
+    else
+        return 1  # Session is not running
+    fi
+}
+
 send_command() {
+    # Check if the screen session is running
+    if ! session_running; then
+        echo "Screen session '$MODPACK_NAME' is not running. Cannot send command."
+        return 1
+    fi
+
     command=$1
     if [ "$(id -u)" -eq 0 ]; then
         # If running as root (sudo), use sudo -u to run the command as the specified user

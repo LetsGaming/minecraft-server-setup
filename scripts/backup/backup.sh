@@ -56,7 +56,8 @@ else
 fi
 
 mkdir -p "$BACKUP_DIR"
-BACKUP_ARCHIVE="$BACKUP_DIR/minecraft_backup_$DATE.tar.gz"
+TMP_ARCHIVE="$BACKUP_DIR/.minecraft_backup_${DATE}.tar.gz.tmp"
+FINAL_ARCHIVE="$BACKUP_DIR/minecraft_backup_${DATE}.tar.gz"
 
 # ——— disable auto‑save ———
 log INFO "Disabling auto-save..."
@@ -67,6 +68,7 @@ fi
 # ——— force a save ———
 log INFO "Saving world to disk..."
 save_and_wait
+sleep 2  # Let world flush to disk
 
 # ——— build include list ———
 cd "$SERVER_PATH"
@@ -76,21 +78,29 @@ for item in * .*; do
   INCLUDE_PATHS+=("$item")
 done
 
-log INFO "Creating backup archive: $BACKUP_ARCHIVE"
+log INFO "Creating backup archive: $FINAL_ARCHIVE"
 log INFO "Including: ${INCLUDE_PATHS[*]}"
 
 # ——— run tar ———
 set +e
-tar -czf "$BACKUP_ARCHIVE" \
+tar -czf "$TMP_ARCHIVE" \
     --ignore-failed-read \
     --warning=no-file-changed \
     "${INCLUDE_PATHS[@]}"
 TAR_EXIT=$?
 set -e
 
+# ——— validate and move ———
 if [ $TAR_EXIT -ne 0 ]; then
   log WARN "tar exited with code $TAR_EXIT (usually harmless)"
+  rm -f "$TMP_ARCHIVE"
 else
+  if ! tar -tzf "$TMP_ARCHIVE" &>/dev/null; then
+    log ERROR "Backup archive appears corrupted. Removing: $TMP_ARCHIVE"
+    rm -f "$TMP_ARCHIVE"
+    exit 1
+  fi
+  mv "$TMP_ARCHIVE" "$FINAL_ARCHIVE"
   log INFO "Archive created successfully"
 fi
 
@@ -101,12 +111,11 @@ if ! enable_auto_save; then
 fi
 
 # ——— success message ———
-log SUCCESS "Backup complete: $BACKUP_ARCHIVE"
+log SUCCESS "Backup complete: $FINAL_ARCHIVE"
 if $ARCHIVE_MODE; then
     send_message "Archive backup ($ARCHIVE_TYPE) completed at $(date +'%H:%M:%S')"
 else
     send_message "Hourly backup completed"
 fi
 
-# ——— no cleanup here ———
 log INFO "Note: Cleanup handled externally by cleanup_archives.sh"
