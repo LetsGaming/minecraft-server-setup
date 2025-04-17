@@ -37,7 +37,7 @@ function updateServerProperties() {
     "difficulty": DIFFICULTY,
     "pvp": PVP,
     "allow-flight": FLIGHT_ENABLED,
-    "online-mode": ALLOW_CRACKED,
+    "online-mode": !ALLOW_CRACKED,
   };
 
   for (const [key, value] of Object.entries(updates)) {
