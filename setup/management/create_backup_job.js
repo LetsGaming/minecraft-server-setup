@@ -32,7 +32,7 @@ try {
 
   // Define cron job commands
   const hourlyBackupCmd = `0 * * * * bash ${runBackupPath} >> ${logsDir}/run_backup.log 2>&1`;
-  const cleanupCmd = `0 1 * * * bash ${cleanupPath} >> ${logsDir}/cleanup.log 2>&1`;
+  const cleanupCmd = `10 * * * * bash ${cleanupPath} >> ${logsDir}/cleanup.log 2>&1`;
 
   // Get existing crontab
   let existingCrontab = "";
