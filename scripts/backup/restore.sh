@@ -25,7 +25,7 @@ print_help() {
     echo "Options:"
     echo "  --y                   Skip confirmation prompt"
     echo "  --file <filename>     Restore a specific backup file"
-    echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '2d')"
+    echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '15m', '2d')"
     echo "  --archive             Restore from the archive folder instead of normal backups"
     echo "  --help                Show this help message and exit"
     echo ""
@@ -33,6 +33,25 @@ print_help() {
     echo "  $0 --y"
     echo "  $0 --file backup-2024-12-01_01-00.tar.gz"
     echo "  $0 --ago 5h --archive"
+}
+
+# Normalize short time strings like "3h" into "3 hours ago"
+normalize_relative_time() {
+    local input="$1"
+    if [[ "$input" =~ ^([0-9]+)([smhdw])$ ]]; then
+        local value="${BASH_REMATCH[1]}"
+        local unit="${BASH_REMATCH[2]}"
+        case "$unit" in
+            s) echo "$value seconds ago" ;;
+            m) echo "$value minutes ago" ;;
+            h) echo "$value hours ago" ;;
+            d) echo "$value days ago" ;;
+            w) echo "$value weeks ago" ;;
+            *) return 1 ;;
+        esac
+    else
+        return 1
+    fi
 }
 
 # Parse arguments
@@ -92,9 +111,14 @@ if [[ -n "$SPECIFIC_BACKUP" ]]; then
         exit 1
     fi
 elif [[ -n "$RELATIVE_TIME" ]]; then
-    TARGET_TIMESTAMP=$(date -d "$RELATIVE_TIME ago" +%s 2>/dev/null || true)
-    if [[ -z "$TARGET_TIMESTAMP" ]]; then
+    HUMAN_TIME=$(normalize_relative_time "$RELATIVE_TIME")
+    if [[ -z "$HUMAN_TIME" ]]; then
         echo "$(date +'%F %T') [ERROR] Invalid time format for --ago: $RELATIVE_TIME" >&2
+        exit 1
+    fi
+    TARGET_TIMESTAMP=$(date -d "$HUMAN_TIME" +%s 2>/dev/null || true)
+    if [[ -z "$TARGET_TIMESTAMP" ]]; then
+        echo "$(date +'%F %T') [ERROR] Could not parse relative time: $RELATIVE_TIME" >&2
         exit 1
     fi
     BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" $FIND_DEPTH -type f -name '*.tar.gz' -printf '%T@ %p\n' \
