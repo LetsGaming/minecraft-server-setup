@@ -22,7 +22,7 @@ while [[ "$#" -gt 0 ]]; do
 Usage: $0 [--archive]
 
 Options:
-  --archive   Keep this backup in 'archives' so it’s not auto‑pruned
+  --archive   Store this backup in 'archives/<type>' instead of hourly
 EOF
       exit 0
       ;;
@@ -38,19 +38,23 @@ if $ARCHIVE_MODE; then
     send_message "Starting archive backup"
     log INFO "Archive mode ON"
 else
-    send_message "Starting backup"
-    log INFO "Normal backup mode"
+    send_message "Starting hourly backup"
+    log INFO "Hourly backup mode"
 fi
 
 # ——— setup ———
-BACKUP_DIR="$SERVER_PATH/backups"
+BACKUP_BASE="$SERVER_PATH/backups"
 DATE=$(date +'%Y-%m-%d_%H-%M-%S')
+
 if $ARCHIVE_MODE; then
-  BACKUP_DIR="$BACKUP_DIR/archives"
-  log INFO "Archive mode ON — target: $BACKUP_DIR"
+  ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"  # daily / weekly / monthly
+  BACKUP_DIR="$BACKUP_BASE/archives/$ARCHIVE_TYPE"
+  log INFO "Archive target: $BACKUP_DIR"
 else
-  log INFO "Normal backup mode — target: $BACKUP_DIR"
+  BACKUP_DIR="$BACKUP_BASE/hourly"
+  log INFO "Hourly target: $BACKUP_DIR"
 fi
+
 mkdir -p "$BACKUP_DIR"
 BACKUP_ARCHIVE="$BACKUP_DIR/minecraft_backup_$DATE.tar.gz"
 
@@ -68,7 +72,6 @@ save_and_wait
 cd "$SERVER_PATH"
 INCLUDE_PATHS=()
 for item in * .*; do
-  # Skip . and .. and backups folder
   [[ "$item" == "." || "$item" == ".." || "$item" == "backups" ]] && continue
   INCLUDE_PATHS+=("$item")
 done
@@ -76,7 +79,7 @@ done
 log INFO "Creating backup archive: $BACKUP_ARCHIVE"
 log INFO "Including: ${INCLUDE_PATHS[*]}"
 
-# ——— run tar but don’t exit on non-zero ———
+# ——— run tar ———
 set +e
 tar -czf "$BACKUP_ARCHIVE" \
     --ignore-failed-read \
@@ -100,23 +103,10 @@ fi
 # ——— success message ———
 log SUCCESS "Backup complete: $BACKUP_ARCHIVE"
 if $ARCHIVE_MODE; then
-    send_message "Archive backup completed at $(date +'%H:%M:%S')"
+    send_message "Archive backup ($ARCHIVE_TYPE) completed at $(date +'%H:%M:%S')"
 else
-    send_message "Backup completed"
+    send_message "Hourly backup completed"
 fi
 
-# ——— cleanup old backups ———
-if ! $ARCHIVE_MODE && [ -n "${MAX_BACKUPS:-}" ]; then
-  COUNT=$(ls -1 "$SERVER_PATH/backups"/minecraft_backup_*.tar.gz 2>/dev/null | wc -l)
-  if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
-    log INFO "Cleaning up old backups (total: $COUNT, max: $MAX_BACKUPS)"
-    ls -1t "$SERVER_PATH/backups"/minecraft_backup_*.tar.gz \
-      | tail -n +"$((MAX_BACKUPS + 1))" \
-      | xargs -r rm -v
-  else
-    log INFO "No cleanup needed (total: $COUNT ≤ $MAX_BACKUPS)"
-  fi
-elif $ARCHIVE_MODE; then
-  log INFO "Archive mode — skipping cleanup"
-fi
-log INFO "Backup script completed"
+# ——— no cleanup here ———
+log INFO "Note: Cleanup handled externally by cleanup_archives.sh"

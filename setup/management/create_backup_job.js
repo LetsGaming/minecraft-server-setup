@@ -12,15 +12,27 @@ try {
 
   // Define backup paths
   const backupDir = path.join(SCRIPTS_DIR, "backups");
-  const scriptPath = path.resolve(backupDir, "backup.sh");
+  const automationDir = path.join(backupDir, "automation");
+  const logsDir = path.join(backupDir, "logs");
 
-  if (!fs.existsSync(scriptPath)) {
-    throw new Error(`Script file not found at: ${scriptPath}`);
+  const runBackupPath = path.resolve(automationDir, "run_backup.sh");
+  const cleanupPath = path.resolve(automationDir, "cleanup_archives.sh");
+
+  if (!fs.existsSync(runBackupPath)) {
+    throw new Error(`Backup wrapper script not found: ${runBackupPath}`);
+  }
+  if (!fs.existsSync(cleanupPath)) {
+    throw new Error(`Cleanup script not found: ${cleanupPath}`);
+  }
+
+  // Ensure log directory exists
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
   }
 
   // Define cron job commands
-  const hourlyBackupCmd = `0 * * * * bash ${scriptPath} >> ${backupDir}/backup.log 2>&1`;
-  const archiveBackupCmd = `0 1 * * * bash ${scriptPath} --archive >> ${backupDir}/archive_backup.log 2>&1`;
+  const hourlyBackupCmd = `0 * * * * bash ${runBackupPath} >> ${logsDir}/run_backup.log 2>&1`;
+  const cleanupCmd = `0 1 * * * bash ${cleanupPath} >> ${logsDir}/cleanup.log 2>&1`;
 
   // Get existing crontab
   let existingCrontab = "";
@@ -33,19 +45,19 @@ try {
   const newJobs = [];
 
   // Add hourly backup if not present
-  if (!existingCrontab.includes(`${scriptPath} >>`)) {
+  if (!existingCrontab.includes(runBackupPath)) {
     newJobs.push(hourlyBackupCmd);
     console.log("Added hourly backup cronjob.");
   } else {
     console.log("Hourly backup cronjob already exists. Skipping.");
   }
 
-  // Add archive backup if not present
-  if (!existingCrontab.includes(`${scriptPath} --archive`)) {
-    newJobs.push(archiveBackupCmd);
-    console.log("Added archive backup cronjob.");
+  // Add cleanup job if not present
+  if (!existingCrontab.includes(cleanupPath)) {
+    newJobs.push(cleanupCmd);
+    console.log("Added cleanup cronjob.");
   } else {
-    console.log("Archive backup cronjob already exists. Skipping.");
+    console.log("Cleanup cronjob already exists. Skipping.");
   }
 
   if (newJobs.length > 0) {
