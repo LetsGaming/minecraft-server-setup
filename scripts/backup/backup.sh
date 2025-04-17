@@ -35,10 +35,14 @@ done
 
 # ——— backup message ———
 if $ARCHIVE_MODE; then
-    send_message "Starting archive backup"
+    if ! send_message "Starting archive backup"; then
+        log WARN "Failed to send message to server (continuing anyway)"
+    fi
     log INFO "Archive mode ON"
 else
-    send_message "Starting hourly backup"
+    if ! send_message "Starting hourly backup"; then
+        log WARN "Failed to send message to server (continuing anyway)"
+    fi
     log INFO "Hourly backup mode"
 fi
 
@@ -67,7 +71,9 @@ fi
 
 # ——— force a save ———
 log INFO "Saving world to disk..."
-save_and_wait
+if ! save_and_wait; then
+  log WARN "save_and_wait failed (continuing anyway)"
+fi
 sleep 2  # Let world flush to disk
 
 # ——— build include list ———
@@ -96,6 +102,7 @@ if [ $TAR_EXIT -ne 0 ]; then
   rm -f "$TMP_ARCHIVE"
 else
   if ! tar -tzf "$TMP_ARCHIVE" &>/dev/null; then
+    send_message "Backup archive appears corrupted. Removing"
     log ERROR "Backup archive appears corrupted. Removing: $TMP_ARCHIVE"
     rm -f "$TMP_ARCHIVE"
     exit 1
@@ -113,9 +120,13 @@ fi
 # ——— success message ———
 log SUCCESS "Backup complete: $FINAL_ARCHIVE"
 if $ARCHIVE_MODE; then
-    send_message "Archive backup ($ARCHIVE_TYPE) completed at $(date +'%H:%M:%S')"
+    if ! send_message "Archive backup ($ARCHIVE_TYPE) completed"; then
+        log WARN "Failed to send message to server (continuing anyway)"
+    fi
 else
-    send_message "Hourly backup completed"
+    if ! send_message "Hourly backup completed"; then
+        log WARN "Failed to send message to server (continuing anyway)"
+    fi
 fi
 
 log INFO "Note: Cleanup handled externally by cleanup_archives.sh"

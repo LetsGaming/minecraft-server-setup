@@ -55,8 +55,12 @@ enable_auto_save() {
 
 # Function to check if the server has completed the save-all process by monitoring the log file
 wait_for_save_completion() {
+    if ! session_running; then
+        echo "Screen session '$MODPACK_NAME' is not running. Cannot wait for save completion."
+        return 1
+    fi
+    
     echo "Waiting for save to complete..."
-
     # Tail the log file and look for the "Saved the game" message
     tail -n 0 -f "$LOG_FILE" | while read line; do
         if echo "$line" | grep -q "Saved the game"; then
