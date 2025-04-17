@@ -10,7 +10,7 @@ try {
   const BASE_DIR = path.join(process.env.HOME, TARGET_DIR_NAME);
   const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", MODPACK_NAME);
 
-  // Define what the cronjob should do
+  // Define backup paths
   const backupDir = path.join(SCRIPTS_DIR, "backups");
   const scriptPath = path.resolve(backupDir, "backup.sh");
 
@@ -18,31 +18,48 @@ try {
     throw new Error(`Script file not found at: ${scriptPath}`);
   }
 
-  // Define the cronjob line (once per hour)
-  const cronCommand = `0 * * * * bash ${scriptPath} >> ${backupDir}/backup.log 2>&1`;
+  // Define cron job commands
+  const hourlyBackupCmd = `0 * * * * bash ${scriptPath} >> ${backupDir}/backup.log 2>&1`;
+  const archiveBackupCmd = `0 1 * * * bash ${scriptPath} --archive >> ${backupDir}/archive_backup.log 2>&1`;
 
-  // Get existing crontab (if any)
+  // Get existing crontab
   let existingCrontab = "";
   try {
     existingCrontab = execSync("crontab -l", { encoding: "utf-8" });
   } catch (err) {
-    if (err.status !== 1) throw err; // ignore "no crontab for user", treat as empty
+    if (err.status !== 1) throw err; // status 1 = no crontab for user
   }
 
-  // Avoid duplicate entry
-  if (existingCrontab.includes(scriptPath)) {
-    console.log("Cronjob already exists. Skipping.");
+  const newJobs = [];
+
+  // Add hourly backup if not present
+  if (!existingCrontab.includes(`${scriptPath} >>`)) {
+    newJobs.push(hourlyBackupCmd);
+    console.log("Added hourly backup cronjob.");
   } else {
-    const newCrontab = `${existingCrontab.trim()}\n${cronCommand}\n`;
+    console.log("Hourly backup cronjob already exists. Skipping.");
+  }
+
+  // Add archive backup if not present
+  if (!existingCrontab.includes(`${scriptPath} --archive`)) {
+    newJobs.push(archiveBackupCmd);
+    console.log("Added archive backup cronjob.");
+  } else {
+    console.log("Archive backup cronjob already exists. Skipping.");
+  }
+
+  if (newJobs.length > 0) {
+    const newCrontab = `${existingCrontab.trim()}\n${newJobs.join("\n")}\n`;
     const tmpFile = "/tmp/cronjob.tmp";
 
     fs.writeFileSync(tmpFile, newCrontab);
     execSync(`crontab ${tmpFile}`);
     fs.unlinkSync(tmpFile);
-
-    console.log("Cronjob added successfully.");
+  } else {
+    console.log("No new cronjobs needed.");
   }
+
 } catch (err) {
-  console.error("Error setting up cronjob:", err.message);
+  console.error("Error setting up cronjobs:", err.message);
   process.exit(1);
 }
