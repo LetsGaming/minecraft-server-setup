@@ -31,7 +31,7 @@ fi
 echo "[$(date +'%F %T')] Starting $MODE backup..."
 
 if [[ "$MODE" != "hourly" ]]; then
-  ARCHIVE_TYPE="$ARCHIVE_TYPE" "$BACKUP_SCRIPT" "${ARGS[@]}"
+  ARCHIVE_TYPE="$ARCHIVE_TYPE" bash "$BACKUP_SCRIPT" "${ARGS[@]}"
 else
-  "$BACKUP_SCRIPT"
+  bash "$BACKUP_SCRIPT"
 fi

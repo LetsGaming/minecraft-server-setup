@@ -78,8 +78,12 @@ fi
 
 # Determine which backup to use
 if [[ -n "$SPECIFIC_BACKUP" ]]; then
-    BACKUP_TO_RESTORE="$BACKUP_DIR/$SPECIFIC_BACKUP"
-    if [[ ! -f "$BACKUP_TO_RESTORE" ]]; then
+    if $FROM_ARCHIVE; then
+        BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" -type f -name "$SPECIFIC_BACKUP" | head -n1)
+    else
+        BACKUP_TO_RESTORE="$BACKUP_DIR/$SPECIFIC_BACKUP"
+    fi
+    if [[ -z "$BACKUP_TO_RESTORE" || ! -f "$BACKUP_TO_RESTORE" ]]; then
         echo "$(date +'%F %T') [ERROR] Specified backup file does not exist: $BACKUP_TO_RESTORE" >&2
         exit 1
     fi
