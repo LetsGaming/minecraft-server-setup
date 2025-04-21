@@ -60,8 +60,8 @@ else
 fi
 
 mkdir -p "$BACKUP_DIR"
-TMP_ARCHIVE="$BACKUP_DIR/.minecraft_backup_${DATE}.tar.gz.tmp"
-FINAL_ARCHIVE="$BACKUP_DIR/minecraft_backup_${DATE}.tar.gz"
+TMP_ARCHIVE="$BACKUP_DIR/.minecraft_backup_${DATE}.tar.tmp"
+FINAL_ARCHIVE="$BACKUP_DIR/minecraft_backup_${DATE}.tar.zst"
 
 # ——— disable auto‑save ———
 log INFO "Disabling auto-save..."
@@ -95,29 +95,28 @@ EXCLUDES=(
 
 # ——— handle .jar files based on mode ———
 if $ARCHIVE_MODE; then
-  # Include all .jar files for archive mode
   log INFO "Including all .jar files in archive mode"
   for jar in $(find "$SERVER_PATH" -type f -name '*.jar'); do
-    INCLUDE_PATHS+=("$jar")  # Include all .jar files in archive mode
+    INCLUDE_PATHS+=("$jar")
   done
 else
-  # Exclude all .jar files in hourly mode
   log INFO "Excluding .jar files in hourly mode"
   EXCLUDES+=('--exclude=*.jar')
 fi
 
-# ——— run rsync and zstd ———
-log INFO "Starting backup with rsync and zstd compression..."
+# ——— run rsync ———
+log INFO "Starting rsync to temporary folder..."
+rsync -a "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$BACKUP_DIR/temp_backup"
 
-# Rsync the files, excluding patterns as needed
-rsync -a --exclude="${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$BACKUP_DIR/temp_backup"
+# ——— compress using tar + zstd ———
+log INFO "Creating tar archive..."
+tar -cf "$TMP_ARCHIVE" -C "$BACKUP_DIR" temp_backup
 
-# Compress the backup with zstd
-log INFO "Compressing backup using zstd..."
-zstd -z "$BACKUP_DIR/temp_backup" -o "$FINAL_ARCHIVE" -19  # Use high compression level
+log INFO "Compressing tar archive with zstd..."
+zstd -19 "$TMP_ARCHIVE" -o "$FINAL_ARCHIVE"
 
-# Cleanup temporary backup files
-rm -rf "$BACKUP_DIR/temp_backup"
+# ——— cleanup ———
+rm -rf "$TMP_ARCHIVE" "$BACKUP_DIR/temp_backup"
 
 # ——— re‑enable auto‑save ———
 log INFO "Re-enabling auto-save..."
@@ -137,4 +136,5 @@ else
     fi
 fi
 
-log INFO "Note: Cleanup handled externally by cleanup_archives.sh"
+log INFO "Backup size: $(du -sh "$FINAL_ARCHIVE" | cut -f1)"
+log INFO "Backups storage usage: $(du -sh "$BACKUP_BASE" | cut -f1)"

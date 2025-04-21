@@ -2,41 +2,35 @@
 
 set -e
 
-# Get the absolute path of the directory where *this script* resides
+# Get the absolute path of the directory where this script resides
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ ! -f "$SCRIPT_DIR/variables.txt" ]; then
-    echo "Error: variables.txt not found in the common folder."
+VARS_FILE="$SCRIPT_DIR/variables.txt"
+
+if [ ! -f "$VARS_FILE" ]; then
+    echo "Error: variables.txt not found in $SCRIPT_DIR"
     exit 1
 fi
 
-# Load variables from the common folder
-source "$SCRIPT_DIR/variables.txt"
+# Load variables from file
+source "$VARS_FILE"
 
-if [ -z "$USER" ]; then
-    echo "Error: USER is not set in variables.txt"
-    exit 1
-fi
+# Required variables
+REQUIRED_VARS=(USER MODPACK_NAME SERVER_PATH MAX_HOURLY_BACKUPS MAX_DAILY_BACKUPS MAX_WEEKLY_BACKUPS MAX_MONTHLY_BACKUPS)
 
-# Check if MODPACK_NAME is set
-if [ -z "$MODPACK_NAME" ]; then
-    echo "Error: MODPACK_NAME is not set in variables.txt"
-    exit 1
-fi
+# Validate all required variables are set
+for var in "${REQUIRED_VARS[@]}"; do
+    if [ -z "${!var}" ]; then
+        echo "Error: $var is not set in variables.txt"
+        exit 1
+    fi
+done
 
-if [ -z "$SERVER_PATH" ]; then
-    echo "Error: SERVER_PATH is not set in variables.txt"
-    exit 1
-fi
-
-if [ -z "$MAX_BACKUPS" ]; then
-    echo "Error: MAX_BACKUPS is not set in variables.txt"
-    echo "Setting default value to 3."
-    echo "MAX_BACKUPS=3" >> variables.txt
-    MAX_BACKUPS=3
-fi
-
-export USER="$USER"
-export SERVER_PATH="$SERVER_PATH"
-export MODPACK_NAME="$MODPACK_NAME"
-export MAX_BACKUPS="$MAX_BACKUPS"
+# Export them
+export USER
+export MODPACK_NAME
+export SERVER_PATH
+export MAX_HOURLY_BACKUPS
+export MAX_DAILY_BACKUPS
+export MAX_WEEKLY_BACKUPS
+export MAX_MONTHLY_BACKUPS
