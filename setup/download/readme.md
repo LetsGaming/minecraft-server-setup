@@ -25,7 +25,7 @@ You will need to change the [curserforge_variables](./curseforge_variables.json)
 - **pack_id**: This is the numeric ID of the modpack you want to download. To find it:
   1. Go to the [CurseForge website](https://www.curseforge.com/minecraft/modpacks).
   2. Browse to the modpack page you're interested in.
-  3. On the left side of the page, under the **About Project** section, you will find the **Project ID** (e.g., `Project ID: 123456`).
+  3. On the right side of the page, under the **About Project** section, you will find the **Project ID** (e.g., `Project ID: 123456`).
 
 #### Get API Key
 - **api_key**: To use the CurseForge API, you'll need an API key.

@@ -41,10 +41,12 @@ Before you begin, ensure you have the following installed on your system:
    cd minecraft-server-setup
    ```
 
-2. **Get API Key**
+2. **Get API Key and Pack ID**
 
    - Navigate to [curseforge API](https://console.curseforge.com/#/api-keys) and generate a new API Key
    - Copy it for the next step
+   - Navigate to your desired Modpack and find the Pack ID on the right side
+   - For further information read: [Readme](./setup/download/readme.md)
 
 4. **Review and Customize Configurations:**
 
@@ -63,6 +65,12 @@ If you dont wish to automatically start the server:
 
 ```bash
 sudo -u <username> bash main.sh --no-start
+```
+
+If you wish to know all possible flags run:
+
+```bash
+bash main.sh --help
 ```
 
 The `main.sh` script will automatically setup everything needed for the server and start it once finished.
