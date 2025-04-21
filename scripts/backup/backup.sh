@@ -84,32 +84,40 @@ for item in * .*; do
   INCLUDE_PATHS+=("$item")
 done
 
-log INFO "Creating backup archive: $FINAL_ARCHIVE"
-log INFO "Including: ${INCLUDE_PATHS[*]}"
+# ——— define exclude rules ———
+EXCLUDES=(
+  --exclude='logs/*'
+  --exclude='*.log'
+  --exclude='*.tmp'
+  --exclude='crash-reports/*'
+  --exclude='*.gz'
+)
 
-# ——— run tar ———
-set +e
-tar -czf "$TMP_ARCHIVE" \
-    --ignore-failed-read \
-    --warning=no-file-changed \
-    "${INCLUDE_PATHS[@]}"
-TAR_EXIT=$?
-set -e
-
-# ——— validate and move ———
-if [ $TAR_EXIT -ne 0 ]; then
-  log WARN "tar exited with code $TAR_EXIT (usually harmless)"
-  rm -f "$TMP_ARCHIVE"
+# ——— handle .jar files based on mode ———
+if $ARCHIVE_MODE; then
+  # Include all .jar files for archive mode
+  log INFO "Including all .jar files in archive mode"
+  for jar in $(find "$SERVER_PATH" -type f -name '*.jar'); do
+    INCLUDE_PATHS+=("$jar")  # Include all .jar files in archive mode
+  done
 else
-  if ! tar -tzf "$TMP_ARCHIVE" &>/dev/null; then
-    send_message "Backup archive appears corrupted. Removing"
-    log ERROR "Backup archive appears corrupted. Removing: $TMP_ARCHIVE"
-    rm -f "$TMP_ARCHIVE"
-    exit 1
-  fi
-  mv "$TMP_ARCHIVE" "$FINAL_ARCHIVE"
-  log INFO "Archive created successfully"
+  # Exclude all .jar files in hourly mode
+  log INFO "Excluding .jar files in hourly mode"
+  EXCLUDES+=('--exclude=*.jar')
 fi
+
+# ——— run rsync and zstd ———
+log INFO "Starting backup with rsync and zstd compression..."
+
+# Rsync the files, excluding patterns as needed
+rsync -a --exclude="${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$BACKUP_DIR/temp_backup"
+
+# Compress the backup with zstd
+log INFO "Compressing backup using zstd..."
+zstd -z "$BACKUP_DIR/temp_backup" -o "$FINAL_ARCHIVE" -19  # Use high compression level
+
+# Cleanup temporary backup files
+rm -rf "$BACKUP_DIR/temp_backup"
 
 # ——— re‑enable auto‑save ———
 log INFO "Re-enabling auto-save..."

@@ -1,7 +1,12 @@
 {
   "MODPACK_NAME": "prominence-rpg",
   "TARGET_DIR_NAME": "minecraft-server",
-  "MAX_BACKUPS": 3,
+  "BACKUPS": {
+    "MAX_HOURLY_BACKUPS": 3,
+    "MAX_DAILY_BACKUPS": 5,
+    "MAX_WEEKLY_BACKUPS": 3,
+    "MAX_MONTHLY_BACKUPS": 1
+  },
   "JAVA": {
     "SERVER": {
       "MAX_PLAYERS": 10,

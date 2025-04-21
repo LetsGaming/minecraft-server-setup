@@ -133,7 +133,7 @@ elif [[ -n "$RELATIVE_TIME" ]]; then
         exit 1
     fi
 else
-    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" $FIND_DEPTH -type f -name '*.tar.gz' -printf '%T@ %p\n' \
+    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" $FIND_DEPTH -type f -name '*.zst' -printf '%T@ %p\n' \
         | sort -nr | head -n1 | cut -d' ' -f2-)
     if [[ -z "$BACKUP_TO_RESTORE" ]]; then
         echo "$(date +'%F %T') [ERROR] No backup found in $BACKUP_DIR." >&2
@@ -163,9 +163,11 @@ if [ "$(ls -A "$SERVER_PATH")" ]; then
     fi
 fi
 
-# Extract backup
+# Extract the zstd compressed backup
 echo "$(date +'%F %T') [INFO] Restoring backup..."
-tar -xzf "$BACKUP_TO_RESTORE" -C "$SERVER_PATH"
+zstd -d "$BACKUP_TO_RESTORE" -o "$BACKUP_TO_RESTORE.tar"  # Decompress the zst backup to tar
+tar -xvf "$BACKUP_TO_RESTORE.tar" -C "$SERVER_PATH"  # Extract the decompressed tar archive
+rm -f "$BACKUP_TO_RESTORE.tar"  # Remove the temporary decompressed tar file
 echo "$(date +'%F %T') [INFO] Restore completed successfully from $BACKUP_TO_RESTORE"
 
 # Restart server
