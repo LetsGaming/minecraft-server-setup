@@ -115,8 +115,20 @@ tar -cf "$TMP_ARCHIVE" -C "$BACKUP_DIR" temp_backup
 log INFO "Compressing tar archive with zstd..."
 zstd -19 "$TMP_ARCHIVE" -o "$FINAL_ARCHIVE"
 
+# ——— validate compressed archive ———
+log INFO "Validating compressed archive..."
+if ! zstd -t "$FINAL_ARCHIVE" &>/dev/null; then
+  send_message "Backup archive appears corrupted. Removing"
+  log ERROR "Validation failed — corrupted archive removed: $FINAL_ARCHIVE"
+  rm -f "$FINAL_ARCHIVE"
+  rm -f "$TMP_ARCHIVE"
+  rm -rf "$BACKUP_DIR/temp_backup"
+  exit 1
+fi
+
 # ——— cleanup ———
-rm -rf "$TMP_ARCHIVE" "$BACKUP_DIR/temp_backup"
+rm -f "$TMP_ARCHIVE"
+rm -rf "$BACKUP_DIR/temp_backup"
 
 # ——— re‑enable auto‑save ———
 log INFO "Re-enabling auto-save..."
