@@ -11,7 +11,7 @@ try {
   const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", MODPACK_NAME);
 
   // Define backup paths
-  const backupDir = path.join(SCRIPTS_DIR, "backups");
+  const backupDir = path.join(SCRIPTS_DIR, "backup");
   const automationDir = path.join(backupDir, "automation");
   const logsDir = path.join(backupDir, "logs");
 
