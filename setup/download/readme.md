@@ -1,6 +1,6 @@
 # CurseForge Modpack Downloader
 
-This JavaScript script allows you to download a modpack from CurseForge using the CurseForge API. It reads configuration details (like the `pack_id` and `api_key`) from a `curseforge_variables.json` file. If these details are missing or incorrect, the script will notify you and exit gracefully.
+This JavaScript script allows you to download a modpack from CurseForge using the CurseForge API. It reads configuration details (like the `pack_id` and `api_key`) from `curseforge_variables.json` file. If these details are missing or incorrect, the script will notify you and exit gracefully.
 
 ## Requirements
 
@@ -9,9 +9,9 @@ This JavaScript script allows you to download a modpack from CurseForge using th
 
 ## Instructions
 
-### Step 1: Set up your `curseforge_variables.json` file
+### Step 1: Set up your [curserforge_variables](./curseforge_variables.json) file
 
-You will need to change the `curseforge_variables.json` file to store your CurseForge **pack ID** and **API key**. The file should be in the following format:
+You will need to change the [curserforge_variables](./curseforge_variables.json) file to store your CurseForge **pack ID** and **API key**. The file should be in the following format:
 
 ```
 {
@@ -34,7 +34,7 @@ You will need to change the `curseforge_variables.json` file to store your Curse
 
 ### Step 2: Download the Modpack
 
-Once you have set up your `curseforge_variables.json` file, run the JavaScript script:
+Once you have set up your [curserforge_variables](./curseforge_variables.json) file, run the JavaScript script:
 
 ```bash
 node download_modpack.js
@@ -42,7 +42,7 @@ node download_modpack.js
 
 ### Step 3: Handling Missing or Incorrect Values
 
-If the `pack_id` or `api_key` is missing or incorrect in the `curseforge_variables.json` file, the script will print an error message and stop.
+If the `pack_id` or `api_key` is missing or incorrect in the [curserforge_variables](./curseforge_variables.json) file, the script will print an error message and stop.
 
 Example error message:
 
@@ -60,6 +60,6 @@ The script will display the download progress in the terminal as a percentage an
 
 ## Troubleshooting
 
-- **File not found error**: Make sure that the `curseforge_variables.json` file is in the same directory as the script.
-- **Invalid pack ID or API key**: Double-check the values in `curseforge_variables.json`. Ensure the `pack_id` is correct (find it in the **About Project** section on the CurseForge modpack page) and that the API key is valid.
+- **File not found error**: Make sure that the [curserforge_variables](./curseforge_variables.json) file is in the same directory as the script.
+- **Invalid pack ID or API key**: Double-check the values in [curserforge_variables](./curseforge_variables.json). Ensure the `pack_id` is correct (find it in the **About Project** section on the CurseForge modpack page) and that the API key is valid.
 - **Missing dependencies**: If you haven't installed `axios`, run `npm install axios` to install the required package.

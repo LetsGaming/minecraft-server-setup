@@ -1,6 +1,6 @@
 # Minecraft Server Setup
 
-A collection of scripts and utilities to automate the setup and configuration of a Minecraft server. This project provides a streamlined process to launch, update, and manage your Minecraft server environment using shell scripts and Node.js tools.
+A collection of scripts and utilities to automate the setup and configuration of a Minecraft server. This project provides a streamlined process to launch and manage your Minecraft server environment using shell scripts and Node.js tools.
 
 ## Table of Contents
 
@@ -62,7 +62,7 @@ sudo -u <username> bash main.sh
 If you dont wish to automatically start the server:
 
 ```bash
-bash main.sh --no-start
+sudo -u <username> bash main.sh --no-start
 ```
 
 The `main.sh` script will automatically setup everything needed for the server and start it once finished.
