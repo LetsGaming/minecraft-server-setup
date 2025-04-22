@@ -14,19 +14,30 @@ log() {
 
 # ——— args ———
 ARCHIVE_MODE=false
+ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"
+
 while [[ "$#" -gt 0 ]]; do
-  case $1 in
-    --archive) ARCHIVE_MODE=true; shift ;;
+  case "$1" in
+    --archive)
+      ARCHIVE_MODE=true
+      if [[ -n "$2" && "$2" != --* ]]; then
+        ARCHIVE_TYPE="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
     --help)
       cat <<EOF
-Usage: $0 [--archive]
+Usage: $0 [--archive [daily|weekly|monthly]]
 
 Options:
-  --archive   Store this backup in 'archives/<type>' instead of hourly
+  --archive   Store this backup in 'archives/<type>' instead of hourly.
+              Optional type can be 'daily', 'weekly', or 'monthly'.
 EOF
       exit 0
       ;;
-    *) 
+    *)
       log ERROR "Unknown argument: $1"
       exit 1
       ;;
@@ -51,7 +62,6 @@ BACKUP_BASE="$SERVER_PATH/backups"
 DATE=$(date +'%Y-%m-%d_%H-%M-%S')
 
 if $ARCHIVE_MODE; then
-  ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"  # daily / weekly / monthly
   BACKUP_DIR="$BACKUP_BASE/archives/$ARCHIVE_TYPE"
   log INFO "Archive target: $BACKUP_DIR"
 else
