@@ -2,23 +2,17 @@
 
 set -euo pipefail
 
-# Get the absolute path of the directory where *this script* resides
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Load server control functions
 source "$SCRIPT_DIR/../common/load_variables.sh"
 
-# Default backup directory (can change if --archive is passed)
 BASE_BACKUP_DIR="$SERVER_PATH/backups"
 BACKUP_DIR="$BASE_BACKUP_DIR"
 
-# Defaults
 SKIP_CONFIRMATION=false
 SPECIFIC_BACKUP=""
 RELATIVE_TIME=""
 FROM_ARCHIVE=false
 
-# Help function
 print_help() {
     echo "Usage: $0 [options]"
     echo ""
@@ -35,7 +29,6 @@ print_help() {
     echo "  $0 --ago 5h --archive"
 }
 
-# Normalize short time strings like "3h" into "3 hours ago"
 normalize_relative_time() {
     local input="$1"
     if [[ "$input" =~ ^([0-9]+)([smhdw])$ ]]; then
@@ -54,7 +47,6 @@ normalize_relative_time() {
     fi
 }
 
-# Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --y)
@@ -85,10 +77,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Stop the server before restoring
 sudo systemctl stop "$MODPACK_NAME" || true
 
-# Use archive folder if requested
 if [ "$FROM_ARCHIVE" = true ]; then
     BACKUP_DIR="$BASE_BACKUP_DIR/archives"
     echo "$(date +'%F %T') [INFO] Restoring from archive backups: $BACKUP_DIR"
@@ -96,18 +86,32 @@ else
     BACKUP_DIR="$BASE_BACKUP_DIR/hourly"
 fi
 
-# Decide on search depth
 if $FROM_ARCHIVE; then
     FIND_DEPTH=""
 else
     FIND_DEPTH="-maxdepth 1"
 fi
 
-# Determine which backup to use
+find_latest_backup_file() {
+    find "$BACKUP_DIR" $FIND_DEPTH -type f \( -name '*.tar.gz' -o -name '*.tar.zst' \) -printf '%T@ %p\n' \
+        | sort -nr | head -n1 | cut -d' ' -f2-
+}
+
+find_closest_backup_by_time() {
+    local target_ts="$1"
+    find "$BACKUP_DIR" $FIND_DEPTH -type f \( -name '*.tar.gz' -o -name '*.tar.zst' \) -printf '%T@ %p\n' \
+        | awk -v tgt="$target_ts" '
+            {
+                diff = ($1 - tgt); if (diff < 0) diff = -diff;
+                print diff, $0;
+            }' \
+        | sort -n | head -n1 | cut -d' ' -f2-
+}
+
 if [[ -n "$SPECIFIC_BACKUP" ]]; then
     BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" -type f -name "$SPECIFIC_BACKUP" | head -n1)
     if [[ -z "$BACKUP_TO_RESTORE" || ! -f "$BACKUP_TO_RESTORE" ]]; then
-        echo "$(date +'%F %T') [ERROR] Specified backup file does not exist: $BACKUP_TO_RESTORE" >&2
+        echo "$(date +'%F %T') [ERROR] Specified backup file does not exist: $SPECIFIC_BACKUP" >&2
         exit 1
     fi
 elif [[ -n "$RELATIVE_TIME" ]]; then
@@ -121,27 +125,16 @@ elif [[ -n "$RELATIVE_TIME" ]]; then
         echo "$(date +'%F %T') [ERROR] Could not parse relative time: $RELATIVE_TIME" >&2
         exit 1
     fi
-    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" $FIND_DEPTH -type f -name '*.tar.gz' -printf '%T@ %p\n' \
-        | awk -v tgt="$TARGET_TIMESTAMP" '
-            {
-                diff = ($1 - tgt); if (diff < 0) diff = -diff;
-                print diff, $0;
-            }' \
-        | sort -n | head -n1 | cut -d' ' -f2-)
-    if [[ -z "$BACKUP_TO_RESTORE" ]]; then
-        echo "$(date +'%F %T') [ERROR] No suitable backup found for --ago $RELATIVE_TIME" >&2
-        exit 1
-    fi
+    BACKUP_TO_RESTORE=$(find_closest_backup_by_time "$TARGET_TIMESTAMP")
 else
-    BACKUP_TO_RESTORE=$(find "$BACKUP_DIR" $FIND_DEPTH -type f -name '*.zst' -printf '%T@ %p\n' \
-        | sort -nr | head -n1 | cut -d' ' -f2-)
-    if [[ -z "$BACKUP_TO_RESTORE" ]]; then
-        echo "$(date +'%F %T') [ERROR] No backup found in $BACKUP_DIR." >&2
-        exit 1
-    fi
+    BACKUP_TO_RESTORE=$(find_latest_backup_file)
 fi
 
-# Double-check file is readable
+if [[ -z "$BACKUP_TO_RESTORE" || ! -f "$BACKUP_TO_RESTORE" ]]; then
+    echo "$(date +'%F %T') [ERROR] No suitable backup found in $BACKUP_DIR." >&2
+    exit 1
+fi
+
 if [[ ! -r "$BACKUP_TO_RESTORE" ]]; then
     echo "$(date +'%F %T') [ERROR] Cannot read backup file: $BACKUP_TO_RESTORE" >&2
     exit 1
@@ -149,7 +142,6 @@ fi
 
 echo "$(date +'%F %T') [INFO] Selected backup: $BACKUP_TO_RESTORE"
 
-# Warn if restoring into non-empty server dir
 if [ "$(ls -A "$SERVER_PATH")" ]; then
     echo "$(date +'%F %T') [WARN] $SERVER_PATH is not empty and may be overwritten by the restore."
     if [ "$SKIP_CONFIRMATION" = false ]; then
@@ -163,12 +155,22 @@ if [ "$(ls -A "$SERVER_PATH")" ]; then
     fi
 fi
 
-# Extract the zstd compressed backup
 echo "$(date +'%F %T') [INFO] Restoring backup..."
-zstd -d "$BACKUP_TO_RESTORE" -o "$BACKUP_TO_RESTORE.tar"  # Decompress the zst backup to tar
-tar -xvf "$BACKUP_TO_RESTORE.tar" -C "$SERVER_PATH"  # Extract the decompressed tar archive
-rm -f "$BACKUP_TO_RESTORE.tar"  # Remove the temporary decompressed tar file
-echo "$(date +'%F %T') [INFO] Restore completed successfully from $BACKUP_TO_RESTORE"
 
-# Restart server
+case "$BACKUP_TO_RESTORE" in
+    *.tar.gz)
+        tar -xvzf "$BACKUP_TO_RESTORE" -C "$SERVER_PATH"
+        ;;
+    *.tar.zst)
+        zstd -d "$BACKUP_TO_RESTORE" -o "$BACKUP_TO_RESTORE.tar"
+        tar -xvf "$BACKUP_TO_RESTORE.tar" -C "$SERVER_PATH"
+        rm -f "$BACKUP_TO_RESTORE.tar"
+        ;;
+    *)
+        echo "$(date +'%F %T') [ERROR] Unsupported backup file format: $BACKUP_TO_RESTORE" >&2
+        exit 1
+        ;;
+esac
+
+echo "$(date +'%F %T') [INFO] Restore completed successfully from $BACKUP_TO_RESTORE"
 bash "$SCRIPT_DIR/../start.sh"

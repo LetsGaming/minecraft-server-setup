@@ -1,89 +1,54 @@
 #!/bin/bash
 set -e
 
-# Load the environment variables from the JavaScript setup
 source "$(dirname "${BASH_SOURCE[0]}")/../../common/load_variables.sh"
 
-echo "[$(date +'%F %T')] Starting cleanup..."
+log() {
+  echo "[$(date +'%F %T')] $*"
+}
 
-# ——— hourly backups ———
-if [[ -z "$MAX_HOURLY_BACKUPS" || "$MAX_HOURLY_BACKUPS" -lt 1 ]]; then
-  echo "ERROR: MAX_HOURLY_BACKUPS is not set or invalid (value: '$MAX_HOURLY_BACKUPS')" >&2
-  exit 1
-fi
+log "Starting backup cleanup..."
 
-# Count the number of hourly backups
-HOURLY_BACKUPS_COUNT=$(ls -1 "$SERVER_PATH/backups/archives/hourly/minecraft_backup_*.tar.gz" 2>/dev/null | wc -l)
-if [[ "$HOURLY_BACKUPS_COUNT" -gt "$MAX_HOURLY_BACKUPS" ]]; then
-  BACKUPS_TO_DELETE=$(ls -1t "$SERVER_PATH/backups/archives/hourly/minecraft_backup_*.tar.gz" 2>/dev/null | tail -n +$((MAX_HOURLY_BACKUPS + 1)))
-  if [[ -n "$BACKUPS_TO_DELETE" ]]; then
-    echo "Deleting old hourly backups..."
-    echo "$BACKUPS_TO_DELETE" | xargs -r rm -v
+delete_old_backups() {
+  local type="$1"
+  local max_var="$2"
+
+  if [[ "$type" == "hourly" ]]; then
+    local dir="$SERVER_PATH/backups/hourly"
   else
-    echo "No old hourly backups to delete."
+    local dir="$SERVER_PATH/backups/archives/$type"
   fi
-else
-  echo "No old hourly backups to delete."
-fi
 
-# ——— daily backups ———
-if [[ -z "$MAX_DAILY_BACKUPS" || "$MAX_DAILY_BACKUPS" -lt 1 ]]; then
-  echo "ERROR: MAX_DAILY_BACKUPS is not set or invalid (value: '$MAX_DAILY_BACKUPS')" >&2
-  exit 1
-fi
+  local max_value="${!max_var}"
 
-# Count the number of daily backups
-DAILY_BACKUPS_COUNT=$(ls -1 "$SERVER_PATH/backups/archives/daily/minecraft_backup_*.tar.gz" 2>/dev/null | wc -l)
-if [[ "$DAILY_BACKUPS_COUNT" -gt "$MAX_DAILY_BACKUPS" ]]; then
-  BACKUPS_TO_DELETE=$(ls -1t "$SERVER_PATH/backups/archives/daily/minecraft_backup_*.tar.gz" 2>/dev/null | tail -n +$((MAX_DAILY_BACKUPS + 1)))
-  if [[ -n "$BACKUPS_TO_DELETE" ]]; then
-    echo "Deleting old daily backups..."
-    echo "$BACKUPS_TO_DELETE" | xargs -r rm -v
+  if [[ -z "$max_value" || "$max_value" -lt 1 ]]; then
+    log "ERROR: $max_var is not set or invalid (value: '$max_value')" >&2
+    exit 1
+  fi
+
+  log "Checking $type backups in: $dir"
+  BACKUPS=($(ls -1t "$dir"/minecraft_backup_*.tar.{gz,zst} 2>/dev/null || true))
+  BACKUP_COUNT="${#BACKUPS[@]}"
+
+  log "Found $BACKUP_COUNT $type backup(s); keeping the newest $max_value."
+
+  if [[ "$BACKUP_COUNT" -gt "$max_value" ]]; then
+    BACKUPS_TO_DELETE=("${BACKUPS[@]:$max_value}")
+    if [[ "${#BACKUPS_TO_DELETE[@]}" -gt 0 ]]; then
+      log "Deleting ${#BACKUPS_TO_DELETE[@]} old $type backup(s):"
+      for file in "${BACKUPS_TO_DELETE[@]}"; do
+        log "Deleting: $file"
+        rm -v "$file"
+      done
+    fi
   else
-    echo "No old daily backups to delete."
+    log "No $type backups need deletion."
   fi
-else
-  echo "No old daily backups to delete."
-fi
+}
 
-# ——— weekly backups ———
-if [[ -z "$MAX_WEEKLY_BACKUPS" || "$MAX_WEEKLY_BACKUPS" -lt 1 ]]; then
-  echo "ERROR: MAX_WEEKLY_BACKUPS is not set or invalid (value: '$MAX_WEEKLY_BACKUPS')" >&2
-  exit 1
-fi
+delete_old_backups "hourly"  "MAX_HOURLY_BACKUPS"
+delete_old_backups "daily"   "MAX_DAILY_BACKUPS"
+delete_old_backups "weekly"  "MAX_WEEKLY_BACKUPS"
+delete_old_backups "monthly" "MAX_MONTHLY_BACKUPS"
 
-# Count the number of weekly backups
-WEEKLY_BACKUPS_COUNT=$(ls -1 "$SERVER_PATH/backups/archives/weekly/minecraft_backup_*.tar.gz" 2>/dev/null | wc -l)
-if [[ "$WEEKLY_BACKUPS_COUNT" -gt "$MAX_WEEKLY_BACKUPS" ]]; then
-  BACKUPS_TO_DELETE=$(ls -1t "$SERVER_PATH/backups/archives/weekly/minecraft_backup_*.tar.gz" 2>/dev/null | tail -n +$((MAX_WEEKLY_BACKUPS + 1)))
-  if [[ -n "$BACKUPS_TO_DELETE" ]]; then
-    echo "Deleting old weekly backups..."
-    echo "$BACKUPS_TO_DELETE" | xargs -r rm -v
-  else
-    echo "No old weekly backups to delete."
-  fi
-else
-  echo "No old weekly backups to delete."
-fi
-
-# ——— monthly backups ———
-if [[ -z "$MAX_MONTHLY_BACKUPS" || "$MAX_MONTHLY_BACKUPS" -lt 1 ]]; then
-  echo "ERROR: MAX_MONTHLY_BACKUPS is not set or invalid (value: '$MAX_MONTHLY_BACKUPS')" >&2
-  exit 1
-fi
-
-# Count the number of monthly backups
-MONTHLY_BACKUPS_COUNT=$(ls -1 "$SERVER_PATH/backups/archives/monthly/minecraft_backup_*.tar.gz" 2>/dev/null | wc -l)
-if [[ "$MONTHLY_BACKUPS_COUNT" -gt "$MAX_MONTHLY_BACKUPS" ]]; then
-  BACKUPS_TO_DELETE=$(ls -1t "$SERVER_PATH/backups/archives/monthly/minecraft_backup_*.tar.gz" 2>/dev/null | tail -n +$((MAX_MONTHLY_BACKUPS + 1)))
-  if [[ -n "$BACKUPS_TO_DELETE" ]]; then
-    echo "Deleting old monthly backups..."
-    echo "$BACKUPS_TO_DELETE" | xargs -r rm -v
-  else
-    echo "No old monthly backups to delete."
-  fi
-else
-  echo "No old monthly backups to delete."
-fi
-
-echo "Cleanup complete."
+log "Backup cleanup complete."
