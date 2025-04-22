@@ -58,6 +58,7 @@ fi
 # ——— setup ———
 BACKUP_BASE="$SERVER_PATH/backups"
 DATE=$(date +'%Y-%m-%d_%H-%M-%S')
+START_TIME=$(date +%s)
 
 if $ARCHIVE_MODE; then
   BACKUP_DIR="$BACKUP_BASE/archives/$ARCHIVE_TYPE"
@@ -145,6 +146,8 @@ if ! enable_auto_save; then
 fi
 
 # ——— success message ———
+TIME_TAKEN=$(( $(date +%s) - START_TIME ))
+TIME_TAKEN_STMP=$(printf '%02d:%02d:%02d' $((TIME_TAKEN/3600)) $((TIME_TAKEN%3600/60)) $((TIME_TAKEN%60)))
 log SUCCESS "Backup complete: $FINAL_ARCHIVE"
 if $ARCHIVE_MODE; then
     if ! send_message "Archive backup ($ARCHIVE_TYPE) completed"; then
@@ -156,5 +159,8 @@ else
     fi
 fi
 
+send_message "Backup took: $TIME_TAKEN_STMP"
+
+log INFO "Backup took: $TIME_TAKEN_STMP"
 log INFO "Backup size: $(du -sh "$FINAL_ARCHIVE" | cut -f1)"
 log INFO "Backups storage usage: $(du -sh "$BACKUP_BASE" | cut -f1)"
