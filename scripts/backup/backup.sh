@@ -14,26 +14,23 @@ log() {
 
 # ——— args ———
 ARCHIVE_MODE=false
-ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"
-
+ARCHIVE_TYPE=""
 while [[ "$#" -gt 0 ]]; do
-  case "$1" in
+  case $1 in
     --archive)
       ARCHIVE_MODE=true
-      if [[ -n "$2" && "$2" != --* ]]; then
+      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
         ARCHIVE_TYPE="$2"
-        shift 2
-      else
         shift
       fi
+      shift
       ;;
     --help)
       cat <<EOF
-Usage: $0 [--archive [daily|weekly|monthly]]
+Usage: $0 [--archive [TYPE]]
 
 Options:
-  --archive   Store this backup in 'archives/<type>' instead of hourly.
-              Optional type can be 'daily', 'weekly', or 'monthly'.
+  --archive [TYPE]   Store this backup in 'archives/<type>' instead of hourly
 EOF
       exit 0
       ;;
@@ -46,6 +43,7 @@ done
 
 # ——— backup message ———
 if $ARCHIVE_MODE; then
+    ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"  # default to "general"
     if ! send_message "Starting archive backup"; then
         log WARN "Failed to send message to server (continuing anyway)"
     fi
@@ -106,9 +104,9 @@ EXCLUDES=(
 # ——— handle .jar files based on mode ———
 if $ARCHIVE_MODE; then
   log INFO "Including all .jar files in archive mode"
-  for jar in $(find "$SERVER_PATH" -type f -name '*.jar'); do
+  while IFS= read -r -d '' jar; do
     INCLUDE_PATHS+=("$jar")
-  done
+  done < <(find "$SERVER_PATH" -type f -name '*.jar' -print0)
 else
   log INFO "Excluding .jar files in hourly mode"
   EXCLUDES+=('--exclude=*.jar')
