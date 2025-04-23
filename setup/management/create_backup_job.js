@@ -16,7 +16,7 @@ try {
   const logsDir = path.join(backupDir, "logs");
 
   const runBackupPath = path.resolve(automationDir, "run_backup.sh");
-  const cleanupPath = path.resolve(automationDir, "cleanup_archives.sh");
+  const cleanupPath = path.resolve(automationDir, "cleanup_backups.sh");
 
   if (!fs.existsSync(runBackupPath)) {
     throw new Error(`Backup wrapper script not found: ${runBackupPath}`);
@@ -31,7 +31,7 @@ try {
   }
 
   // Define cron job commands
-  const hourlyBackupCmd = `0 * * * * bash ${runBackupPath} >> ${logsDir}/run_backup.log 2>&1`;
+  const hourlyBackupCmd = `0 * * * * bash ${runBackupPath} >> ${logsDir}/backup.log 2>&1`;
   const cleanupCmd = `10 * * * * bash ${cleanupPath} >> ${logsDir}/cleanup.log 2>&1`;
 
   // Get existing crontab

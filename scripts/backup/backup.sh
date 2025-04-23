@@ -15,6 +15,9 @@ log() {
 # ——— args ———
 ARCHIVE_MODE=false
 ARCHIVE_TYPE=""
+DRY_RUN=false
+VERBOSE=false
+
 while [[ "$#" -gt 0 ]]; do
   case $1 in
     --archive)
@@ -25,35 +28,35 @@ while [[ "$#" -gt 0 ]]; do
       fi
       shift
       ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    --verbose) VERBOSE=true; shift ;;
     --help)
       cat <<EOF
-Usage: $0 [--archive [TYPE]]
+Usage: $0 [--archive [TYPE]] [--dry-run] [--verbose]
 
 Options:
   --archive [TYPE]   Store this backup in 'archives/<type>' instead of hourly
+  --dry-run          Simulate the backup process without making changes
+  --verbose          Enable verbose output for rsync, tar, and zstd
 EOF
       exit 0
       ;;
-    *)
-      log ERROR "Unknown argument: $1"
-      exit 1
-      ;;
+    *) log ERROR "Unknown argument: $1"; exit 1 ;;
   esac
 done
 
 # ——— backup message ———
 if $ARCHIVE_MODE; then
-    ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"  # default to "general"
-    if ! send_message "Starting archive backup"; then
-        log WARN "Failed to send message to server (continuing anyway)"
-    fi
-    log INFO "Archive mode ON"
+  ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"
+  send_message "Starting archive backup" || log WARN "Failed to send message to server"
+  log INFO "Archive mode ON"
 else
-    if ! send_message "Starting hourly backup"; then
-        log WARN "Failed to send message to server (continuing anyway)"
-    fi
-    log INFO "Hourly backup mode"
+  send_message "Starting hourly backup" || log WARN "Failed to send message to server"
+  log INFO "Hourly backup mode"
 fi
+
+$DRY_RUN && log INFO "Dry run mode enabled — no data will be written"
+$VERBOSE && log INFO "Verbose mode enabled"
 
 # ——— setup ———
 BACKUP_BASE="$SERVER_PATH/backups"
@@ -62,28 +65,22 @@ START_TIME=$(date +%s)
 
 if $ARCHIVE_MODE; then
   BACKUP_DIR="$BACKUP_BASE/archives/$ARCHIVE_TYPE"
-  log INFO "Archive target: $BACKUP_DIR"
 else
-  BACKUP_DIR="$BACKUP_BASE/hourly"
-  log INFO "Hourly target: $BACKUP_DIR"
+  BACKUP_DIR="$BACKUP_BASE/hourly/$DATE"
 fi
 
 mkdir -p "$BACKUP_DIR"
-TMP_ARCHIVE="$BACKUP_DIR/.minecraft_backup_${DATE}.tar.tmp"
-FINAL_ARCHIVE="$BACKUP_DIR/minecraft_backup_${DATE}.tar.zst"
+
+log INFO "Backup directory: $BACKUP_DIR"
 
 # ——— disable auto‑save ———
 log INFO "Disabling auto-save..."
-if ! disable_auto_save; then
-  log WARN "disable_auto_save failed (continuing anyway)"
-fi
+$DRY_RUN || disable_auto_save || log WARN "disable_auto_save failed"
 
 # ——— force a save ———
 log INFO "Saving world to disk..."
-if ! save_and_wait; then
-  log WARN "save_and_wait failed (continuing anyway)"
-fi
-sleep 2  # Let world flush to disk
+$DRY_RUN || save_and_wait || log WARN "save_and_wait failed"
+sleep 2
 
 # ——— build include list ———
 cd "$SERVER_PATH"
@@ -102,7 +99,6 @@ EXCLUDES=(
   --exclude='*.gz'
 )
 
-# ——— handle .jar files based on mode ———
 if $ARCHIVE_MODE; then
   log INFO "Including all .jar files in archive mode"
   while IFS= read -r -d '' jar; do
@@ -113,54 +109,100 @@ else
   EXCLUDES+=('--exclude=*.jar')
 fi
 
-# ——— run rsync ———
-log INFO "Starting rsync to temporary folder..."
-rsync -a "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$BACKUP_DIR/temp_backup"
+# ——— rsync to the appropriate directory ———
+if $ARCHIVE_MODE; then
+  # Archive mode: Sync to temporary backup directory
+  TMP_DIR="$BACKUP_DIR/temp_backup"
+  log INFO "Syncing server data to temporary backup directory..."
+  $DRY_RUN || rm -rf "$TMP_DIR"
+  mkdir -p "$TMP_DIR"
 
-# ——— compress using tar + zstd ———
-log INFO "Creating tar archive..."
-tar -cf "$TMP_ARCHIVE" -C "$BACKUP_DIR" temp_backup
+  RSYNC_OPTS=(-a --inplace --numeric-ids)
+  $VERBOSE && RSYNC_OPTS=(-v "${RSYNC_OPTS[@]}")
+  $DRY_RUN && RSYNC_OPTS+=(--dry-run)
 
-log INFO "Compressing tar archive with zstd..."
-zstd -19 "$TMP_ARCHIVE" -o "$FINAL_ARCHIVE"
+  if ! rsync "${RSYNC_OPTS[@]}" "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$TMP_DIR"; then
+    log ERROR "rsync failed"
+    exit 1
+  fi
+else
+  # Hourly mode: Sync directly to backup folder
+  log INFO "Syncing server data to backup directory..."
+  RSYNC_OPTS=(-a --inplace --numeric-ids)
+  $VERBOSE && RSYNC_OPTS=(-v "${RSYNC_OPTS[@]}")
+  $DRY_RUN && RSYNC_OPTS+=(--dry-run)
 
-# ——— validate compressed archive ———
-log INFO "Validating compressed archive..."
-if ! zstd -t "$FINAL_ARCHIVE" &>/dev/null; then
-  send_message "Backup archive appears corrupted. Removing"
-  log ERROR "Validation failed — corrupted archive removed: $FINAL_ARCHIVE"
-  rm -f "$FINAL_ARCHIVE"
-  rm -f "$TMP_ARCHIVE"
-  rm -rf "$BACKUP_DIR/temp_backup"
-  exit 1
+  # ——— apply link-dest if in hourly mode ———
+  if ! $ARCHIVE_MODE; then
+    LAST_BACKUP=$(ls -td "$BACKUP_BASE/hourly"/*/ 2>/dev/null | head -n 1)
+    if [[ -n "$LAST_BACKUP" && "$LAST_BACKUP" != "$BACKUP_DIR/" ]]; then
+      log INFO "Using --link-dest: $LAST_BACKUP"
+      RSYNC_OPTS+=(--link-dest="$LAST_BACKUP")
+    fi
+  fi
+
+  # Run rsync directly to $BACKUP_DIR (hourly backup mode)
+  if ! rsync "${RSYNC_OPTS[@]}" "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$BACKUP_DIR"; then
+    log ERROR "rsync failed"
+    exit 1
+  fi
+fi
+
+# ——— compress with tar + zstd ———
+if $ARCHIVE_MODE && ! $DRY_RUN; then
+  log INFO "Compressing archive..."
+  TAR_OPTS=()
+  $VERBOSE && TAR_OPTS+=(-v)
+  TAR_OPTS+=(-cf - -C "$BACKUP_DIR" temp_backup)
+
+  ZSTD_OPTS=()
+  $VERBOSE && ZSTD_OPTS+=(-v)
+  ZSTD_OPTS+=(-$COMPRESSION_LEVEL -T0 -o "$FINAL_ARCHIVE")
+
+  tar "${TAR_OPTS[@]}" | zstd "${ZSTD_OPTS[@]}"
+else
+  FINAL_ARCHIVE=""  # no archive in hourly mode
+fi
+
+# ——— validate archive ———
+if $ARCHIVE_MODE && ! $DRY_RUN; then
+  log INFO "Validating archive..."
+  if ! zstd -t "$FINAL_ARCHIVE" &>/dev/null; then
+    send_message "Backup archive appears corrupted. Removing"
+    log ERROR "Validation failed — corrupted archive removed"
+    rm -f "$FINAL_ARCHIVE"
+    exit 1
+  fi
 fi
 
 # ——— cleanup ———
-rm -f "$TMP_ARCHIVE"
-rm -rf "$BACKUP_DIR/temp_backup"
+$DRY_RUN || rm -rf "$TMP_DIR"
 
 # ——— re‑enable auto‑save ———
 log INFO "Re-enabling auto-save..."
-if ! enable_auto_save; then
-  log WARN "enable_auto_save failed — run /save-on manually!"
-fi
+$DRY_RUN || enable_auto_save || log WARN "enable_auto_save failed — run /save-on manually"
 
 # ——— success message ———
 TIME_TAKEN=$(( $(date +%s) - START_TIME ))
 TIME_TAKEN_STMP=$(printf '%02d:%02d:%02d' $((TIME_TAKEN/3600)) $((TIME_TAKEN%3600/60)) $((TIME_TAKEN%60)))
+
 log SUCCESS "Backup complete: $FINAL_ARCHIVE"
+
 if $ARCHIVE_MODE; then
-    if ! send_message "Archive backup ($ARCHIVE_TYPE) completed"; then
-        log WARN "Failed to send message to server (continuing anyway)"
-    fi
+  send_message "Archive backup ($ARCHIVE_TYPE) completed" || log WARN "Failed to notify server"
 else
-    if ! send_message "Hourly backup completed"; then
-        log WARN "Failed to send message to server (continuing anyway)"
-    fi
+  send_message "Hourly backup completed" || log WARN "Failed to notify server"
 fi
 
 send_message "Backup took: $TIME_TAKEN_STMP"
-
 log INFO "Backup took: $TIME_TAKEN_STMP"
-log INFO "Backup size: $(du -sh "$FINAL_ARCHIVE" | cut -f1)"
-log INFO "Backups storage usage: $(du -sh "$BACKUP_BASE" | cut -f1)"
+
+if [[ -n "$FINAL_ARCHIVE" && ! $DRY_RUN ]]; then
+  log INFO "Backup size: $(du -sh "$FINAL_ARCHIVE" | cut -f1)"
+fi
+
+if ! $DRY_RUN; then
+  log INFO "Backups storage usage: $(du -sh "$BACKUP_BASE" | cut -f1)"
+else
+  log INFO "(dry-run) No backup written."
+fi
