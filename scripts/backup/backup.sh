@@ -66,7 +66,7 @@ START_TIME=$(date +%s)
 if $ARCHIVE_MODE; then
   BACKUP_DIR="$BACKUP_BASE/archives/$ARCHIVE_TYPE"
 else
-  BACKUP_DIR="$BACKUP_BASE/hourly/$DATE"
+  BACKUP_DIR="$BACKUP_BASE/hourly"
 fi
 
 mkdir -p "$BACKUP_DIR"
@@ -109,63 +109,37 @@ else
   EXCLUDES+=('--exclude=*.jar')
 fi
 
-# ——— rsync to the appropriate directory ———
-if $ARCHIVE_MODE; then
-  # Archive mode: Sync to temporary backup directory
-  TMP_DIR="$BACKUP_DIR/temp_backup"
-  log INFO "Syncing server data to temporary backup directory..."
-  $DRY_RUN || rm -rf "$TMP_DIR"
-  mkdir -p "$TMP_DIR"
+# ——— create temporary folder ———
+TMP_DIR="$BACKUP_DIR/temp_backup"
+mkdir -p "$TMP_DIR"
 
-  RSYNC_OPTS=(-a --inplace --numeric-ids)
-  $VERBOSE && RSYNC_OPTS=(-v "${RSYNC_OPTS[@]}")
-  $DRY_RUN && RSYNC_OPTS+=(--dry-run)
-
-  if ! rsync "${RSYNC_OPTS[@]}" "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$TMP_DIR"; then
+# ——— rsync to the temporary directory ———
+log INFO "Syncing server data to temporary backup directory..."
+$DRY_RUN && log INFO "Dry run mode — no rsync performed"
+$DRY_RUN || rsync -a --inplace --numeric-ids "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$TMP_DIR" || {
     log ERROR "rsync failed"
     exit 1
-  fi
-else
-  # Hourly mode: Sync directly to backup folder
-  log INFO "Syncing server data to backup directory..."
-  RSYNC_OPTS=(-a --inplace --numeric-ids)
-  $VERBOSE && RSYNC_OPTS=(-v "${RSYNC_OPTS[@]}")
-  $DRY_RUN && RSYNC_OPTS+=(--dry-run)
-
-  # ——— apply link-dest if in hourly mode ———
-  if ! $ARCHIVE_MODE; then
-    LAST_BACKUP=$(ls -td "$BACKUP_BASE/hourly"/*/ 2>/dev/null | head -n 1)
-    if [[ -n "$LAST_BACKUP" && "$LAST_BACKUP" != "$BACKUP_DIR/" ]]; then
-      log INFO "Using --link-dest: $LAST_BACKUP"
-      RSYNC_OPTS+=(--link-dest="$LAST_BACKUP")
-    fi
-  fi
-
-  # Run rsync directly to $BACKUP_DIR (hourly backup mode)
-  if ! rsync "${RSYNC_OPTS[@]}" "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$BACKUP_DIR"; then
-    log ERROR "rsync failed"
-    exit 1
-  fi
-fi
+}
 
 # ——— compress with tar + zstd ———
-if $ARCHIVE_MODE && ! $DRY_RUN; then
-  log INFO "Compressing archive..."
-  TAR_OPTS=()
-  $VERBOSE && TAR_OPTS+=(-v)
-  TAR_OPTS+=(-cf - -C "$BACKUP_DIR" temp_backup)
+FINAL_ARCHIVE=""
+if ! $DRY_RUN; then
+  log INFO "Compressing backup..."
 
-  ZSTD_OPTS=()
-  $VERBOSE && ZSTD_OPTS+=(-v)
-  ZSTD_OPTS+=(-$COMPRESSION_LEVEL -T0 -o "$FINAL_ARCHIVE")
+  TAR_OPTS=(-cf - -C "$BACKUP_DIR" temp_backup)
+  ZSTD_OPTS=(-T0)
+  if $ARCHIVE_MODE; then
+    ZSTD_OPTS+=(-15 -o "$BACKUP_DIR/minecraft_backup_$DATE.tar.zst")
+  else
+    ZSTD_OPTS+=(-$COMPRESSION_LEVEL -o "$BACKUP_DIR/minecraft_backup_$DATE.tar.zst")
+  fi
 
   tar "${TAR_OPTS[@]}" | zstd "${ZSTD_OPTS[@]}"
-else
-  FINAL_ARCHIVE=""  # no archive in hourly mode
+  FINAL_ARCHIVE="$BACKUP_DIR/minecraft_backup_$DATE.tar.zst"
 fi
 
 # ——— validate archive ———
-if $ARCHIVE_MODE && ! $DRY_RUN; then
+if ! $DRY_RUN; then
   log INFO "Validating archive..."
   if ! zstd -t "$FINAL_ARCHIVE" &>/dev/null; then
     send_message "Backup archive appears corrupted. Removing"

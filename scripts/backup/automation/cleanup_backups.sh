@@ -33,19 +33,19 @@ delete_old_archives() {
   fi
 }
 
-delete_old_hourly_snapshots() {
+delete_old_hourly_backups() {
   local dir="$BACKUP_BASE/hourly"
   local max="${MAX_HOURLY_BACKUPS:-3}"
 
-  log "Checking hourly snapshots in: $dir"
-  mapfile -t snapshots < <(find "$dir" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
+  log "Checking hourly backups in: $dir"
+  mapfile -t snapshots < <(ls -1t "$dir"/minecraft_backup_*.tar.{gz,zst} 2>/dev/null || true)
   if (( ${#snapshots[@]} > max )); then
-    for folder in "${snapshots[@]:$max}"; do
-      log "Deleting old hourly snapshot: $folder"
-      rm -rf "$folder"
+    for file in "${snapshots[@]:$max}"; do
+      log "Deleting old hourly backup: $file"
+      rm -v "$file"
     done
   else
-    log "No hourly snapshots to delete."
+    log "No hourly backups to delete."
   fi
 }
 
@@ -61,7 +61,7 @@ enforce_storage_limit() {
 
   log "Current backup usage: $((current_bytes / 1024 / 1024)) MB (limit: ${MAX_STORAGE_GB} GB)"
   log "Used space: $((current_bytes * 100 / (MAX_STORAGE_GB * 1024 * 1024 * 1024)))%"
-  
+
   (( current_bytes <= max_bytes )) && return
 
   mapfile -t all_backups < <(find "$BACKUP_BASE" -type f -name 'minecraft_backup_*.tar.*' -printf '%T@ %p\n' | sort -n | cut -d' ' -f2-)
@@ -74,7 +74,7 @@ enforce_storage_limit() {
 }
 
 # Apply policies
-delete_old_hourly_snapshots
+delete_old_hourly_backups
 delete_old_archives "daily"   "MAX_DAILY_BACKUPS"
 delete_old_archives "weekly"  "MAX_WEEKLY_BACKUPS"
 delete_old_archives "monthly" "MAX_MONTHLY_BACKUPS"

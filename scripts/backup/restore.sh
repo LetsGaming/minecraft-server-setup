@@ -16,7 +16,7 @@ print_help() {
     echo ""
     echo "Options:"
     echo "  --y                   Skip confirmation prompt"
-    echo "  --file <filename>     Restore a specific backup file or folder"
+    echo "  --file <filename>     Restore a specific backup file"
     echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '15m', '2d')"
     echo "  --archive             Restore from the archive folder instead of hourly snapshots"
     echo "  --help                Show this help message and exit"
@@ -51,24 +51,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-sudo systemctl stop "$MODPACK_NAME" || true
-
 if $FROM_ARCHIVE; then
     BACKUP_DIR="$BASE_BACKUP_DIR/archives"
 else
     BACKUP_DIR="$BASE_BACKUP_DIR/hourly"
 fi
 
-FIND_DEPTH="-maxdepth 1"
-
 find_latest_backup() {
-    find "$BACKUP_DIR" $FIND_DEPTH \( -name '*.tar.*' -o -type d ! -name '.*' \) -printf '%T@ %p\n' |
+    find "$BACKUP_DIR" -maxdepth 1 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
         sort -nr | head -n1 | cut -d' ' -f2-
 }
 
 find_closest_backup_by_time() {
     local target_ts="$1"
-    find "$BACKUP_DIR" $FIND_DEPTH \( -name '*.tar.*' -o -type d ! -name '.*' \) -printf '%T@ %p\n' |
+    find "$BACKUP_DIR" -maxdepth 1 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
         awk -v tgt="$target_ts" '{ diff = ($1 - tgt); if (diff < 0) diff = -diff; print diff, $0; }' |
         sort -n | head -n1 | cut -d' ' -f2-
 }
@@ -103,18 +99,13 @@ fi
 rm -rf "$SERVER_PATH"/*
 echo "[INFO] Restoring backup..."
 
-if [[ -d "$BACKUP_TO_RESTORE" ]]; then
-    cp -a "$BACKUP_TO_RESTORE/." "$SERVER_PATH/"
-elif [[ "$BACKUP_TO_RESTORE" == *.tar.gz ]]; then
+if [[ "$BACKUP_TO_RESTORE" == *.tar.gz ]]; then
     tar -xvzf "$BACKUP_TO_RESTORE" -C "$SERVER_PATH"
 elif [[ "$BACKUP_TO_RESTORE" == *.tar.zst ]]; then
-    zstd -d "$BACKUP_TO_RESTORE" -o "$BACKUP_TO_RESTORE.tar"
-    tar -xvf "$BACKUP_TO_RESTORE.tar" -C "$SERVER_PATH"
-    rm -f "$BACKUP_TO_RESTORE.tar"
+    zstd -d "$BACKUP_TO_RESTORE" -c | tar -xvf - -C "$SERVER_PATH"
 else
-    echo "[ERROR] Unsupported backup format: $BACKUP_TO_RESTORE"
+    echo "[ERROR] Unsupported backup file format: $BACKUP_TO_RESTORE"
     exit 1
 fi
 
 echo "[INFO] Restore complete."
-bash "$SCRIPT_DIR/../start.sh"
