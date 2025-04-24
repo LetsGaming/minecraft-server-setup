@@ -1,91 +1,44 @@
 const axios = require('axios');
-const fs = require('fs');
+const path = require('path');
 const { pack_id, api_key } = require('./curseforge_variables.json');
-// Load pack_id and api_key from curseforge_variables.json
+const {createDownloadDir, formatBytes, downloadFile } = require('./download_utils');
 
-let packID = pack_id;
-let curseforgeAPIKey = api_key;
-
-// Check if pack_id or api_key are missing or set to 'none'
-if (!packID || !curseforgeAPIKey || packID === 'none' || curseforgeAPIKey === 'none') {
-    console.error('Error: pack_id or api_key is missing or set to "none". Please check the "curseforge_variables.json" file.');
-    return;
+// Validate input
+if (!pack_id || !api_key || pack_id === 'none' || api_key === 'none') {
+    console.error('Error: pack_id or api_key is missing or set to "none". Please check curseforge_variables.json.');
+    process.exit(1);
 }
 
-// Now call the API with the loaded values
+const packID = pack_id;
+const curseforgeAPIKey = api_key;
+
+createDownloadDir(path.join(__dirname, 'temp'));
+
 fetchModPackInfo();
 
 function fetchModPackInfo() {
     axios.get(`https://api.curseforge.com/v1/mods/${packID}`, {
-        headers: {'x-api-key': curseforgeAPIKey}
+        headers: { 'x-api-key': curseforgeAPIKey }
     })
     .then(response => {
         const mainFileId = response.data.data.mainFileId;
-        axios.get(`https://api.curseforge.com/v1/mods/${packID}/files/${mainFileId}`, {
-            headers: {'x-api-key': curseforgeAPIKey}
-        }).then(response => {
-            axios.get(`https://api.curseforge.com/v1/mods/${packID}/files/${response.data.data.serverPackFileId}`, {
-                headers: {'x-api-key': curseforgeAPIKey}
-            }).then(response => {
-                console.log(`Downloading server pack (${formatBytes(Number(response.data.data.fileLength))})...`);
-                downloadServerPack(response.data.data.downloadUrl, Number(response.data.data.fileLength));
-            }).catch(err => console.error(err));
-        }).catch(err => console.error(err));
-    }).catch(err => console.error(err));
-}
-
-function downloadServerPack(downloadUrl, totalSize) {
-    axios.get(downloadUrl, {
-        responseType: 'stream'
-    }).then(response => {
-        const writer = fs.createWriteStream('server-pack.zip');
-        
-        let downloaded = 0;
-        let lastProgress = 0; // To track last shown progress
-        let startTime = Date.now();
-        let downloadSpeed = 0; // In bytes per second
-
-        response.data.pipe(writer);
-
-        response.data.on('data', chunk => {
-            downloaded += chunk.length;
-            let progress = (downloaded / totalSize * 100).toFixed(2);
-
-            // Update progress every 10%
-            if (progress >= lastProgress + 1) {
-                let elapsedTime = (Date.now() - startTime) / 1000; // Time in seconds
-                downloadSpeed = downloaded / elapsedTime; // Calculate download speed in bytes per second
-                let remainingTime = (totalSize - downloaded) / downloadSpeed; // Remaining time in seconds
-                let remainingTimeFormatted = formatTime(remainingTime);
-
-                process.stdout.write(`Downloading... ${progress}% | Remaining time: ${remainingTimeFormatted} \r`);
-                lastProgress = Math.floor(progress); // Update to the next 10% step
-            }
+        return axios.get(`https://api.curseforge.com/v1/mods/${packID}/files/${mainFileId}`, {
+            headers: { 'x-api-key': curseforgeAPIKey }
         });
-
-        writer.on('finish', () => {
-            console.log('\nDownload completed!');
+    })
+    .then(response => {
+        const serverPackFileId = response.data.data.serverPackFileId;
+        return axios.get(`https://api.curseforge.com/v1/mods/${packID}/files/${serverPackFileId}`, {
+            headers: { 'x-api-key': curseforgeAPIKey }
         });
-
-        writer.on('error', err => {
-            console.error('Error during download:', err);
-        });
-
-    }).catch(err => console.error('Download error:', err));
-}
-
-// Function to format the remaining time in a human-readable format (e.g., 1m 20s)
-function formatTime(seconds) {
-    let minutes = Math.floor(seconds / 60);
-    seconds = Math.floor(seconds % 60);
-    return `${minutes}m ${seconds}s`;
-}
-
-function formatBytes(bytes, decimals = 2) {
-    if (!+bytes) return '0 Bytes';
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB', 'ZiB', 'YiB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+    })
+    .then(response => {
+        const fileData = response.data.data;
+        console.log(`Downloading server pack (${formatBytes(fileData.fileLength)})...`);
+        const outputPath = path.join(__dirname, 'temp', 'server-pack.zip');;
+        return downloadFile(fileData.downloadUrl, outputPath, fileData.fileLength);
+    })
+    .catch(err => {
+        console.error('Error during modpack download process:', err.response?.data || err.message);
+    });
 }

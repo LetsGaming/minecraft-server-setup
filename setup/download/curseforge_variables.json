@@ -1,4 +1,7 @@
 {
+    "api_key": "none",
     "pack_id": "none",
-    "api_key": "none"
+    "mod_ids": [
+        "none"
+    ]
 }
