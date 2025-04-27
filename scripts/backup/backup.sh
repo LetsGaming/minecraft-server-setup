@@ -60,6 +60,7 @@ $VERBOSE && log INFO "Verbose mode enabled"
 
 # ——— setup ———
 BACKUP_BASE="$SERVER_PATH/backups"
+JAR_STORAGE="$BACKUP_BASE/jars"
 DATE=$(date +'%Y-%m-%d_%H-%M-%S')
 START_TIME=$(date +%s)
 
@@ -69,7 +70,7 @@ else
   BACKUP_DIR="$BACKUP_BASE/hourly"
 fi
 
-mkdir -p "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR" "$JAR_STORAGE"
 
 log INFO "Backup directory: $BACKUP_DIR"
 
@@ -99,18 +100,13 @@ EXCLUDES=(
   --exclude='*.gz'
 )
 
-if $ARCHIVE_MODE; then
-  log INFO "Including all .jar files in archive mode"
-  while IFS= read -r -d '' jar; do
-    INCLUDE_PATHS+=("$jar")
-  done < <(find "$SERVER_PATH" -type f -name '*.jar' -print0)
-else
+if ! $ARCHIVE_MODE; then
   log INFO "Excluding .jar files in hourly mode"
   EXCLUDES+=('--exclude=*.jar')
 fi
 
 # ——— create temporary folder ———
-TMP_DIR="$BACKUP_DIR/temp_backup"
+TMP_DIR="$BACKUP_DIR/tmp_backup"
 mkdir -p "$TMP_DIR"
 
 # ——— rsync to the temporary directory ———
@@ -121,21 +117,37 @@ $DRY_RUN || rsync -a --inplace --numeric-ids "${EXCLUDES[@]}" "${INCLUDE_PATHS[@
     exit 1
 }
 
+# ——— handle jar files separately in archive mode ———
+if $ARCHIVE_MODE && ! $DRY_RUN; then
+  log INFO "Handling .jar files for archive mode..."
+  while IFS= read -r -d '' jar; do
+    jarname="$(basename "$jar")"
+    if [[ ! -e "$JAR_STORAGE/$jarname" ]]; then
+      log INFO "Storing jar: $jarname"
+      cp "$jar" "$JAR_STORAGE/$jarname"
+    fi
+    ln -sf "../../../jars/$jarname" "$TMP_DIR/$jarname"
+  done < <(find "$SERVER_PATH" -type f -name '*.jar' -print0)
+fi
+
 # ——— compress with tar + zstd ———
 FINAL_ARCHIVE=""
 if ! $DRY_RUN; then
   log INFO "Compressing backup..."
 
-  TAR_OPTS=(-cf - -C "$BACKUP_DIR" temp_backup)
+  TAR_OPTS=(-cf - -C "$TMP_DIR" .)
   ZSTD_OPTS=(-T0)
+
+  ARCHIVE_PATH="$BACKUP_DIR/minecraft_backup_$DATE.tar.zst"
+
   if $ARCHIVE_MODE; then
-    ZSTD_OPTS+=(-15 -o "$BACKUP_DIR/minecraft_backup_$DATE.tar.zst")
+    ZSTD_OPTS+=(-15 -o "$ARCHIVE_PATH")
   else
-    ZSTD_OPTS+=(-$COMPRESSION_LEVEL -o "$BACKUP_DIR/minecraft_backup_$DATE.tar.zst")
+    ZSTD_OPTS+=(-$COMPRESSION_LEVEL -o "$ARCHIVE_PATH")
   fi
 
   tar "${TAR_OPTS[@]}" | zstd "${ZSTD_OPTS[@]}"
-  FINAL_ARCHIVE="$BACKUP_DIR/minecraft_backup_$DATE.tar.zst"
+  FINAL_ARCHIVE="$ARCHIVE_PATH"
 fi
 
 # ——— validate archive ———
@@ -163,12 +175,11 @@ TIME_TAKEN_STMP=$(printf '%02d:%02d:%02d' $((TIME_TAKEN/3600)) $((TIME_TAKEN%360
 log SUCCESS "Backup complete: $FINAL_ARCHIVE"
 
 if $ARCHIVE_MODE; then
-  send_message "Archive backup ($ARCHIVE_TYPE) completed" || log WARN "Failed to notify server"
+  send_message "Archive backup ($ARCHIVE_TYPE) completed | In $TIME_TAKEN_STMP" || log WARN "Failed to notify server"
 else
-  send_message "Hourly backup completed" || log WARN "Failed to notify server"
+  send_message "Hourly backup completed | In $TIME_TAKEN_STMP" || log WARN "Failed to notify server"
 fi
 
-send_message "Backup took: $TIME_TAKEN_STMP"
 log INFO "Backup took: $TIME_TAKEN_STMP"
 
 if [[ -n "$FINAL_ARCHIVE" && ! $DRY_RUN ]]; then
