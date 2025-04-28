@@ -20,6 +20,11 @@ session_running() {
     fi
 }
 
+read_log() {
+    # Read the last line of the log file
+    tail -n 1 "$LOG_FILE"
+}
+
 send_command() {
     # Check if the screen session is running
     if ! session_running; then
@@ -61,17 +66,23 @@ get_player_list() {
     fi
 
     # Send the /list command to the Minecraft server
-    player_list=$(send_command "/list")
-    
-    # Extract the player names from the output
-    if echo "$player_list" | grep -q "There are no players online"; then
-        echo "No players are currently online."
+    if send_command "/list"; then
+        # Capture the last line from the log
+        LOG_LINE=$(read_log)
+
+        # Extract player names from the log line
+        PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/There are [0-9]* of a max of [0-9]* players online: \(.*\)/\1/p')
+
+        if [ -n "$PLAYER_LIST" ]; then
+            echo "Players online: $PLAYER_LIST"
+        else
+            echo "No players are currently online."
+        fi
     else
-        # Extract the player names after "Players online:"
-        player_names=$(echo "$player_list" | sed -n 's/^.*Players online: \(.*\)$/\1/p')
-        echo "Current players online: $player_names"
+        echo "Failed to get player list."
     fi
 }
+
 # Function to check if the server has completed the save-all process by monitoring the log file
 wait_for_save_completion() {
     if ! session_running; then
