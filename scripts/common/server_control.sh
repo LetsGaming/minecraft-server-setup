@@ -53,6 +53,25 @@ enable_auto_save() {
     send_command "/save-on"
 }
 
+get_player_list() {
+    # Check if the screen session is running
+    if ! session_running; then
+        echo "Screen session '$MODPACK_NAME' is not running. Cannot get player list."
+        return 1
+    fi
+
+    # Send the /list command to the Minecraft server
+    player_list=$(send_command "/list")
+    
+    # Extract the player names from the output
+    if echo "$player_list" | grep -q "There are no players online"; then
+        echo "No players are currently online."
+    else
+        # Extract the player names after "Players online:"
+        player_names=$(echo "$player_list" | sed -n 's/^.*Players online: \(.*\)$/\1/p')
+        echo "Current players online: $player_names"
+    fi
+}
 # Function to check if the server has completed the save-all process by monitoring the log file
 wait_for_save_completion() {
     if ! session_running; then
