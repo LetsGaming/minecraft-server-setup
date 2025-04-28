@@ -2,9 +2,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../common/load_variables.sh"
-
 BACKUP_SCRIPT="$SCRIPT_DIR/../backup.sh"
+
+source "$SCRIPT_DIR/../../common/load_variables.sh"
 STATE_DIR="/tmp/backup_flags"
 
 mkdir -p "$STATE_DIR"
