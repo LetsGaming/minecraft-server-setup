@@ -58,7 +58,7 @@ enable_auto_save() {
     send_command "/save-on"
 }
 
-get_player_list() {
+get_player_list() { 
     # Check if the screen session is running
     if ! session_running; then
         echo "Screen session '$MODPACK_NAME' is not running. Cannot get player list."
@@ -73,11 +73,12 @@ get_player_list() {
         # Extract player names from the log line
         PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/There are [0-9]* of a max of [0-9]* players online: \(.*\)/\1/p')
 
-        if [ -n "$PLAYER_LIST" ]; then
-            echo "Players online: $PLAYER_LIST"
-        else
-            echo "No players are currently online."
+        if [ "$PLAYER_LIST" ]; then
+            # Clean up the player list (replace commas with newlines and remove extra spaces)
+            PLAYER_LIST=$(echo "$PLAYER_LIST" | tr ',' '\n' | tr -s ' ' '\n')
+            echo "$PLAYER_LIST"
         fi
+        
     else
         echo "Failed to get player list."
     fi
