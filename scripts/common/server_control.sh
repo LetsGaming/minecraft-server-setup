@@ -21,8 +21,13 @@ session_running() {
 }
 
 read_log() {
-    # Read the last line of the log file
-    tail -n 1 "$LOG_FILE"
+    if [ -f "$LOG_FILE" ]; then
+        # Use tail to get the last line of the log file
+        tail -n 1 "$LOG_FILE"
+    else
+        echo "Log file not found: $LOG_FILE"
+        return 1
+    fi
 }
 
 send_command() {
@@ -67,11 +72,11 @@ get_player_list() {
 
     # Send the /list command to the Minecraft server
     if send_command "/list"; then
-        # Capture the last line from the log
+        # Capture the last log line (or relevant section)
         LOG_LINE=$(read_log)
 
         # Extract player names from the log line
-        PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/There are [0-9]* of a max of [0-9]* players online: \(.*\)/\1/p')
+        PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/.*There are [0-9]* of a max of [0-9]* players online: \(.*\)/\1/p')
 
         if [ "$PLAYER_LIST" ]; then
             # Clean up the player list (replace commas with newlines and remove extra spaces)
