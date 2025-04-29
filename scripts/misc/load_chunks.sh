@@ -19,6 +19,15 @@ LOG_FILE="$SERVER_PATH/logs/latest.log"
 # Internal set of online players
 declare -A ONLINE_PLAYERS
 
+# Check if any players are already online
+initial_player_count=$(get_player_count)
+if [[ "$initial_player_count" -gt 0 ]]; then
+    echo "[INFO] Detected $initial_player_count player(s) online at startup. Chunk loading will be paused."
+    INITIAL_PAUSE=true
+else
+    INITIAL_PAUSE=false
+fi
+
 # Check if Chunky mod is installed
 check_chunky_mod() {
     if ! find "$SERVER_PATH/mods" -maxdepth 1 -type f | grep -iE '/[^/]*c[\-_]*h[\-_]*u[\-_]*n[\-_]*k[\-_]*y[^/]*' >/dev/null; then
@@ -41,7 +50,6 @@ check_world_exists() {
 }
 
 # Start chunk loading process
-
 start_chunk_loading() {
     echo "[INFO] Starting chunk loading for $WORLD with a $RADIUS block radius."
     send_command "/chunky world $WORLD"
@@ -57,7 +65,7 @@ pause_chunk_loading() {
 
 resume_chunk_loading() {
     echo "[INFO] Resuming chunk loading as no players are online."
-    send_command "/chunky resume"
+    send_command "/chunky continue"
 }
 
 handle_player_event() {
@@ -121,6 +129,11 @@ check_world_exists "$WORLD" || exit 1
 
 # Start chunk loading
 start_chunk_loading
+
+# Pause immediately if players are already online
+if $INITIAL_PAUSE; then
+    pause_chunk_loading
+fi
 
 # Ensure latest.log exists
 if [[ ! -f "$LOG_FILE" ]]; then
