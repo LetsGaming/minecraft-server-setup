@@ -70,8 +70,6 @@ get_player_list() {
     fi
 
     if send_command "/list"; then
-        sleep 1  # Let the server write the output to log
-
         LOG_LINE=$(read_log | grep -E "There are [0-9]+ of a max of [0-9]+ players online:" | tail -n 1)
 
         if [ -n "$LOG_LINE" ]; then
@@ -85,6 +83,12 @@ get_player_list() {
         echo "Failed to get player list."
         return 1
     fi
+}
+
+# Get the number of players currently online
+get_player_count() {
+    player_list=$(get_player_list)
+    echo "$player_list" | grep -o '\S' | wc -l
 }
 
 # Function to check if the server has completed the save-all process by monitoring the log file

@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load the server_control.sh script from the common directory
-source "$SCRIPT_DIR/common/server_control.sh"
+source "$SCRIPT_DIR/../common/server_control.sh"
 
 # Get the server running status and player list
 if ! session_running; then
