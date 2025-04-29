@@ -20,7 +20,7 @@ fi
 # Create status message
 MESSAGE="Server Status: $SERVER_RUNNING\n"
 if [ "$SERVER_RUNNING" == "Running" ]; then
-    MESSAGE+="Player List:\n"
+    MESSAGE+="| Player List: "
     if [ -z "$PLAYER_LIST" ]; then
         MESSAGE+="No players online.\n"
     else

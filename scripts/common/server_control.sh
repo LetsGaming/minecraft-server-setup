@@ -22,8 +22,8 @@ session_running() {
 
 read_log() {
     if [ -f "$LOG_FILE" ]; then
-        # Use tail to get the last line of the log file
-        tail -n 1 "$LOG_FILE"
+        # Use tail to get the last 10 lines of the log file
+        tail -n 10 "$LOG_FILE"
     else
         echo "Log file not found: $LOG_FILE"
         return 1
@@ -63,29 +63,27 @@ enable_auto_save() {
     send_command "/save-on"
 }
 
-get_player_list() { 
-    # Check if the screen session is running
+get_player_list() {
     if ! session_running; then
         echo "Screen session '$MODPACK_NAME' is not running. Cannot get player list."
         return 1
     fi
 
-    # Send the /list command to the Minecraft server
     if send_command "/list"; then
-        # Capture the last log line (or relevant section)
-        LOG_LINE=$(read_log)
+        sleep 1  # Let the server write the output to log
 
-        # Extract player names from the log line
-        PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/.*There are [0-9]* of a max of [0-9]* players online: \(.*\)/\1/p')
+        LOG_LINE=$(read_log | grep -E "There are [0-9]+ of a max of [0-9]+ players online:" | tail -n 1)
 
-        if [ "$PLAYER_LIST" ]; then
-            # Clean up the player list (replace commas with newlines and remove extra spaces)
-            PLAYER_LIST=$(echo "$PLAYER_LIST" | tr ',' '\n' | tr -s ' ' '\n')
-            echo "$PLAYER_LIST"
+        if [ -n "$LOG_LINE" ]; then
+            PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/.*There are [0-9]* of a max of [0-9]* players online: \(.*\)/\1/p')
+            if [ -n "$PLAYER_LIST" ]; then
+                # Normalize spacing and echo as a comma-separated string
+                echo "$PLAYER_LIST" | sed 's/, */, /g' | sed 's/^ *//;s/ *$//'
+            fi
         fi
-        
     else
         echo "Failed to get player list."
+        return 1
     fi
 }
 
