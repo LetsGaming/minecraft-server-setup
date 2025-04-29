@@ -11,6 +11,13 @@ source "$SCRIPT_DIR/../common/server_control.sh"
 # Default world is "overworld"
 WORLD="overworld"
 RADIUS=200000
+QUIET_INTERVAL=500
+
+# Path to latest log
+LOG_FILE="$SERVER_PATH/logs/latest.log"
+
+# Internal set of online players
+declare -A ONLINE_PLAYERS
 
 # Check if Chunky mod is installed
 check_chunky_mod() {
@@ -26,8 +33,6 @@ check_world_exists() {
     world_name=$1
     send_command "/chunky world $world_name"
     log_output=$(read_log)
-
-    # Check if the log contains the expected response indicating the world is valid
     if echo "$log_output" | grep -q "chunky world $world_name - Set the world target"; then
         echo "[ERROR] World '$world_name' is not valid or does not exist."
         return 1
@@ -36,24 +41,46 @@ check_world_exists() {
 }
 
 # Start chunk loading process
+
 start_chunk_loading() {
     echo "[INFO] Starting chunk loading for $WORLD with a $RADIUS block radius."
     send_command "/chunky world $WORLD"
     send_command "/chunky radius $RADIUS"
     send_command "/chunky start"
-    send_command "/chunky quiet 500"
+    send_command "/chunky quiet $QUIET_INTERVAL"
 }
 
-# Pause chunk loading if players are online
 pause_chunk_loading() {
     echo "[INFO] Pausing chunk loading due to players online."
     send_command "/chunky pause"
 }
 
-# Resume chunk loading when no players are online
 resume_chunk_loading() {
     echo "[INFO] Resuming chunk loading as no players are online."
     send_command "/chunky resume"
+}
+
+handle_player_event() {
+    local player="$1"
+    local action="$2"
+
+    if [[ "$action" == "join" ]]; then
+        if [[ -z "${ONLINE_PLAYERS[$player]}" ]]; then
+            ONLINE_PLAYERS["$player"]=1
+            echo "[EVENT] $player joined"
+            if [[ ${#ONLINE_PLAYERS[@]} -eq 1 ]]; then
+                pause_chunk_loading
+            fi
+        fi
+    elif [[ "$action" == "leave" ]]; then
+        if [[ -n "${ONLINE_PLAYERS[$player]}" ]]; then
+            unset ONLINE_PLAYERS["$player"]
+            echo "[EVENT] $player left"
+            if [[ ${#ONLINE_PLAYERS[@]} -eq 0 ]]; then
+                resume_chunk_loading
+            fi
+        fi
+    fi
 }
 
 # Parse arguments
@@ -63,6 +90,24 @@ while [[ $# -gt 0 ]]; do
             WORLD="$2"
             shift 2
             ;;
+        --radius)
+            if [[ "$2" =~ ^[0-9]+$ ]]; then
+                RADIUS="$2"
+                shift 2
+            else
+                echo "[ERROR] Invalid radius: $2"
+                exit 1
+            fi
+            ;;
+        --quiet)
+            if [[ "$2" =~ ^[0-9]+$ ]]; then
+                QUIET_INTERVAL="$2"
+                shift 2
+            else
+                echo "[ERROR] Invalid quiet interval: $2"
+                exit 1
+            fi
+            ;;
         *)
             echo "[ERROR] Unknown argument: $1"
             exit 1
@@ -70,31 +115,28 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check if Chunky mod is installed
-if ! check_chunky_mod; then
-    exit 1
-fi
-
-# Check if the world exists by using /chunky world <world> command
-if ! check_world_exists "$WORLD"; then
-    exit 1
-fi
+# Pre-run checks
+check_chunky_mod || exit 1
+check_world_exists "$WORLD" || exit 1
 
 # Start chunk loading
 start_chunk_loading
 
-# Monitor player activity and control chunk loading
-sleep_interval=30
-while true; do
-    player_count=$(get_player_count)
-    if [ "$player_count" -gt 0 ]; then
-        pause_chunk_loading
-        # Wait until no players are online before resuming chunk loading
-        while [ "$player_count" -gt 0 ]; do
-            sleep $sleep_interval
-            player_count=$(get_player_count)
-        done
-        resume_chunk_loading
+# Ensure latest.log exists
+if [[ ! -f "$LOG_FILE" ]]; then
+    echo "[INFO] Waiting for latest.log to be created..."
+    while [[ ! -f "$LOG_FILE" ]]; do sleep 1; done
+fi
+
+# Monitor the log for join/leave events
+echo "[INFO] Monitoring player join/leave events..."
+
+tail -n0 -F "$LOG_FILE" | while read -r line; do
+    if [[ "$line" =~ \]:\ ([a-zA-Z0-9_]+)\ joined\ the\ game ]]; then
+        player="${BASH_REMATCH[1]}"
+        handle_player_event "$player" "join"
+    elif [[ "$line" =~ \]:\ ([a-zA-Z0-9_]+)\ left\ the\ game ]]; then
+        player="${BASH_REMATCH[1]}"
+        handle_player_event "$player" "leave"
     fi
-    sleep $sleep_interval  # Regularly check for players
 done
