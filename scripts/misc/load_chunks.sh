@@ -14,7 +14,7 @@ RADIUS=200000
 
 # Check if Chunky mod is installed
 check_chunky_mod() {
-    if [ ! -d "$SERVER_PATH/mods/chunky" ]; then
+    if ! find "$SERVER_PATH/mods" -maxdepth 1 -type f | grep -iE '/[^/]*c[\-_]*h[\-_]*u[\-_]*n[\-_]*k[\-_]*y[^/]*' >/dev/null; then
         echo "[ERROR] Chunky mod is not installed."
         return 1
     fi
