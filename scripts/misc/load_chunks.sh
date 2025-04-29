@@ -84,16 +84,17 @@ fi
 start_chunk_loading
 
 # Monitor player activity and control chunk loading
+sleep_interval=30
 while true; do
     player_count=$(get_player_count)
     if [ "$player_count" -gt 0 ]; then
         pause_chunk_loading
         # Wait until no players are online before resuming chunk loading
         while [ "$player_count" -gt 0 ]; do
-            sleep 10
+            sleep $sleep_interval
             player_count=$(get_player_count)
         done
         resume_chunk_loading
     fi
-    sleep 10  # Regularly check for players
+    sleep $sleep_interval  # Regularly check for players
 done
