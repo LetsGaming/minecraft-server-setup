@@ -52,7 +52,7 @@ check_world_exists() {
 # Start chunk loading process
 start_chunk_loading() {
     echo "[INFO] Starting chunk loading for $WORLD with a $RADIUS block radius."
-    send_command "/chunky world $WORLD"
+    send_command "/chunky spawn"
     send_command "/chunky radius $RADIUS"
     send_command "/chunky start"
     send_command "/chunky quiet $QUIET_INTERVAL"

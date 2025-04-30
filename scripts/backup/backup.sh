@@ -157,6 +157,7 @@ if ! $DRY_RUN; then
     send_message "Backup archive appears corrupted. Removing"
     log ERROR "Validation failed — corrupted archive removed"
     rm -f "$FINAL_ARCHIVE"
+    rm -f "$TMP_DIR"
     exit 1
   fi
 fi
