@@ -138,6 +138,7 @@ run_or_echo "node \"$SCRIPT_DIR/setup/structure/unpack_modpack.js\""
 
 log "Setting common and server-specific variables..."
 run_or_echo "node \"$SCRIPT_DIR/setup/variables/set_common_variables.js\""
+run_or_echo "node \"$SCRIPT_DIR/setup/variables/set_update_variables.js\""
 run_or_echo "node \"$SCRIPT_DIR/setup/variables/set_server_variables.js\""
 
 log "Setting server.properties..."

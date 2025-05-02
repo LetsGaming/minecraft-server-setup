@@ -5,6 +5,7 @@ const {
   createDownloadDir,
   formatBytes,
   downloadFile,
+  saveDownloadedVersion,
 } = require("./download_utils");
 
 // Validate input
@@ -74,7 +75,10 @@ async function downloadLatestModFile(modID) {
     console.log(
       `Downloading ${fileName} (${formatBytes(fileLength)}) to temp/mods...`
     );
-    await downloadFile(downloadUrl, outputPath, fileLength);
+    await downloadFile(downloadUrl, outputPath, fileLength).then(() => {
+      // Save downloaded version info
+      saveDownloadedVersion("mod", modID, fileData);
+    });
   } catch (err) {
     console.error(
       `Error processing mod ID ${modID}:`,

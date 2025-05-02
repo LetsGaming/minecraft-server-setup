@@ -66,9 +66,42 @@ function downloadFile(url, fileName, totalSize) {
   });
 }
 
+function saveDownloadedVersion(type, id, versionData) {
+  const versionFile = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "scripts",
+    "common",
+    "downloaded_versions.json"
+  );
+
+  let existing = {};
+  if (fs.existsSync(versionFile)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+    } catch (err) {
+      console.warn(
+        "Warning: Could not parse downloaded_versions.json. Overwriting..."
+      );
+    }
+  }
+
+  existing[type] = existing[type] || {};
+  existing[type][id] = {
+    fileId: versionData.fileId,
+    fileName: versionData.fileName,
+    displayName: versionData.displayName,
+    date: new Date().toISOString(),
+  };
+
+  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2));
+}
+
 module.exports = {
   createDownloadDir,
   formatTime,
   formatBytes,
   downloadFile,
+  saveDownloadedVersion,
 };
