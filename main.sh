@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# --- Require Sudo Privileges Upfront ---
+if ! sudo -v; then
+  echo "[ERROR] This script requires sudo privileges."
+  exit 1
+fi
+
 # --- Root Check ---
 if [ "$(id -u)" -eq 0 ]; then
   echo "[ERROR] Do not run this script as root."
