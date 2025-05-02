@@ -15,11 +15,11 @@
       "MAX_PLAYERS": 10,
       "MOTD": "A Minecraft RPG server",
       "SEED": "",
-      "WHITELIST": "false",
+      "WHITELIST": false,
       "DIFFICULTY": "normal",
-      "PVP": "false",
-      "FLIGHT_ENABLED": "true",
-      "ALLOW_CRACKED": "false"
+      "PVP": false,
+      "FLIGHT_ENABLED": true,
+      "ALLOW_CRACKED": false
     },
     "JAVA_ARGS_CONFIG": {
       "minMemory": "12G",

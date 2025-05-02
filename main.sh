@@ -21,6 +21,7 @@ NO_BACKUP=false
 DRY_RUN=false
 VERBOSE=false
 ACCEPT_ALL=false
+SETUP_INTERFACE=false
 
 # --- Logging Functions ---
 log() {
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --agree-eula)  EULA=true ;;
     --no-service)  NO_SERVICE=true ;;
     --no-backup)   NO_BACKUP=true ;;
+    --interface)   SETUP_INTERFACE=true ;;
     --dry-run)     DRY_RUN=true ;;
     --verbose)     VERBOSE=true ;;
     --y)           ACCEPT_ALL=true ;;
@@ -66,6 +68,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-start       Do not start the server after setup."
       echo "  --no-service     Skip creating the systemd service."
       echo "  --no-backup      Skip creating the backup job."
+      echo "  --interface      Setup the web interface for the server."
       echo "  --dry-run        Only print what would be done."
       echo "  --verbose        Print additional logging info."
       echo "  --y              Accept all defaults and skip prompts (except for explicitly set flags)."
@@ -105,6 +108,9 @@ if [ "$ACCEPT_ALL" = false ]; then
   fi
   if [ "$NO_BACKUP" = false ]; then
     ask_yes_no "Do you want a backup job?" && NO_BACKUP=false || NO_BACKUP=true
+  fi
+  if [ "$SETUP_INTERFACE" = false ]; then
+    ask_yes_no "Do you want to setup the web interface?" && SETUP_INTERFACE=false || SETUP_INTERFACE=true
   fi
 fi
 
@@ -162,6 +168,14 @@ if [ "$EULA" = true ]; then
   run_or_echo "node \"$SCRIPT_DIR/setup/management/agree_eula.js\""
 else
   warn "EULA not accepted. Please do so before launching the server."
+fi
+
+# --- Web Interface ---
+if [ "$SETUP_INTERFACE" = true ]; then
+  log "Setting up web interface..."
+  run_or_echo "bash \"$SCRIPT_DIR/setup/interface/setup_interface.sh\""
+else
+  warn "Skipping web interface setup (--interface)."
 fi
 
 # --- Start Server ---
