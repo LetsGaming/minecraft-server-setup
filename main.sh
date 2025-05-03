@@ -128,6 +128,7 @@ if [ "$ACCEPT_ALL" = false ]; then
   if [ "$SETUP_INTERFACE" = false ]; then
     ask_yes_no "Do you want to setup the web interface?" && SETUP_INTERFACE=false || SETUP_INTERFACE=true
   fi
+fi
 
 # --- Setup Steps ---
 log "Downloading required packages..."
