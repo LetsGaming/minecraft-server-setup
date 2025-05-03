@@ -4,8 +4,8 @@ const loadVariables = require("../../common/loadVariables");
 
 const { MODPACK_NAME, TARGET_DIR_NAME } = loadVariables();
 const currentUser = process.env.USER;
-
-const MANAGER_CONFIG = "../minecraft-server-manager/src/config/config.json";
+const INTERFACE_DIR = process.env.INTERFACE_SETUP_SCRIPT_DIR;
+const MANAGER_CONFIG = path.join(INTERFACE_DIR, "minecraft-server-manager", "src", "config", "config.json");
 
 if (!fs.existsSync(MANAGER_CONFIG)) {
   console.error("Minecraft Server Manager config.json not found.");
