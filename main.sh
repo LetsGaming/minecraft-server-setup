@@ -126,7 +126,7 @@ if [ "$ACCEPT_ALL" = false ]; then
     ask_yes_no "Do you want a backup job?" && NO_BACKUP=false || NO_BACKUP=true
   fi
   if [ "$SETUP_INTERFACE" = false ]; then
-    ask_yes_no "Do you want to setup the web interface?" && SETUP_INTERFACE=false || SETUP_INTERFACE=true
+    ask_yes_no "Do you want to setup the web interface?" && SETUP_INTERFACE=true || SETUP_INTERFACE=false
   fi
 fi
 
