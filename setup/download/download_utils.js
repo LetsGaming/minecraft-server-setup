@@ -67,6 +67,29 @@ function downloadFile(url, fileName, totalSize) {
   });
 }
 
+function getDownloadedVersions() {
+  const versionFile = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "scripts",
+    "common",
+    "downloaded_versions.json"
+  );
+  if (!fs.existsSync(versionFile)) return null;
+
+  let downloadedVersions = {};
+  try {
+    downloadedVersions = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+  } catch (err) {
+    console.warn(
+      "Warning: Could not parse downloaded_versions.json. Assuming no mods are downloaded."
+    );
+    return null;
+  }
+  return downloadedVersions;
+}
+
 function saveDownloadedVersion(
   type,
   modId,
@@ -114,10 +137,25 @@ function saveDownloadedVersion(
   fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
 }
 
+function getMinecraftVersion() {
+  const downloadedVersions = getDownloadedVersions();
+  if (!downloadedVersions) return null;
+
+  return downloadedVersions?.gameVersion || null;
+}
+
+function isAlreadyDownloaded(type, modID, fileID) {
+  const downloadedVersions = getDownloadedVersions();
+  if (!downloadedVersions) return false;
+  return downloadedVersions?.[type]?.[modID] === fileID;
+}
+
 module.exports = {
   createDownloadDir,
   formatTime,
   formatBytes,
   downloadFile,
   saveDownloadedVersion,
+  isAlreadyDownloaded,
+  getMinecraftVersion,
 };
