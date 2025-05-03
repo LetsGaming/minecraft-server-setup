@@ -83,7 +83,7 @@ function updateJavaArgsInVariablesFile() {
   const javaArgsString = `"${buildJavaArgs(JAVA_ARGS_CONFIG)}"`; // wrap in quotes
 
   if (!fs.existsSync(variablesTxtPath)) {
-    throw new Error(`variables.txt not found at ${variablesTxtPath}`);
+    fs.writeFileSync(variablesTxtPath, `JAVA_ARGS=${javaArgsString}`, "utf-8");
   }
 
   let variablesContent = fs.readFileSync(variablesTxtPath, "utf-8");
