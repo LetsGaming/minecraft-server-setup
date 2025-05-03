@@ -2,8 +2,8 @@ const path = require("path");
 const fs = require("fs");
 
 // Load variables
-const curseforge_variables = require("../download/curseforge_variables.json");
-const { api_key, pack_id, mod_ids } = curseforge_variables;
+const curseforge_variables = require("../download/curseforge.txt");
+const { api_key } = curseforge_variables;
 // Construct path
 const variablesFilePath = path.resolve(
   __dirname,
@@ -16,9 +16,7 @@ const variablesFilePath = path.resolve(
 
 // Prepare content
 const variablesContent = [
-  `API_KEY="${api_key}"`,
-  `PACK_ID="${pack_id}"`,
-  `MOD_IDS="${mod_ids}"`,
+  `API_KEY='${api_key}'`,
 ].join("\n");
 
 // Write to file

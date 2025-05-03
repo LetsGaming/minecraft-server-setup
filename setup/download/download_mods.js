@@ -61,10 +61,12 @@ async function downloadLatestModFile(modID) {
         headers: { "x-api-key": curseforgeAPIKey },
       }
     );
-
     const fileData = fileResponse.data.data;
+    if (!fileData) {
+      console.error(`No data found for mod ID ${modID}`);
+      return;
+    }
     const { downloadUrl, fileName, fileLength } = fileData;
-
     if (!downloadUrl) {
       console.error(`No download URL for mod ID ${modID}`);
       return;
@@ -77,7 +79,7 @@ async function downloadLatestModFile(modID) {
     );
     await downloadFile(downloadUrl, outputPath, fileLength).then(() => {
       // Save downloaded version info
-      saveDownloadedVersion("mod", modID, fileData);
+      saveDownloadedVersion("mods", modID, latestFileId);
     });
   } catch (err) {
     console.error(

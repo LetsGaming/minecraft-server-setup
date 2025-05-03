@@ -24,12 +24,17 @@ createDownloadDir(path.join(__dirname, "temp"));
 fetchModPackInfo();
 
 function fetchModPackInfo() {
+  // Fetching modpack info from CurseForge API
   axios
     .get(`https://api.curseforge.com/v1/mods/${packID}`, {
       headers: { "x-api-key": curseforgeAPIKey },
     })
     .then((response) => {
       const mainFileId = response.data.data.mainFileId;
+      if (!mainFileId) {
+        throw new Error("No main file ID found for the modpack.");
+      }
+      // Fetching the main file info
       return axios.get(
         `https://api.curseforge.com/v1/mods/${packID}/files/${mainFileId}`,
         {
@@ -39,6 +44,10 @@ function fetchModPackInfo() {
     })
     .then((response) => {
       const serverPackFileId = response.data.data.serverPackFileId;
+      if (!serverPackFileId) {
+        throw new Error("No server pack file ID found for the modpack.");
+      }
+      // Fetching the server pack file info
       return axios.get(
         `https://api.curseforge.com/v1/mods/${packID}/files/${serverPackFileId}`,
         {
@@ -47,7 +56,14 @@ function fetchModPackInfo() {
       );
     })
     .then((response) => {
+      if (!response.data.data) {
+        throw new Error("No data found for the server pack file.");
+      }
       const fileData = response.data.data;
+      const gameVersions = fileData.gameVersions || [];
+      const modLoader = gameVersions[0] || "none";
+      const gameVersion = gameVersions[1] || "none";
+
       console.log(
         `Downloading server pack (${formatBytes(fileData.fileLength)})...`
       );
@@ -59,7 +75,7 @@ function fetchModPackInfo() {
         fileData.fileLength
       ).then(() => {
         // Save downloaded version info
-        saveDownloadedVersion("modpack", packID, fileData.id);
+        saveDownloadedVersion("modpack", packID, fileData.id, modLoader, gameVersion);
       });
     })
     .catch((err) => {

@@ -1,4 +1,5 @@
 const fs = require("fs");
+const path = require("path");
 const axios = require("axios");
 
 function createDownloadDir(dir) {
@@ -66,7 +67,13 @@ function downloadFile(url, fileName, totalSize) {
   });
 }
 
-function saveDownloadedVersion(type, id, versionData) {
+function saveDownloadedVersion(
+  type,
+  modId,
+  fileId,
+  modLoader = null,
+  gameVersion = null
+) {
   const versionFile = path.resolve(
     __dirname,
     "..",
@@ -87,15 +94,24 @@ function saveDownloadedVersion(type, id, versionData) {
     }
   }
 
-  existing[type] = existing[type] || {};
-  existing[type][id] = {
-    fileId: versionData.fileId,
-    fileName: versionData.fileName,
-    displayName: versionData.displayName,
-    date: new Date().toISOString(),
-  };
+  // Set modLoader and gameVersion if provided
+  if (modLoader) existing.modLoader = modLoader;
+  if (gameVersion) existing.gameVersion = gameVersion;
 
-  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2));
+  // Ensure 'modpack' and 'mods' objects exist
+  if (!existing.modpack) existing.modpack = {};
+  if (!existing.mods) existing.mods = {};
+
+  // Only allow 'modpack' or 'mods' as valid types
+  if (type !== "modpack" && type !== "mods") {
+    console.warn(`Warning: Unknown type '${type}' provided. Skipping.`);
+    return;
+  }
+
+  existing[type][modId] = fileId;
+
+  // Write back to file
+  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
 }
 
 module.exports = {
