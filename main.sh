@@ -102,6 +102,16 @@ ask_yes_no() {
   done
 }
 
+# --- Apply --y (Accept All) Defaults ---
+if [ "$ACCEPT_ALL" = true ]; then
+  # Only override if the user didn't explicitly set it
+  if ! [[ "$*" =~ "--no-start" ]]; then NO_START=false; fi
+  if ! [[ "$*" =~ "--agree-eula" ]]; then EULA=true; fi
+  if ! [[ "$*" =~ "--no-service" ]]; then NO_SERVICE=false; fi
+  if ! [[ "$*" =~ "--no-backup" ]]; then NO_BACKUP=false; fi
+  if ! [[ "$*" =~ "--interface" ]]; then SETUP_INTERFACE=true; fi
+fi
+
 if [ "$ACCEPT_ALL" = false ]; then
   if [ "$NO_START" = false ]; then
     ask_yes_no "Do you wish to start the server?" && NO_START=false || NO_START=true
@@ -118,7 +128,6 @@ if [ "$ACCEPT_ALL" = false ]; then
   if [ "$SETUP_INTERFACE" = false ]; then
     ask_yes_no "Do you want to setup the web interface?" && SETUP_INTERFACE=false || SETUP_INTERFACE=true
   fi
-fi
 
 # --- Setup Steps ---
 log "Downloading required packages..."
