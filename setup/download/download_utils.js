@@ -144,6 +144,13 @@ function getMinecraftVersion() {
   return downloadedVersions?.gameVersion || null;
 }
 
+function getModLoader() {
+  const downloadedVersions = getDownloadedVersions();
+  if (!downloadedVersions) return null;
+
+  return downloadedVersions?.modLoader || null;
+}
+
 function isAlreadyDownloaded(type, modID, fileID) {
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) return false;
@@ -158,4 +165,5 @@ module.exports = {
   saveDownloadedVersion,
   isAlreadyDownloaded,
   getMinecraftVersion,
+  getModLoader,
 };

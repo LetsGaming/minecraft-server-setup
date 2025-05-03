@@ -8,6 +8,7 @@ const {
   saveDownloadedVersion,
   isAlreadyDownloaded,
   getMinecraftVersion,
+  getModLoader,
 } = require("./download_utils");
 
 if (!api_key || api_key === "none") {
@@ -28,8 +29,12 @@ const modsDir = path.join(__dirname, "temp", "mods");
 createDownloadDir(modsDir);
 
 const targetMinecraftVersion = getMinecraftVersion();
-if (!targetMinecraftVersion) {
-  console.error("No Minecraft version found in downloaded_versions.json.");
+const targetModLoader = getModLoader();
+
+if (!targetMinecraftVersion || !targetModLoader) {
+  console.error(
+    "Missing Minecraft version or mod loader in downloaded_versions.json."
+  );
   process.exit(1);
 }
 
@@ -47,7 +52,6 @@ async function downloadModAndDependencies(modID) {
   processedMods.add(modID);
 
   try {
-    // Fetch all files for the mod
     const filesResp = await axios.get(
       `https://api.curseforge.com/v1/mods/${modID}/files`,
       { headers: { "x-api-key": curseforgeAPIKey } }
@@ -59,14 +63,18 @@ async function downloadModAndDependencies(modID) {
       return;
     }
 
-    // Find the latest file that matches the desired Minecraft version
-    const compatibleFile = files.find((file) =>
-      file.gameVersions.includes(targetMinecraftVersion)
+    // Match both Minecraft version and mod loader in gameVersions
+    const compatibleFile = files.find(
+      (file) =>
+        file.gameVersions.includes(targetMinecraftVersion) &&
+        file.gameVersions.some(
+          (v) => v.toLowerCase() === targetModLoader.toLowerCase()
+        )
     );
 
     if (!compatibleFile) {
       console.warn(
-        `No compatible file for mod ID ${modID} with Minecraft ${targetMinecraftVersion}`
+        `No compatible file for mod ID ${modID} with Minecraft ${targetMinecraftVersion} and ${targetModLoader}`
       );
       return;
     }
@@ -80,7 +88,6 @@ async function downloadModAndDependencies(modID) {
       return;
     }
 
-    // Fetch full file data
     const fileDetailsResp = await axios.get(
       `https://api.curseforge.com/v1/mods/${modID}/files/${fileID}`,
       { headers: { "x-api-key": curseforgeAPIKey } }
@@ -103,12 +110,10 @@ async function downloadModAndDependencies(modID) {
     // Recursively process required dependencies
     if (Array.isArray(dependencies)) {
       for (const dep of dependencies) {
-        if (!isAlreadyDownloaded("mods", dep.modId, dep.fileId)) {
-          if (dep.relationType === 3) {
-            // RequiredDependency
-            console.log(`→ Found required dependency: ${dep.modId}`);
-            await downloadModAndDependencies(dep.modId);
-          }
+        if (dep.relationType === 3) {
+          // RequiredDependency
+          console.log(`→ Found required dependency: ${dep.modId}`);
+          await downloadModAndDependencies(dep.modId);
         }
       }
     }
