@@ -1,5 +1,5 @@
 const path = require("path");
-const loadVariables = require("../common/loadVariables");
+const loadVariables = require("../../common/loadVariables");
 const { exec } = require("child_process");
 
 const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();

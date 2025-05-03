@@ -83,5 +83,6 @@ function fetchModPackInfo() {
         "Error during modpack download process:",
         err.response?.data || err.message
       );
+      process.exit(1);
     });
 }
