@@ -11,7 +11,7 @@ if (!SCRIPT_DIR) {
   throw new Error("Missing required environment variable: SCRIPT_DIR");
 }
 
-const TEMP_DIR = path.join(SCRIPT_DIR, "temp");
+const TEMP_DIR = path.join(SCRIPT_DIR, "setup", "download", "temp");
 
 const modpack_source = path.join(TEMP_DIR, "server-pack.zip");
 const mods_source = path.join(TEMP_DIR, "mods");
