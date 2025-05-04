@@ -177,6 +177,8 @@ fi
 log "Cleaning up temporary files..."
 run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
 run_or_echo "sudo rm -rf \"$SCRIPT_DIR/setup/download/temp\""
+run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/downloaded_versions.json\""
+run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/curseforge.txt"
 
 log "Setup completed successfully."
 
