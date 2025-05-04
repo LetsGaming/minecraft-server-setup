@@ -176,6 +176,7 @@ fi
 # --- Cleanup ---
 log "Cleaning up temporary files..."
 run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
+run_or_echo "sudo rm -rf \"$SCRIPT_DIR/setup/download/temp\""
 
 log "Setup completed successfully."
 
