@@ -110,11 +110,9 @@ async function downloadModAndDependencies(modID) {
     // Recursively process required dependencies
     if (Array.isArray(dependencies)) {
       for (const dep of dependencies) {
-        if (dep.relationType === 3) {
-          // RequiredDependency
-          console.log(`→ Found required dependency: ${dep.modId}`);
-          await downloadModAndDependencies(dep.modId);
-        }
+        // RequiredDependency
+        console.log(`→ Found dependency: ${dep.modId}`);
+        await downloadModAndDependencies(dep.modId);
       }
     }
   } catch (err) {
