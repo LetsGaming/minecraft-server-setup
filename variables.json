@@ -1,5 +1,5 @@
 {
-  "MODPACK_NAME": "cobblemon",
+  "INSTANCE_NAME": "server",
   "TARGET_DIR_NAME": "minecraft-server",
   "BACKUPS": {
     "COMPRESSION_LEVEL": 15,
@@ -12,8 +12,9 @@
   },
   "JAVA": {
     "SERVER": {
+      "VERSION": "1.20.2",
       "MAX_PLAYERS": 10,
-      "MOTD": "Gotta mine 'em all!",
+      "MOTD": "A Minecraft Server",
       "SEED": "",
       "WHITELIST": false,
       "DIFFICULTY": "normal",
