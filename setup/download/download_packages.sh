@@ -36,6 +36,7 @@ echo "Upgrading all installed packages..."
 sudo apt upgrade -y
 
 # Install required packages
+install_if_missing curl curl 
 install_if_missing screen screen
 install_if_missing unzip unzip
 install_if_missing node nodejs

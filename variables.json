@@ -12,7 +12,11 @@
   },
   "JAVA": {
     "SERVER": {
-      "VERSION": "1.20.2",
+      "VANILLA": {
+        "VERSION": "latest",
+        "SNAPSHOT": false,
+        "USE_FABRIC": false
+      },
       "MAX_PLAYERS": 10,
       "MOTD": "A Minecraft Server",
       "SEED": "",

@@ -11,6 +11,14 @@ const {
   getModLoader,
 } = require("./download_utils");
 
+// === Argument Parsing ===
+const args = process.argv.slice(2);
+const downloadDirArg = args.find((arg) => arg.startsWith("--downloadDir="));
+const customDownloadDir = downloadDirArg
+  ? path.resolve(downloadDirArg.split("=")[1])
+  : path.join(__dirname, "temp", "mods");
+
+// === Setup ===
 if (!api_key || api_key === "none") {
   console.error(
     "Error: api_key is missing/invalid in curseforge_variables.json."
@@ -25,8 +33,7 @@ if (!Array.isArray(mod_ids) || mod_ids.length === 0) {
 
 const curseforgeAPIKey = api_key;
 const validModIDs = mod_ids.filter((id) => id && id !== "none");
-const modsDir = path.join(__dirname, "temp", "mods");
-createDownloadDir(modsDir);
+createDownloadDir(customDownloadDir);
 
 const targetMinecraftVersion = getMinecraftVersion();
 const targetModLoader = getModLoader();
@@ -40,6 +47,7 @@ if (!targetMinecraftVersion || !targetModLoader) {
 
 const processedMods = new Set();
 
+// === Main Loop ===
 (async () => {
   for (const modID of validModIDs) {
     console.log(`\nProcessing mod ID: ${modID}`);
@@ -47,6 +55,7 @@ const processedMods = new Set();
   }
 })();
 
+// === Core Function ===
 async function downloadModAndDependencies(modID) {
   if (processedMods.has(modID)) return;
   processedMods.add(modID);
@@ -63,7 +72,6 @@ async function downloadModAndDependencies(modID) {
       return;
     }
 
-    // Match both Minecraft version and mod loader in gameVersions
     const compatibleFile = files.find(
       (file) =>
         file.gameVersions.includes(targetMinecraftVersion) &&
@@ -100,17 +108,17 @@ async function downloadModAndDependencies(modID) {
       return;
     }
 
-    const outputPath = path.join(modsDir, fileName);
+    const outputPath = path.join(customDownloadDir, fileName);
     console.log(
-      `Downloading ${fileName} (${formatBytes(fileLength)}) to temp/mods...`
+      `Downloading ${fileName} (${formatBytes(
+        fileLength
+      )}) to ${customDownloadDir}...`
     );
     await downloadFile(downloadUrl, outputPath, fileLength);
     saveDownloadedVersion("mods", modID, fileID);
 
-    // Recursively process required dependencies
     if (Array.isArray(dependencies)) {
       for (const dep of dependencies) {
-        // RequiredDependency
         console.log(`→ Found dependency: ${dep.modId}`);
         await downloadModAndDependencies(dep.modId);
       }

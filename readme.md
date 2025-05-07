@@ -51,7 +51,7 @@ Before you begin, ensure you have the following installed on your system:
 4. **Review and Customize Configurations:**
 
    - Change the variables in [variables.json](./variables.json) to match your desired configuration
-      - Note: Version is being ignored for modded servers; version is taken from the modpack.
+      - Note: If Fabric is true, it will install the fabric launcher, aswell as basic performance mods
    - Set the pack_id and your api_key in [curseforge_variables.json](./setup/download/curseforge_variables.json)
 
 ## Usage

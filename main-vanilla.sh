@@ -20,10 +20,16 @@ set_environment
 # Parse command line arguments
 parse_args "$@"
 
+
 if [[ "$TESTING" == "true" ]]; then
     # Run the testing setup
     echo "Running in testing mode..."
-    # TODO: Implement vanilla setup
+
+    run_or_echo "bash \"$SCRIPT_DIR/setup/download/download_packages.sh\""
+    export JABBA_VERSION=...
+    curl -sL https://github.com/shyiko/jabba/raw/master/install.sh | bash && . ~/.jabba/jabba.sh
+
+    
 else
     warn "This script is not yet implemented"
 fi

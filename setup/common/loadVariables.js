@@ -2,7 +2,7 @@ const path = require("path");
 const fs = require("fs");
 
 function loadVariables() {
-  const variablesPath = path.resolve(__dirname, "../variables.json");
+  const variablesPath = path.resolve(__dirname, "..", "..", "variables.json");
   if (!fs.existsSync(variablesPath)) {
     throw new Error(`Missing variables.json at expected path: ${variablesPath}`);
   }
