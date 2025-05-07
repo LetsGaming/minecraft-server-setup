@@ -6,7 +6,7 @@ const {
   TARGET_DIR_NAME,
   INSTANCE_NAME,
   JAVA: {
-    JAVA_ARGS_CONFIG,
+    JAVA_ARGS_CONFIG
   }
 } = loadVariables();
 

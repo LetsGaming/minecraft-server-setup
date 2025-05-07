@@ -30,6 +30,7 @@ set_environment
 parse_args "$@"
 set_flags_from_defaults "$@"
 prompt_for_flags
-run_setup_steps
+run_modpack_setup
 run_optional_setup
+run_modpack_cleanup
 maybe_start_server

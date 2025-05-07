@@ -1,3 +1,4 @@
+const fs = require("fs");
 const axios = require("axios");
 const path = require("path");
 const { mod_ids, api_key } = require("./curseforge_variables.json");
@@ -14,9 +15,15 @@ const {
 // === Argument Parsing ===
 const args = process.argv.slice(2);
 const downloadDirArg = args.find((arg) => arg.startsWith("--downloadDir="));
+const modIdsFileArg = args.find((arg) => arg.startsWith("--modIdsFile="));
+
 const customDownloadDir = downloadDirArg
   ? path.resolve(downloadDirArg.split("=")[1])
   : path.join(__dirname, "temp", "mods");
+
+const modIdsFilePath = modIdsFileArg
+  ? path.resolve(modIdsFileArg.split("=")[1])
+  : null;
 
 // === Setup ===
 if (!api_key || api_key === "none") {
@@ -26,13 +33,44 @@ if (!api_key || api_key === "none") {
   process.exit(0);
 }
 
-if (!Array.isArray(mod_ids) || mod_ids.length === 0) {
-  console.error("No mod_ids provided in curseforge_variables.json.");
-  process.exit(0);
+// === Read mod IDs from file if provided ===
+let validModIDs = [];
+
+if (modIdsFilePath && fs.existsSync(modIdsFilePath)) {
+  try {
+    const raw = fs.readFileSync(modIdsFilePath, "utf8");
+    validModIDs = raw
+      .split(/\r?\n|,/)
+      .map((id) => id.trim())
+      .filter((id) => /^\d+$/.test(id)); // keep only numeric IDs
+
+    if (validModIDs.length > 0) {
+      console.log(
+        `Using mod IDs from ${modIdsFilePath}: ${validModIDs.join(", ")}`
+      );
+    }
+  } catch (err) {
+    console.error(`Error reading mod ID file: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+// === Fallback to JSON if no IDs loaded ===
+if (validModIDs.length === 0) {
+  if (Array.isArray(mod_ids) && mod_ids.length > 0) {
+    validModIDs = mod_ids.filter((id) => id && id !== "none");
+    console.log(
+      `Using mod IDs from curseforge_variables.json: ${validModIDs.join(", ")}`
+    );
+  } else {
+    console.error(
+      "No mod IDs provided via --modIdsFile or curseforge_variables.json."
+    );
+    process.exit(1);
+  }
 }
 
 const curseforgeAPIKey = api_key;
-const validModIDs = mod_ids.filter((id) => id && id !== "none");
 createDownloadDir(customDownloadDir);
 
 const targetMinecraftVersion = getMinecraftVersion();
@@ -72,19 +110,35 @@ async function downloadModAndDependencies(modID) {
       return;
     }
 
-    const compatibleFile = files.find(
-      (file) =>
-        file.gameVersions.includes(targetMinecraftVersion) &&
-        file.gameVersions.some(
-          (v) => v.toLowerCase() === targetModLoader.toLowerCase()
-        )
+    const isCompatible = (file) =>
+      file.gameVersions.includes(targetMinecraftVersion) &&
+      file.gameVersions.some(
+        (v) => v.toLowerCase() === targetModLoader.toLowerCase()
+      );
+
+    // Prefer release, fallback to newest compatible beta/alpha
+    let compatibleFile = files.find(
+      (file) => isCompatible(file) && file.releaseType === 1
     );
 
     if (!compatibleFile) {
-      console.warn(
-        `No compatible file for mod ID ${modID} with Minecraft ${targetMinecraftVersion} and ${targetModLoader}`
-      );
-      return;
+      const compatibleAlternatives = files
+        .filter(isCompatible)
+        .sort((a, b) => new Date(b.fileDate) - new Date(a.fileDate)); // newest first
+
+      if (compatibleAlternatives.length > 0) {
+        compatibleFile = compatibleAlternatives[0];
+        console.warn(
+          `Warning: No release found for mod ID ${modID}. Using ${
+            ["alpha", "beta", "release"][compatibleFile.releaseType - 1]
+          } (${compatibleFile.fileDate}) instead.`
+        );
+      } else {
+        console.warn(
+          `No compatible file for mod ID ${modID} with Minecraft ${targetMinecraftVersion} and ${targetModLoader}`
+        );
+        return;
+      }
     }
 
     const { id: fileID } = compatibleFile;

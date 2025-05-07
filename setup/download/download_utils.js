@@ -139,14 +139,22 @@ function saveDownloadedVersion(
 
 function getMinecraftVersion() {
   const downloadedVersions = getDownloadedVersions();
-  if (!downloadedVersions) return null;
+  if (!downloadedVersions) {
+    // No Modpack downloaded
+    const { JAVA } = require("../../variables.json")
+    return JAVA.SERVER.VANILLA.VERSION || null;
+  }
 
   return downloadedVersions?.gameVersion || null;
 }
 
 function getModLoader() {
   const downloadedVersions = getDownloadedVersions();
-  if (!downloadedVersions) return null;
+  if (!downloadedVersions) {
+    // No Modpack downloaded
+    const { JAVA } = require("../../variables.json")
+    return JAVA.SERVER.VANILLA.USE_FABRIC ? "fabric" : null;
+  }
 
   return downloadedVersions?.modLoader || null;
 }

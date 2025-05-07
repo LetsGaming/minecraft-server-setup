@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-run_setup_steps() {
+run_modpack_setup() {
   log "Downloading required packages..."
   run_or_echo "bash \"$SCRIPT_DIR/setup/download/download_packages.sh\""
 
@@ -11,11 +11,56 @@ run_setup_steps() {
   log "Downloading additional mods..."
   run_or_echo "node \"$SCRIPT_DIR/setup/download/download_mods.js\""
 
-  log "Creating server directory structure..."
-  run_or_echo "node \"$SCRIPT_DIR/setup/structure/create_directories.js\""
+  run_setup_steps
 
   log "Unpacking modpack..."
   run_or_echo "node \"$SCRIPT_DIR/setup/structure/unpack_modpack.js\""
+}
+
+run_modpack_cleanup() {
+  log "Cleaning up temporary files..."
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/setup/download/temp\""
+  run_cleanup
+}
+
+run_vanilla_cleanup() {
+  log "Cleaning up temporary files..."
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/vanilla/temp\""
+  run_cleanup
+}
+
+run_cleanup() {
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/downloaded_versions.json\""
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/curseforge.txt\""
+}
+
+run_vanilla_setup() {
+  log "Downloading required packages..."
+  run_or_echo "bash \"$SCRIPT_DIR/setup/download/download_packages.sh\""
+
+  log "Downloading Jabba..."
+  run_or_echo "bash \"$SCRIPT_DIR/vanilla/download/install_jabba.sh\""
+
+  log "Installing Java..."
+  run_or_echo "node \"$SCRIPT_DIR/vanilla/download/install_java.js\""
+
+  log "Downloading server jar..."
+  run_or_echo "node \"$SCRIPT_DIR/vanilla/download/download_server.js\""
+
+  run_setup_steps
+
+  log "Setting additional variables..."
+  run_or_echo "node \"$SCRIPT_DIR/vanilla/variables/set_vanilla_server_variables.js\""
+
+  log "Moving server files..."
+  run_or_echo "node \"$SCRIPT_DIR/setup/structure/move_files.js\""
+}
+
+run_setup_steps() {
+  log "Creating server directory structure..."
+  run_or_echo "node \"$SCRIPT_DIR/setup/structure/create_directories.js\""
 
   log "Setting variables..."
   run_or_echo "node \"$SCRIPT_DIR/setup/variables/set_common_variables.js\""
@@ -43,12 +88,6 @@ run_optional_setup() {
   else
     warn "Skipping backup job creation (--no-backup)."
   fi
-
-  log "Cleaning up temporary files..."
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/setup/download/temp\""
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/downloaded_versions.json\""
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/curseforge.txt\""
 
   if [ "$EULA" = true ]; then
     log "EULA accepted. Applying configuration..."
