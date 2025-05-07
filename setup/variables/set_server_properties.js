@@ -4,7 +4,7 @@ const loadVariables = require("../common/loadVariables");
 
 const {
   TARGET_DIR_NAME,
-  MODPACK_NAME,
+  INSTANCE_NAME,
   JAVA: {
     SERVER: {
       MAX_PLAYERS,
@@ -19,7 +19,7 @@ const {
   }
 } = loadVariables();
 
-const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, MODPACK_NAME);
+const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, INSTANCE_NAME);
 const serverPropsPath = path.join(MODPACK_DIR, "server.properties");
 
 function updateServerProperties() {

@@ -23,6 +23,6 @@ save_and_wait
 send_message "Server §6is restarting§r now!"
 
 # Restart the server
-sudo systemctl restart "$MODPACK_NAME".service
+sudo systemctl restart "$INSTANCE_NAME".service
 
 echo "Server restart initiated."

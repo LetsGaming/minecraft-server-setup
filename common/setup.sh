@@ -74,7 +74,7 @@ maybe_start_server() {
         echo
         warn "Server started but EULA not yet accepted."
         echo "Attach to the server with:"
-        echo "  screen -r MODPACK_NAME"
+        echo "  screen -r INSTANCE_NAME"
         echo "Then type 'I agree' and press Enter."
       fi
     else
@@ -84,10 +84,10 @@ maybe_start_server() {
   else
     log "Server will not be started (--no-start)."
     echo "You can start it manually with:"
-    echo "  bash $HOME/TARGET_DIR/scripts/MODPACK_NAME/start.sh"
+    echo "  bash $HOME/TARGET_DIR/scripts/INSTANCE_NAME/start.sh"
     if [ "$NO_SERVICE" = false ]; then
       echo "Or use the systemd service with:"
-      echo "  sudo systemctl start MODPACK_NAME.service"
+      echo "  sudo systemctl start INSTANCE_NAME.service"
     fi
   fi
 }

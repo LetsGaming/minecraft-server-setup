@@ -3,7 +3,7 @@ const path = require("path");
 const unzipper = require("unzipper");
 const loadVariables = require("../common/loadVariables");
 
-const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
+const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 // Ensure required variables are defined
 const SCRIPT_DIR = process.env.SCRIPT_DIR;
 
@@ -19,7 +19,7 @@ const mods_source = path.join(TEMP_DIR, "mods");
 const MODPACK_DIR = path.join(
   process.env.MAIN_DIR,
   TARGET_DIR_NAME,
-  MODPACK_NAME
+  INSTANCE_NAME
 );
 const MODS_DIR = path.join(MODPACK_DIR, "mods");
 

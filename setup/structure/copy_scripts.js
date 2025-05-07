@@ -3,11 +3,11 @@ const path = require('path');
 const loadVariables = require('../common/loadVariables');
 
 // Load the existing variables
-const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
+const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
 // Zielverzeichnis für die Scripts (z. B. /home/minecraft/instances/<modpack>/scripts)
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
-const SCRIPTS_DIR = path.join(BASE_DIR, 'scripts', MODPACK_NAME);
+const SCRIPTS_DIR = path.join(BASE_DIR, 'scripts', INSTANCE_NAME);
 
 // Quelle der Scripts liegt im Projekt-Root unter /scripts
 const sourceDir = path.resolve(__dirname, '..', "..", 'scripts');
@@ -31,4 +31,4 @@ fs.readdirSync(sourceDir).forEach(file => {
   }
 });
 
-console.log('Scripts copied successfully and MODPACK_NAME written to common/variables.txt.');
+console.log('Scripts copied successfully and INSTANCE_NAME written to common/variables.txt.');

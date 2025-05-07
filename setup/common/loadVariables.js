@@ -11,7 +11,7 @@ function loadVariables() {
 
   // Validate the root structure and required fields
   const requiredVars = [
-    "MODPACK_NAME",
+    "INSTANCE_NAME",
     "TARGET_DIR_NAME",
     "BACKUPS",
     "JAVA"

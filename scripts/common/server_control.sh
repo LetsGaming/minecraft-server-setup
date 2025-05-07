@@ -13,7 +13,7 @@ LOG_FILE="$SERVER_PATH/logs/latest.log"
 
 session_running() {
     # Check if the screen session is running
-    if screen -list | grep -q "$MODPACK_NAME"; then
+    if screen -list | grep -q "$INSTANCE_NAME"; then
         return 0  # Session is running
     else
         return 1  # Session is not running
@@ -33,17 +33,17 @@ read_log() {
 send_command() {
     # Check if the screen session is running
     if ! session_running; then
-        echo "Screen session '$MODPACK_NAME' is not running. Cannot send command."
+        echo "Screen session '$INSTANCE_NAME' is not running. Cannot send command."
         return 1
     fi
 
     command=$1
     if [ "$(id -u)" -eq 0 ]; then
         # If running as root (sudo), use sudo -u to run the command as the specified user
-        sudo -u $USER screen -S $MODPACK_NAME -p 0 -X stuff "$command$(printf \\r)"
+        sudo -u $USER screen -S $INSTANCE_NAME -p 0 -X stuff "$command$(printf \\r)"
     else
         # If not running as root, just run the command normally
-        screen -S $MODPACK_NAME -p 0 -X stuff "$command$(printf \\r)"
+        screen -S $INSTANCE_NAME -p 0 -X stuff "$command$(printf \\r)"
     fi
 }
 
@@ -65,7 +65,7 @@ enable_auto_save() {
 
 get_player_list() {
     if ! session_running; then
-        echo "Screen session '$MODPACK_NAME' is not running. Cannot get player list."
+        echo "Screen session '$INSTANCE_NAME' is not running. Cannot get player list."
         return 1
     fi
 
@@ -94,7 +94,7 @@ get_player_count() {
 # Function to check if the server has completed the save-all process by monitoring the log file
 wait_for_save_completion() {
     if ! session_running; then
-        echo "Screen session '$MODPACK_NAME' is not running. Cannot wait for save completion."
+        echo "Screen session '$INSTANCE_NAME' is not running. Cannot wait for save completion."
         return 1
     fi
     

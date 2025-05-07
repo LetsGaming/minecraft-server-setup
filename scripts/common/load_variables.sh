@@ -18,7 +18,7 @@ source "$VARS_FILE"
 # Required variables
 REQUIRED_VARS=(
     USER
-    MODPACK_NAME
+    INSTANCE_NAME
     SERVER_PATH
     COMPRESSION_LEVEL
     MAX_STORAGE_GB
@@ -39,7 +39,7 @@ done
 
 # Export them
 export USER
-export MODPACK_NAME
+export INSTANCE_NAME
 export SERVER_PATH
 export COMPRESSION_LEVEL
 export DO_GENERATION_BACKUPS

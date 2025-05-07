@@ -2,24 +2,24 @@ const path = require("path");
 const loadVariables = require("../../common/loadVariables");
 const { exec } = require("child_process");
 
-const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
+const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
-const INTERFACE_DIR = path.join(BASE_DIR, "scripts", MODPACK_NAME, "interface");
+const INTERFACE_DIR = path.join(BASE_DIR, "scripts", INSTANCE_NAME, "interface");
 
 const startScript = path.join(INTERFACE_DIR, "app.js");
 
-const serviceName = `${MODPACK_NAME}-manager.service`;
+const serviceName = `${INSTANCE_NAME}-manager.service`;
 const serviceFilePath = `/etc/systemd/system/${serviceName}`;
 
 // Get the user executing the script
 const currentUser = process.env.USER;
 
-const SCREEN_NAME = `${MODPACK_NAME}-manager`;
+const SCREEN_NAME = `${INSTANCE_NAME}-manager`;
 
 const serviceContent = `
 [Unit]
-Description=${MODPACK_NAME} Server Manager
+Description=${INSTANCE_NAME} Server Manager
 After=network.target
 
 [Service]

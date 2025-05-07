@@ -23,6 +23,6 @@ save_and_wait
 send_message "Server §6is shutting down§r now!"
 
 # Stop the server
-sudo systemctl stop "$MODPACK_NAME".service
+sudo systemctl stop "$INSTANCE_NAME".service
 
 echo "Server stopped."

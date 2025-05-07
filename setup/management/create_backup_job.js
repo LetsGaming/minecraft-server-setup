@@ -6,9 +6,9 @@ const loadVariables = require("../common/loadVariables");
 try {
   // Load variables from JSON
   const vars = loadVariables();
-  const { TARGET_DIR_NAME, MODPACK_NAME } = vars;
+  const { TARGET_DIR_NAME, INSTANCE_NAME } = vars;
   const BASE_DIR = path.join(process.env.HOME, TARGET_DIR_NAME);
-  const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", MODPACK_NAME);
+  const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", INSTANCE_NAME);
 
   // Define backup paths
   const backupDir = path.join(SCRIPTS_DIR, "backup");

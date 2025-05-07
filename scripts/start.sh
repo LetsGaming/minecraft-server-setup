@@ -9,9 +9,9 @@ fi
 
 source "$(dirname "$0")/common/load_variables.sh"
 
-echo "Starting $MODPACK_NAME server..."
+echo "Starting $INSTANCE_NAME server..."
 
-sudo systemctl enable "$MODPACK_NAME".service
-sudo systemctl start "$MODPACK_NAME".service
+sudo systemctl enable "$INSTANCE_NAME".service
+sudo systemctl start "$INSTANCE_NAME".service
 
-echo "$MODPACK_NAME server started successfully."
+echo "$INSTANCE_NAME server started successfully."

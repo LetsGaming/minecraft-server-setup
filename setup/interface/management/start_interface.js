@@ -2,9 +2,9 @@ const { exec } = require("child_process");
 const { promisify } = require("util");
 
 const loadVariables = require("../../common/loadVariables");
-const { MODPACK_NAME } = loadVariables();
+const { INSTANCE_NAME } = loadVariables();
 
-const SERVICE_NAME = `${MODPACK_NAME}-manager.service`;
+const SERVICE_NAME = `${INSTANCE_NAME}-manager.service`;
 const execAsync = promisify(exec);
 
 async function enableAndStartService() {

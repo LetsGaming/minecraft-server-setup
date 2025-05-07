@@ -4,13 +4,13 @@ const loadVariables = require("../common/loadVariables");
 
 const {
   TARGET_DIR_NAME,
-  MODPACK_NAME,
+  INSTANCE_NAME,
   JAVA: {
     JAVA_ARGS_CONFIG,
   }
 } = loadVariables();
 
-const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, MODPACK_NAME);
+const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, INSTANCE_NAME);
 const variablesTxtPath = path.join(MODPACK_DIR, "variables.txt");
 
 function buildJavaArgs(config) {

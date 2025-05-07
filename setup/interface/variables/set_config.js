@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const loadVariables = require("../../common/loadVariables");
 
-const { MODPACK_NAME, TARGET_DIR_NAME } = loadVariables();
+const { INSTANCE_NAME, TARGET_DIR_NAME } = loadVariables();
 const currentUser = process.env.USER;
 const INTERFACE_DIR = process.env.INTERFACE_SETUP_SCRIPT_DIR;
 const MANAGER_CONFIG = path.join(INTERFACE_DIR, "minecraft-server-manager", "src", "config", "config.json");
@@ -15,8 +15,8 @@ if (!fs.existsSync(MANAGER_CONFIG)) {
 const manager_config = JSON.parse(fs.readFileSync(MANAGER_CONFIG, "utf-8"));
 
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
-const SCRIPT_DIR = path.join(BASE_DIR, "scripts", MODPACK_NAME);
-const SERVER_PATH = path.join(BASE_DIR, MODPACK_NAME);
+const SCRIPT_DIR = path.join(BASE_DIR, "scripts", INSTANCE_NAME);
+const SERVER_PATH = path.join(BASE_DIR, INSTANCE_NAME);
 
 // Replace values in config if they match placeholders
 let changed = false;
@@ -26,8 +26,8 @@ if (manager_config.USER === "your_username") {
   changed = true;
 }
 
-if (manager_config.MODPACK_NAME === "your_modpack_name") {
-  manager_config.MODPACK_NAME = MODPACK_NAME;
+if (manager_config.INSTANCE_NAME === "your_INSTANCE_NAME") {
+  manager_config.INSTANCE_NAME = INSTANCE_NAME;
   changed = true;
 }
 

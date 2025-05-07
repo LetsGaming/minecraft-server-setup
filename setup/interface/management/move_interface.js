@@ -4,7 +4,7 @@ const { exec } = require("child_process");
 const { promisify } = require("util");
 
 const loadVariables = require("../../common/loadVariables");
-const { TARGET_DIR_NAME, MODPACK_NAME } = loadVariables();
+const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
 const CURRENT_INTERFACE_DIR = path.join(
@@ -14,7 +14,7 @@ const CURRENT_INTERFACE_DIR = path.join(
 const FINAL_INTERFACE_DIR = path.join(
   BASE_DIR,
   "scripts",
-  MODPACK_NAME,
+  INSTANCE_NAME,
   "interface"
 );
 
