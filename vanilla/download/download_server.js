@@ -58,6 +58,7 @@ async function installMinecraftServer() {
       );
 
       console.log(`\nStarting mod download from ${modsFilePath}...`);
+      console.log(`\nNot all mods are guaranteed to be available for ${versionId}.`);
       await new Promise((resolve, reject) => {
         execFile(
           "node",
