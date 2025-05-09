@@ -57,8 +57,8 @@ async function installMinecraftServer() {
         "download_mods.js"
       );
 
-      console.log(`\nStarting mod download from ${modsFilePath}...`);
-      console.log(`\nNot all mods are guaranteed to be available for ${versionId}.`);
+      console.log(`Starting mod download from ${modsFilePath}...`);
+      console.log(`Not all mods are guaranteed to be available for ${versionId}.`);
       await new Promise((resolve, reject) => {
         execFile(
           "node",
@@ -80,6 +80,7 @@ async function installMinecraftServer() {
 }
 
 async function installVanillaServer(versionId, metadataUrl) {
+  console.log(`Installing vanilla Minecraft server ${versionId}...`);
   const versionMetaResp = await axios.get(metadataUrl);
   const serverUrl = versionMetaResp.data.downloads.server?.url;
 
@@ -104,6 +105,7 @@ async function installVanillaServer(versionId, metadataUrl) {
 }
 
 async function installFabricServer(versionId) {
+  console.log(`Installing Fabric server ${versionId}...`);
   const installerUrl = "https://meta.fabricmc.net/v2/versions/installer";
   const installerResp = await axios.get(installerUrl);
   const installer = installerResp.data.find((entry) => entry.stable);
