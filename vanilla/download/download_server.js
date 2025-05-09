@@ -40,7 +40,7 @@ async function installMinecraftServer() {
       await new Promise((resolve, reject) => {
         execFile(
           "node",
-          [downloadModsPath, `--modIdsFile=${modsFilePath}`, `--downloadDir=${outputDir}`],
+          [downloadModsPath, `--modIdsFile=${modsFilePath}`, `--downloadDir=${path.join(outputDir, "mods")}`],
           (error, stdout, stderr) => {
             if (stdout) process.stdout.write(stdout);
             if (stderr) process.stderr.write(stderr);
