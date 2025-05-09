@@ -156,6 +156,4 @@ async function installFabricServer(versionId) {
   });
 }
 
-module.exports = {
-  installMinecraftServer,
-};
+installMinecraftServer()

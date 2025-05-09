@@ -17,25 +17,6 @@ run_modpack_setup() {
   run_or_echo "node \"$SCRIPT_DIR/setup/structure/unpack_modpack.js\""
 }
 
-run_modpack_cleanup() {
-  log "Cleaning up temporary files..."
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/setup/download/temp\""
-  run_cleanup
-}
-
-run_vanilla_cleanup() {
-  log "Cleaning up temporary files..."
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/vanilla/temp\""
-  run_cleanup
-}
-
-run_cleanup() {
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/downloaded_versions.json\""
-  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/curseforge.txt\""
-}
-
 run_vanilla_setup() {
   log "Downloading required packages..."
   run_or_echo "bash \"$SCRIPT_DIR/setup/download/download_packages.sh\""
@@ -102,6 +83,25 @@ run_optional_setup() {
   else
     warn "Skipping web interface setup (--interface)."
   fi
+}
+
+run_modpack_cleanup() {
+  log "Cleaning up temporary files..."
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/setup/download/temp\""
+  run_cleanup
+}
+
+run_vanilla_cleanup() {
+  log "Cleaning up temporary files..."
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/vanilla/temp\""
+  run_cleanup
+}
+
+run_cleanup() {
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/downloaded_versions.json\""
+  run_or_echo "sudo rm -rf \"$SCRIPT_DIR/scripts/common/curseforge.txt\""
 }
 
 maybe_start_server() {

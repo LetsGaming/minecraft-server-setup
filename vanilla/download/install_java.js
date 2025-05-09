@@ -1,10 +1,14 @@
 const { execSync } = require("child_process");
+const JAVA = require("../../variables.json").JAVA;
 
 function parseMinecraftVersion(version) {
   return version.split(".").map((v) => parseInt(v, 10));
 }
 
 function getRequiredJavaVersion(mcVersion) {
+  if(mcVersion === "latest") {
+    return 21; // Default to the latest Java version for the latest Minecraft version
+  }
   const [major, minor, patch = 0] = parseMinecraftVersion(mcVersion);
 
   if (major === 1 && minor === 20 && patch >= 5) return 21;
@@ -68,7 +72,8 @@ function installWithJabba(requiredVersion) {
   }
 }
 
-function ensureJavaVersion(minecraftVersion) {
+function ensureJavaVersion() {
+  const minecraftVersion = JAVA.SERVER.VANILLA.VERSION;
   const requiredJava = getRequiredJavaVersion(minecraftVersion);
   const currentJava = getCurrentJavaVersion();
 
@@ -86,4 +91,4 @@ function ensureJavaVersion(minecraftVersion) {
   }
 }
 
-module.exports = { ensureJavaVersion };
+ensureJavaVersion()
