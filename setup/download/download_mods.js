@@ -1,7 +1,11 @@
 const fs = require("fs");
-const axios = require("axios");
 const path = require("path");
-const { mod_ids, api_key } = require("./curseforge_variables.json");
+const axios = require("axios");
+const {
+  mod_ids,
+  api_key: curseforgeAPIKey,
+} = require("./curseforge_variables.json");
+
 const {
   createDownloadDir,
   formatBytes,
@@ -12,175 +16,186 @@ const {
   getModLoader,
 } = require("./download_utils");
 
-// === Argument Parsing ===
+// ==== Config & Argument Parsing ====
 const args = process.argv.slice(2);
-const downloadDirArg = args.find((arg) => arg.startsWith("--downloadDir="));
-const modIdsFileArg = args.find((arg) => arg.startsWith("--modIdsFile="));
+const customDownloadDir = getDownloadDirFromArgs(args);
+const modIds = getModIdsFromArgs(args) || getModIdsFromJson();
 
-const customDownloadDir = downloadDirArg
-  ? path.resolve(downloadDirArg.split("=")[1])
-  : path.join(__dirname, "temp", "mods");
-
-const modIdsFilePath = modIdsFileArg
-  ? path.resolve(modIdsFileArg.split("=")[1])
-  : null;
-
-// === Setup ===
-if (!api_key || api_key === "none") {
-  console.error(
-    "Error: api_key is missing/invalid in curseforge_variables.json."
-  );
-  process.exit(0);
-}
-
-// === Read mod IDs from file if provided ===
-let validModIDs = [];
-
-if (modIdsFilePath && fs.existsSync(modIdsFilePath)) {
-  try {
-    const raw = fs.readFileSync(modIdsFilePath, "utf8");
-    validModIDs = raw
-      .split(/\r?\n|,/)
-      .map((id) => id.trim())
-      .filter((id) => /^\d+$/.test(id)); // keep only numeric IDs
-
-    if (validModIDs.length > 0) {
-      console.log(
-        `Using mod IDs from ${modIdsFilePath}: ${validModIDs.join(", ")}`
-      );
-    }
-  } catch (err) {
-    console.error(`Error reading mod ID file: ${err.message}`);
-    process.exit(1);
-  }
-}
-
-// === Fallback to JSON if no IDs loaded ===
-if (validModIDs.length === 0) {
-  if (Array.isArray(mod_ids) && mod_ids.length > 0) {
-    validModIDs = mod_ids.filter((id) => id && id !== "none");
-    console.log(
-      `Using mod IDs from curseforge_variables.json: ${validModIDs.join(", ")}`
-    );
-  } else {
-    console.error(
-      "No mod IDs provided via --modIdsFile or curseforge_variables.json."
-    );
-    process.exit(1);
-  }
-}
-
-const curseforgeAPIKey = api_key;
+validateSetup(curseforgeAPIKey, modIds);
 createDownloadDir(customDownloadDir);
 
-const targetMinecraftVersion = await getMinecraftVersion();
-const targetModLoader = getModLoader();
+let processedMods = new Set();
 
-if (!targetMinecraftVersion || !targetModLoader) {
-  console.error(
-    "Missing Minecraft version or mod loader in downloaded_versions.json."
-  );
-  process.exit(1);
-}
-
-const processedMods = new Set();
-
-// === Main Loop ===
+// ==== Main Entrypoint ====
 (async () => {
-  for (const modID of validModIDs) {
+  const minecraftVersion = await getMinecraftVersion();
+  const modLoader = getModLoader();
+
+  if (!minecraftVersion || !modLoader) {
+    console.error(
+      "Missing Minecraft version or mod loader in downloaded_versions.json."
+    );
+    process.exit(1);
+  }
+
+  for (const modID of modIds) {
     console.log(`\nProcessing mod ID: ${modID}`);
-    await downloadModAndDependencies(modID);
+    await downloadModAndDependencies(modID, minecraftVersion, modLoader);
   }
 })();
 
-// === Core Function ===
-async function downloadModAndDependencies(modID) {
+// ==== Argument Helpers ====
+
+function getDownloadDirFromArgs(args) {
+  const arg = args.find((a) => a.startsWith("--downloadDir="));
+  return arg
+    ? path.resolve(arg.split("=")[1])
+    : path.join(__dirname, "temp", "mods");
+}
+
+function getModIdsFromArgs(args) {
+  const fileArg = args.find((a) => a.startsWith("--modIdsFile="));
+  if (!fileArg) return null;
+
+  const filePath = path.resolve(fileArg.split("=")[1]);
+  if (!fs.existsSync(filePath)) {
+    console.error(`Mod IDs file not found: ${filePath}`);
+    process.exit(1);
+  }
+
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    const ids = content
+      .split(/\r?\n|,/)
+      .map((id) => id.trim())
+      .filter((id) => /^\d+$/.test(id));
+    if (ids.length) {
+      console.log(`Using mod IDs from ${filePath}: ${ids.join(", ")}`);
+      return ids;
+    }
+  } catch (err) {
+    console.error(`Failed to read mod IDs file: ${err.message}`);
+    process.exit(1);
+  }
+
+  return null;
+}
+
+function getModIdsFromJson() {
+  if (Array.isArray(mod_ids) && mod_ids.length > 0) {
+    const ids = mod_ids.filter((id) => id && id !== "none");
+    console.log(
+      `Using mod IDs from curseforge_variables.json: ${ids.join(", ")}`
+    );
+    return ids;
+  }
+
+  console.error("No mod IDs provided via args or JSON.");
+  process.exit(1);
+}
+
+// ==== Validation ====
+
+function validateSetup(apiKey, ids) {
+  if (!apiKey || apiKey === "none") {
+    console.error("Missing or invalid API key in curseforge_variables.json.");
+    process.exit(1);
+  }
+
+  if (!Array.isArray(ids) || ids.length === 0) {
+    console.error("No valid mod IDs found.");
+    process.exit(1);
+  }
+}
+
+// ==== Core Download Logic ====
+
+async function downloadModAndDependencies(modID, mcVersion, modLoader) {
   if (processedMods.has(modID)) return;
   processedMods.add(modID);
 
   try {
-    const filesResp = await axios.get(
-      `https://api.curseforge.com/v1/mods/${modID}/files`,
-      { headers: { "x-api-key": curseforgeAPIKey } }
-    );
-
-    const files = filesResp.data.data;
-    if (!Array.isArray(files) || files.length === 0) {
-      console.error(`No files found for mod ID ${modID}`);
-      return;
-    }
-
-    const isCompatible = (file) =>
-      file.gameVersions.includes(targetMinecraftVersion) &&
-      file.gameVersions.some(
-        (v) => v.toLowerCase() === targetModLoader.toLowerCase()
-      );
-
-    // Prefer release, fallback to newest compatible beta/alpha
-    let compatibleFile = files.find(
-      (file) => isCompatible(file) && file.releaseType === 1
-    );
+    const files = await fetchModFiles(modID);
+    const compatibleFile = selectCompatibleFile(files, mcVersion, modLoader);
 
     if (!compatibleFile) {
-      const compatibleAlternatives = files
-        .filter(isCompatible)
-        .sort((a, b) => new Date(b.fileDate) - new Date(a.fileDate)); // newest first
-
-      if (compatibleAlternatives.length > 0) {
-        compatibleFile = compatibleAlternatives[0];
-        console.warn(
-          `Warning: No release found for mod ID ${modID}. Using ${
-            ["alpha", "beta", "release"][compatibleFile.releaseType - 1]
-          } (${compatibleFile.fileDate}) instead.`
-        );
-      } else {
-        console.warn(
-          `No compatible file for mod ID ${modID} with Minecraft ${targetMinecraftVersion} and ${targetModLoader}`
-        );
-        return;
-      }
-    }
-
-    const { id: fileID } = compatibleFile;
-
-    if (isAlreadyDownloaded("mods", modID, fileID)) {
-      console.log(
-        `Mod ID ${modID} (file ${fileID}) already downloaded. Skipping.`
+      console.warn(
+        `No compatible file for mod ID ${modID} (MC ${mcVersion}, ${modLoader})`
       );
       return;
     }
 
-    const fileDetailsResp = await axios.get(
-      `https://api.curseforge.com/v1/mods/${modID}/files/${fileID}`,
-      { headers: { "x-api-key": curseforgeAPIKey } }
-    );
-    const fileData = fileDetailsResp.data.data;
-
-    const { downloadUrl, fileName, fileLength, dependencies } = fileData;
-    if (!downloadUrl) {
-      console.error(`No download URL for mod ID ${modID}`);
+    const fileID = compatibleFile.id;
+    if (isAlreadyDownloaded("mods", modID, fileID)) {
+      console.log(`Mod ID ${modID} (file ${fileID}) already downloaded. Skipping.`);
       return;
     }
 
-    const outputPath = path.join(customDownloadDir, fileName);
-    console.log(
-      `Downloading ${fileName} (${formatBytes(
-        fileLength
-      )}) to ${customDownloadDir}...`
-    );
-    await downloadFile(downloadUrl, outputPath, fileLength);
-    saveDownloadedVersion("mods", modID, fileID);
+    const fileDetails = await fetchFileDetails(modID, fileID);
+    await downloadAndSaveFile(fileDetails, modID, fileID);
 
-    if (Array.isArray(dependencies)) {
-      for (const dep of dependencies) {
+    // Recursively download dependencies
+    if (Array.isArray(fileDetails.dependencies)) {
+      for (const dep of fileDetails.dependencies) {
         console.log(`→ Found dependency: ${dep.modId}`);
-        await downloadModAndDependencies(dep.modId);
+        await downloadModAndDependencies(dep.modId, mcVersion, modLoader);
       }
     }
   } catch (err) {
-    console.error(
-      `Error processing mod ID ${modID}:`,
-      err.response?.data || err.message
-    );
+    console.error(`Error processing mod ID ${modID}:`, err.response?.data || err.message);
   }
+}
+
+async function fetchModFiles(modID) {
+  const response = await axios.get(`https://api.curseforge.com/v1/mods/${modID}/files`, {
+    headers: { "x-api-key": curseforgeAPIKey },
+  });
+  return response.data.data || [];
+}
+
+function selectCompatibleFile(files, mcVersion, modLoader) {
+  const isCompatible = (file) =>
+    file.gameVersions.includes(mcVersion) &&
+    file.gameVersions.some((v) => v.toLowerCase() === modLoader.toLowerCase());
+
+  let releaseFile = files.find((file) => isCompatible(file) && file.releaseType === 1);
+  if (releaseFile) return releaseFile;
+
+  const fallback = files
+    .filter(isCompatible)
+    .sort((a, b) => new Date(b.fileDate) - new Date(a.fileDate));
+
+  if (fallback.length) {
+    const alt = fallback[0];
+    console.warn(
+      `No release found for mod ID ${alt.modId}. Using ${["alpha", "beta", "release"][alt.releaseType - 1]} (${alt.fileDate}) instead.`
+    );
+    return alt;
+  }
+
+  return null;
+}
+
+async function fetchFileDetails(modID, fileID) {
+  const resp = await axios.get(
+    `https://api.curseforge.com/v1/mods/${modID}/files/${fileID}`,
+    { headers: { "x-api-key": curseforgeAPIKey } }
+  );
+  return resp.data.data;
+}
+
+async function downloadAndSaveFile(fileData, modID, fileID) {
+  const { downloadUrl, fileName, fileLength } = fileData;
+
+  if (!downloadUrl) {
+    console.error(`No download URL for mod ID ${modID}`);
+    return;
+  }
+
+  const outputPath = path.join(customDownloadDir, fileName);
+  console.log(
+    `Downloading ${fileName} (${formatBytes(fileLength)}) to ${customDownloadDir}...`
+  );
+  await downloadFile(downloadUrl, outputPath, fileLength);
+  saveDownloadedVersion("mods", modID, fileID);
 }
