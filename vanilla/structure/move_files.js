@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 
-const { loadVariables } = require("../../setup/common/loadVariables");
+const loadVariables = require("../../setup/common/loadVariables.js");
 const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
 const tmpDir = path.join(process.env.SCRIPT_DIR, "vanilla", "tmp");
