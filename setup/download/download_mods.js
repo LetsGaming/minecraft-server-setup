@@ -73,7 +73,7 @@ if (validModIDs.length === 0) {
 const curseforgeAPIKey = api_key;
 createDownloadDir(customDownloadDir);
 
-const targetMinecraftVersion = getMinecraftVersion();
+const targetMinecraftVersion = await getMinecraftVersion();
 const targetModLoader = getModLoader();
 
 if (!targetMinecraftVersion || !targetModLoader) {
