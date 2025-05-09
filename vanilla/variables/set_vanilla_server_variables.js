@@ -5,10 +5,10 @@ const loadVariables = require("../../setup/common/loadVariables");
 const {
   TARGET_DIR_NAME,
   INSTANCE_NAME,
-  JAVA: {
-    SERVER: { VANILLA },
-  },
+  JAVA
 } = loadVariables();
+
+const VANILLA = JAVA.SERVER.VANILLA.USE_FABRIC ? "true" : "false";
 
 const MODPACK_DIR = path.join(
   process.env.MAIN_DIR,
