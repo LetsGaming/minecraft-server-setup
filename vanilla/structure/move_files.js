@@ -36,6 +36,7 @@ function copyStartScript(srcDir, destDir) {
     console.log(`Copied start.sh from ${startScriptPath} to ${destPath}`);
   } else {
     console.error("Start script not found in source directory.");
+    process.exit(1);
   }
 }
 
@@ -46,4 +47,4 @@ if (!fs.existsSync(INSTANCE_DIR)) {
 
 // Move tmp -> instance
 moveContentsSync(tmpDir, INSTANCE_DIR);
-copyStartScript(tmpDir, INSTANCE_DIR);
+copyStartScript(path.join(process.env.SCRIPT_DIR, "vanilla"), INSTANCE_DIR);
