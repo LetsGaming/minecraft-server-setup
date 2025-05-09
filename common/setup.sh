@@ -55,7 +55,7 @@ run_vanilla_setup() {
   run_or_echo "node \"$SCRIPT_DIR/vanilla/variables/set_vanilla_server_variables.js\""
 
   log "Moving server files..."
-  run_or_echo "node \"$SCRIPT_DIR/setup/structure/move_files.js\""
+  run_or_echo "node \"$SCRIPT_DIR/vanilla/structure/move_files.js\""
 }
 
 run_setup_steps() {
