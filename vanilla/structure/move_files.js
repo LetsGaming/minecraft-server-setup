@@ -27,14 +27,15 @@ function moveContentsSync(srcDir, destDir) {
   }
 }
 
-function moveStartScript(srcDir, destDir) {
+function copyStartScript(srcDir, destDir) {
   const startScriptPath = path.join(srcDir, "start.sh");
   const destPath = path.join(destDir, "start.sh");
 
   if (fs.existsSync(startScriptPath)) {
-    fs.renameSync(startScriptPath, destPath);
+    fs.copyFileSync(startScriptPath, destPath);
+    console.log(`Copied start.sh from ${startScriptPath} to ${destPath}`);
   } else {
-    console.error("Start script not found in tmp directory.");
+    console.error("Start script not found in source directory.");
   }
 }
 
@@ -45,4 +46,4 @@ if (!fs.existsSync(INSTANCE_DIR)) {
 
 // Move tmp -> instance
 moveContentsSync(tmpDir, INSTANCE_DIR);
-moveStartScript(tmpDir, INSTANCE_DIR);
+copyStartScript(tmpDir, INSTANCE_DIR);
