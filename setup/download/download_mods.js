@@ -31,10 +31,15 @@ let processedMods = new Set();
   const minecraftVersion = await getMinecraftVersion();
   const modLoader = getModLoader();
 
-  if (!minecraftVersion || !modLoader) {
+  if (!minecraftVersion) {
     console.error(
-      "Missing Minecraft version or mod loader in downloaded_versions.json."
+      "Minecraft version not found. Please download a modpack first."
     );
+    process.exit(1);
+  }
+
+  if (!modLoader) {
+    console.error("Mod loader not found. Please download a modpack first.");
     process.exit(1);
   }
 
@@ -127,7 +132,9 @@ async function downloadModAndDependencies(modID, mcVersion, modLoader) {
 
     const fileID = compatibleFile.id;
     if (isAlreadyDownloaded("mods", modID, fileID)) {
-      console.log(`Mod ID ${modID} (file ${fileID}) already downloaded. Skipping.`);
+      console.log(
+        `Mod ID ${modID} (file ${fileID}) already downloaded. Skipping.`
+      );
       return;
     }
 
@@ -142,14 +149,20 @@ async function downloadModAndDependencies(modID, mcVersion, modLoader) {
       }
     }
   } catch (err) {
-    console.error(`Error processing mod ID ${modID}:`, err.response?.data || err.message);
+    console.error(
+      `Error processing mod ID ${modID}:`,
+      err.response?.data || err.message
+    );
   }
 }
 
 async function fetchModFiles(modID) {
-  const response = await axios.get(`https://api.curseforge.com/v1/mods/${modID}/files`, {
-    headers: { "x-api-key": curseforgeAPIKey },
-  });
+  const response = await axios.get(
+    `https://api.curseforge.com/v1/mods/${modID}/files`,
+    {
+      headers: { "x-api-key": curseforgeAPIKey },
+    }
+  );
   return response.data.data || [];
 }
 
@@ -158,7 +171,9 @@ function selectCompatibleFile(files, mcVersion, modLoader) {
     file.gameVersions.includes(mcVersion) &&
     file.gameVersions.some((v) => v.toLowerCase() === modLoader.toLowerCase());
 
-  let releaseFile = files.find((file) => isCompatible(file) && file.releaseType === 1);
+  let releaseFile = files.find(
+    (file) => isCompatible(file) && file.releaseType === 1
+  );
   if (releaseFile) return releaseFile;
 
   const fallback = files
@@ -168,7 +183,9 @@ function selectCompatibleFile(files, mcVersion, modLoader) {
   if (fallback.length) {
     const alt = fallback[0];
     console.warn(
-      `No release found for mod ID ${alt.modId}. Using ${["alpha", "beta", "release"][alt.releaseType - 1]} (${alt.fileDate}) instead.`
+      `No release found for mod ID ${alt.modId}. Using ${
+        ["alpha", "beta", "release"][alt.releaseType - 1]
+      } (${alt.fileDate}) instead.`
     );
     return alt;
   }
@@ -194,7 +211,9 @@ async function downloadAndSaveFile(fileData, modID, fileID) {
 
   const outputPath = path.join(customDownloadDir, fileName);
   console.log(
-    `Downloading ${fileName} (${formatBytes(fileLength)}) to ${customDownloadDir}...`
+    `Downloading ${fileName} (${formatBytes(
+      fileLength
+    )}) to ${customDownloadDir}...`
   );
   await downloadFile(downloadUrl, outputPath, fileLength);
   saveDownloadedVersion("mods", modID, fileID);
