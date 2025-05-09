@@ -165,7 +165,7 @@ async function getMinecraftVersion() {
   if (!downloadedVersions) {
     // No Modpack downloaded
     const { JAVA } = require("../../variables.json")
-    const VERSION = JAVA.SERVER.VANILLA;
+    const VERSION = JAVA.SERVER.VANILLA.VERSION;
     if(VERSION ==  "latest") {
       const { versionId } = await getVersionInfo("latest", JAVA.SERVER.VANILLA.SNAPSHOT);
       return versionId;
