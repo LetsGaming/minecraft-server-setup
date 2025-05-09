@@ -137,12 +137,39 @@ function saveDownloadedVersion(
   fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
 }
 
-function getMinecraftVersion() {
+async function getVersionInfo(requestedVersion, allowSnapshot) {
+  const manifestUrl =
+    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+  const manifestResp = await axios.get(manifestUrl);
+  const manifest = manifestResp.data;
+
+  let versionId = requestedVersion;
+
+  if (requestedVersion === "latest") {
+    versionId = allowSnapshot
+      ? manifest.latest.snapshot
+      : manifest.latest.release;
+  }
+
+  const versionData = manifest.versions.find((v) => v.id === versionId);
+
+  if (!versionData) {
+    throw new Error(`Version ${versionId} not found in version manifest.`);
+  }
+
+  return { versionId, metadataUrl: versionData.url };
+}
+
+async function getMinecraftVersion() {
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) {
     // No Modpack downloaded
     const { JAVA } = require("../../variables.json")
-    return JAVA.SERVER.VANILLA.VERSION || null;
+    const VERSION = JAVA.SERVER.VANILLA;
+    if(VERSION ==  "latest") {
+      const { versionId } = await getVersionInfo("latest", JAVA.SERVER.VANILLA.SNAPSHOT);
+      return versionId;
+    }
   }
 
   return downloadedVersions?.gameVersion || null;
@@ -174,4 +201,5 @@ module.exports = {
   isAlreadyDownloaded,
   getMinecraftVersion,
   getModLoader,
+  getVersionInfo
 };

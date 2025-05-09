@@ -2,34 +2,12 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const { spawn, execFile } = require("child_process");
+const { getVersionInfo } = require("../../setup/download/download_utils.js");
 const { JAVA } = require("../../variables.json");
 
 const outputDir = path.resolve(__dirname, "..", "temp");
 if (!fs.existsSync(outputDir)) {
   fs.mkdirSync(outputDir, { recursive: true });
-}
-
-async function getVersionInfo(requestedVersion, allowSnapshot) {
-  const manifestUrl =
-    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
-  const manifestResp = await axios.get(manifestUrl);
-  const manifest = manifestResp.data;
-
-  let versionId = requestedVersion;
-
-  if (requestedVersion === "latest") {
-    versionId = allowSnapshot
-      ? manifest.latest.snapshot
-      : manifest.latest.release;
-  }
-
-  const versionData = manifest.versions.find((v) => v.id === versionId);
-
-  if (!versionData) {
-    throw new Error(`Version ${versionId} not found in version manifest.`);
-  }
-
-  return { versionId, metadataUrl: versionData.url };
 }
 
 async function installMinecraftServer() {
