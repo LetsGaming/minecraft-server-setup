@@ -1,8 +1,5 @@
 const { execSync } = require("child_process");
 const JAVA = require("../../variables.json").JAVA;
-const path = require("path");
-
-const jabbaShPath = path.join(process.env.HOME, ".jabba", "jabba.sh");
 
 function parseMinecraftVersion(version) {
   return version.split(".").map((v) => parseInt(v, 10));
@@ -24,7 +21,7 @@ function getRequiredJavaVersion(mcVersion) {
 
 function getCurrentJavaVersion() {
   try {
-    const cmd = `bash -c '. ${jabbaShPath} && java -version 2>&1'`;
+    const cmd = `bash -c 'java -version 2>&1'`;
     const output = execSync(cmd).toString();
     const match = output.match(/version "(.*?)"/);
     if (!match) return null;
@@ -41,7 +38,7 @@ function getCurrentJavaVersion() {
 
 function isJavaVersionInstalledWithJabba(requiredVersion) {
   try {
-    const output = execSync(`. ${jabbaShPath} && jabba ls`, { shell: "/bin/bash" }).toString();
+    const output = execSync(`jabba ls`, { shell: "/bin/bash" }).toString();
     return output.includes(`temurin@${requiredVersion}`);
   } catch {
     return false;
@@ -53,13 +50,13 @@ function installWithJabba(requiredVersion) {
   try {
     if (!isJavaVersionInstalledWithJabba(requiredVersion)) {
       console.log(`Installing Java ${requiredVersion} with Jabba...`);
-      execSync(`. ${jabbaShPath} && jabba install ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
+      execSync(`jabba install ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
     } else {
       console.log(`Java ${requiredVersion} is already installed with Jabba.`);
     }
 
     console.log(`Activating Java ${requiredVersion} using Jabba...`);
-    execSync(`. ${jabbaShPath} && jabba use ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
+    execSync(`jabba use ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
   } catch (err) {
     console.error(`Failed to install/use Java ${requiredVersion} via Jabba:`, err.message);
     process.exit(1);

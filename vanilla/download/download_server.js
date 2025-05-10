@@ -17,7 +17,10 @@ async function installMinecraftServer() {
   const useFabric = VANILLA_CONFIG.USE_FABRIC;
 
   try {
-    const { versionId, metadataUrl } = await getVersionInfo(requestedVersion, allowSnapshot);
+    const { versionId, metadataUrl } = await getVersionInfo(
+      requestedVersion,
+      allowSnapshot
+    );
 
     if (useFabric) {
       await installFabricServer(versionId);
@@ -80,15 +83,13 @@ async function installFabricServer(versionId) {
     writer.on("error", reject);
   });
 
-  const jabbaShPath = path.join(process.env.HOME, ".jabba", "jabba.sh");
-
   try {
     await new Promise((resolve, reject) => {
       const java = spawn(
         "/bin/bash",
         [
           "-c",
-          `. ${jabbaShPath} && java -jar ${installerPath} server -mcversion ${versionId} -downloadMinecraft`,
+          `java -jar ${installerPath} server -mcversion ${versionId} -downloadMinecraft`,
         ],
         { cwd: outputDir, stdio: "inherit" }
       );
@@ -117,12 +118,13 @@ async function installFabricServer(versionId) {
 }
 
 async function installMods(versionId) {
-  const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } = JAVA.SERVER.VANILLA.MODS;
+  const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =
+    JAVA.SERVER.VANILLA.MODS;
 
   const modGroups = [
-    { name: "performance", file: PERFORMANCE_MODS },
-    { name: "utility", file: UTILITY_MODS },
-    { name: "optional", file: OPTIONAL_MODS },
+    { name: "performance", bool: PERFORMANCE_MODS },
+    { name: "utility", bool: UTILITY_MODS },
+    { name: "optional", bool: OPTIONAL_MODS },
   ];
 
   const modsToInstall = modGroups.filter((group) => group.file);
@@ -133,7 +135,11 @@ async function installMods(versionId) {
 
   console.log(`Not all mods are guaranteed to be available for ${versionId}.`);
 
-  for (const { name, file } of modsToInstall) {
+  for (const { name, bool } of modsToInstall) {
+    if (!bool) {
+      console.log(`Skipping ${name} mods download.`);
+      continue;
+    }
     const filePath = path.join(__dirname, `${name}_mods.txt`);
     console.log(`Downloading ${name} mods...`);
     await downloadFabricMods(filePath);
@@ -141,7 +147,14 @@ async function installMods(versionId) {
 }
 
 async function downloadFabricMods(modsFilePath) {
-  const downloadModsPath = path.resolve(__dirname, "..", "..", "setup", "download", "download_mods.js");
+  const downloadModsPath = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "setup",
+    "download",
+    "download_mods.js"
+  );
 
   console.log(`Starting mod download from ${modsFilePath}...`);
 
