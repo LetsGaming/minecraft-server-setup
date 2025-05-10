@@ -13,7 +13,7 @@ const {
   saveDownloadedVersion,
   isAlreadyDownloaded,
   getMinecraftVersion,
-  getModLoader,
+  getModLoader
 } = require("./download_utils");
 
 // ==== Config & Argument Parsing ====

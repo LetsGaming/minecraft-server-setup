@@ -3,7 +3,12 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-const { getVersionInfo, getJavaVersionFor } = require("../../setup/download/download_utils.js");
+const {
+  getVersionInfo,
+  getJavaVersionFor,
+  saveGameVersion,
+  saveModLoader,
+} = require("../../setup/download/download_utils.js");
 const { JAVA } = require("../../variables.json");
 
 const outputDir = path.resolve(__dirname, "..", "temp");
@@ -18,6 +23,7 @@ async function installMinecraftServer() {
   try {
     const { versionId, metadataUrl } = await getVersionInfo(version, snapshot);
     if (useFabric) {
+      saveInformation(versionId, "fabric");
       await installFabricServer(versionId);
       await installMods(versionId);
     } else {
@@ -49,6 +55,12 @@ async function installVanillaServer(versionId, metadataUrl) {
   console.log(`Vanilla server jar saved to ${jarPath}`);
 }
 
+function saveInformation(versionId, modLoader) {
+  saveGameVersion(versionId);
+  saveModLoader(modLoader);
+  console.log(`Game version ${versionId} and mod loader ${modLoader} saved.`);
+}
+
 async function installFabricServer(versionId) {
   console.log(`Installing Fabric server for ${versionId}...`);
 
@@ -70,11 +82,13 @@ async function installFabricServer(versionId) {
 
   // Find the corresponding Java binary from Jabba
   const jabbaDir = path.join(process.env.HOME, ".jabba", "jdk");
-  const installed = fs.readdirSync(jabbaDir).find((name) =>
-    name.includes(`@${javaVersion}.`)
-  );
+  const installed = fs
+    .readdirSync(jabbaDir)
+    .find((name) => name.includes(`@${javaVersion}.`));
   if (!installed) {
-    throw new Error(`No installed Jabba candidate found for Java ${javaVersion}`);
+    throw new Error(
+      `No installed Jabba candidate found for Java ${javaVersion}`
+    );
   }
 
   const javaBin = path.join(jabbaDir, installed, "bin", "java");

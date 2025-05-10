@@ -138,6 +138,53 @@ function saveDownloadedVersion(
   fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
 }
 
+const saveGameVersion = (gameVersion) => {
+  const versionFile = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "scripts",
+    "common",
+    "downloaded_versions.json"
+  );
+  let existing = {};
+  if (fs.existsSync(versionFile)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+    } catch (err) {
+      console.warn(
+        "Warning: Could not parse downloaded_versions.json. Overwriting..."
+      );
+    }
+  }
+  existing.gameVersion = gameVersion;
+  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
+};
+
+
+const saveModLoader = (modLoader) => {
+  const versionFile = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "scripts",
+    "common",
+    "downloaded_versions.json"
+  );
+  let existing = {};
+  if (fs.existsSync(versionFile)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+    } catch (err) {
+      console.warn(
+        "Warning: Could not parse downloaded_versions.json. Overwriting..."
+      );
+    }
+  }
+  existing.modLoader = modLoader;
+  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
+};
+
 const MINECRAFT_JAVA_MAP = [
   { mc: "1.21", java: "21" },
   { mc: "1.20", java: "17" },
@@ -189,10 +236,13 @@ async function getMinecraftVersion() {
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) {
     // No Modpack downloaded
-    const { JAVA } = require("../../variables.json")
+    const { JAVA } = require("../../variables.json");
     const VERSION = JAVA.SERVER.VANILLA.VERSION;
-    if(VERSION ==  "latest") {
-      const { versionId } = await getVersionInfo("latest", JAVA.SERVER.VANILLA.SNAPSHOT);
+    if (VERSION == "latest") {
+      const { versionId } = await getVersionInfo(
+        "latest",
+        JAVA.SERVER.VANILLA.SNAPSHOT
+      );
       return versionId;
     }
   }
@@ -204,7 +254,7 @@ function getModLoader() {
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) {
     // No Modpack downloaded
-    const { JAVA } = require("../../variables.json")
+    const { JAVA } = require("../../variables.json");
     return JAVA.SERVER.VANILLA.USE_FABRIC ? "fabric" : null;
   }
 
@@ -227,5 +277,7 @@ module.exports = {
   getMinecraftVersion,
   getModLoader,
   getVersionInfo,
-  getJavaVersionFor
+  getJavaVersionFor,
+  saveGameVersion,
+  saveModLoader,
 };
