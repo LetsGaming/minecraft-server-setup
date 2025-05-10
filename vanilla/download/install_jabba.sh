@@ -17,7 +17,7 @@ else
   # Source Jabba into current shell (assuming default install path)
   export JABBA_HOME="$HOME/.jabba"
   if [ -f "$JABBA_HOME/jabba.sh" ]; then
-    source "$JABBA_HOME/jabba.sh"
+    . "$JABBA_HOME/jabba.sh"
     echo "Jabba installed and sourced."
   else
     echo "Jabba installation script not found. Aborting."

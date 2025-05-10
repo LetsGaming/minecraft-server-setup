@@ -60,6 +60,7 @@ async function installVanillaServer(versionId, metadataUrl) {
 
 async function installFabricServer(versionId) {
   console.log(`Installing Fabric server ${versionId}...`);
+
   const installerUrl = "https://meta.fabricmc.net/v2/versions/installer";
   const installerResp = await axios.get(installerUrl);
   const installer = installerResp.data.find((entry) => entry.stable);
@@ -84,35 +85,40 @@ async function installFabricServer(versionId) {
 
   const jabbaShPath = path.join(process.env.HOME, ".jabba", "jabba.sh");
 
-  await new Promise((resolve, reject) => {
-    const java = spawn(
-      "/bin/bash",
-      [
-        "-c",
-        `source ${jabbaShPath} && java -jar ${installerPath} server -mcversion ${versionId} -downloadMinecraft`,
-      ],
-      { cwd: outputDir, stdio: "inherit" }
-    );
+  try {
+    await new Promise((resolve, reject) => {
+      const java = spawn(
+        "/bin/bash",
+        [
+          "-c",
+          `. ${jabbaShPath} && java -jar ${installerPath} server -mcversion ${versionId} -downloadMinecraft`,
+        ],
+        { cwd: outputDir, stdio: "inherit" }
+      );
 
-    java.on("exit", (code) => {
-      if (code === 0) {
-        console.log(`Fabric server ${versionId} installed in ${outputDir}`);
-        fs.unlinkSync(installerPath);
+      java.on("exit", (code) => {
+        if (code === 0) {
+          console.log(`Fabric server ${versionId} installed in ${outputDir}`);
+          fs.unlinkSync(installerPath);
 
-        const generatedJar = path.join(outputDir, "server.jar");
-        if (fs.existsSync(generatedJar)) {
-          fs.renameSync(generatedJar, jarPath);
-          console.log(`Renamed server.jar to ${path.basename(jarPath)}`);
+          const generatedJar = path.join(outputDir, "server.jar");
+          if (fs.existsSync(generatedJar)) {
+            fs.renameSync(generatedJar, jarPath);
+            console.log(`Renamed server.jar to ${path.basename(jarPath)}`);
+          } else {
+            console.warn(`Expected server.jar not found in ${outputDir}`);
+          }
+          resolve();
         } else {
-          console.warn(`Expected server.jar not found in ${outputDir}`);
+          console.error(`Fabric installer exited with code ${code}`);
+          reject(new Error(`Fabric installer exited with code ${code}`));
         }
-
-        resolve();
-      } else {
-        reject(new Error(`Fabric installer exited with code ${code}`));
-      }
+      });
     });
-  });
+  } catch (err) {
+    console.error(`Failed to install Fabric server: ${err.message}`);
+    process.exit(1); // Exit the script on failure
+  }
 }
 
 async function installMods() {

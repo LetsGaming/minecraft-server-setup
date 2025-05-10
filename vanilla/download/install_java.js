@@ -46,7 +46,7 @@ function getCurrentJavaVersion() {
 function isJavaVersionInstalledWithJabba(requiredVersion) {
   try {
     const list = execSync("jabba ls").toString();
-    return list.includes(`adopt@${requiredVersion}`);
+    return list.includes(`temurin@${requiredVersion}`);
   } catch {
     return false;
   }
@@ -59,7 +59,7 @@ function installWithJabba(requiredVersion) {
     const jabbaShPath = path.join(process.env.HOME, ".jabba", "jabba.sh");
 
     // Ensure jabba is sourced before running
-    const shellCommand = `source ${jabbaShPath} && jabba install ${jabbaVersion}`;
+    const shellCommand = `. ${jabbaShPath} && jabba install ${jabbaVersion}`;
     
     if (!isJavaVersionInstalledWithJabba(requiredVersion)) {
       console.log(`Installing Java ${requiredVersion} with Jabba...`);
@@ -69,7 +69,7 @@ function installWithJabba(requiredVersion) {
     }
 
     console.log(`Activating Java ${requiredVersion} using Jabba...`);
-    execSync(`source ${jabbaShPath} && jabba use ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
+    execSync(`. ${jabbaShPath} && jabba use ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
   } catch (err) {
     console.error(
       `Failed to install/use Java ${requiredVersion} via Jabba:`,
