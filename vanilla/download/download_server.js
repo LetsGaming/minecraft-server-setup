@@ -65,9 +65,14 @@ async function installFabricServer(versionId) {
 
   await downloadFile(url, installerPath);
 
+  const javaBin = path.join(process.env.HOME, ".jabba", "current", "bin", "java");
+  if (!fs.existsSync(javaBin)) {
+    throw new Error(`Java binary not found at ${javaBin}.`);
+  }
+
   await new Promise((resolve, reject) => {
     const java = spawn(
-      "java",
+      javaBin,
       [
         "-jar",
         installerPath,
@@ -90,6 +95,7 @@ async function installFabricServer(versionId) {
     });
   });
 }
+
 
 async function installMods() {
   const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =
