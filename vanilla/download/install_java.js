@@ -38,29 +38,37 @@ function getCurrentJavaVersion() {
   }
 }
 
+function getJavaBinaryPath(requiredVersion) {
+  try {
+    const javaPath = execSync(`jabba which java@temurin-${requiredVersion}`, {
+      shell: "/bin/bash",
+    }).toString().trim();
+    return javaPath;
+  } catch (err) {
+    console.error(`Failed to get java binary path for Java ${requiredVersion}:`, err.message);
+    return null;
+  }
+}
+
 function installWithJabba(requiredVersion) {
   const jabbaVersion = `temurin@${requiredVersion}`;
-  const cmd = `
-    export PATH="$HOME/.jabba/bin:$PATH"
-    eval "$(jabba init -)"
-    if ! jabba ls | grep -q "${jabbaVersion}"; then
-      echo "Installing Java ${requiredVersion} with Jabba..."
-      jabba install ${jabbaVersion}
-    else
-      echo "Java ${requiredVersion} is already installed with Jabba."
-    fi
-    echo "Activating Java ${requiredVersion} using Jabba..."
-    jabba use ${jabbaVersion}
-    java -version
-  `;
-
   try {
-    execSync(`bash -c '${cmd}'`, { stdio: "inherit" });
+    if (!isJavaVersionInstalledWithJabba(requiredVersion)) {
+      console.log(`Installing Java ${requiredVersion} with Jabba...`);
+      execSync(`jabba install ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
+    } else {
+      console.log(`Java ${requiredVersion} is already installed with Jabba.`);
+    }
+
+    const javaPath = getJavaBinaryPath(requiredVersion);
+    if (!javaPath) {
+      throw new Error("Failed to determine Java binary path.");
+    }
+
+    console.log(`Java ${requiredVersion} binary located at: ${javaPath}`);
+    return javaPath;
   } catch (err) {
-    console.error(
-      `Failed to install/use Java ${requiredVersion} via Jabba:`,
-      err.message
-    );
+    console.error(`Failed to install/use Java ${requiredVersion} via Jabba:`, err.message);
     process.exit(1);
   }
 }
