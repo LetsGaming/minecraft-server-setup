@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+set -e
+
+# Define version if not already set
+JABBA_VERSION="${JABBA_VERSION:-0.11.2}"
+
 # Check if jabba is installed
 if command -v jabba &> /dev/null; then
   echo "Jabba is already installed."
@@ -10,8 +15,9 @@ else
   curl -sL https://github.com/shyiko/jabba/raw/master/install.sh | bash
 
   # Source Jabba into current shell (assuming default install path)
-  if [ -f "$HOME/.jabba/jabba.sh" ]; then
-    . "$HOME/.jabba/jabba.sh"
+  export JABBA_HOME="$HOME/.jabba"
+  if [ -f "$JABBA_HOME/jabba.sh" ]; then
+    source "$JABBA_HOME/jabba.sh"
     echo "Jabba installed and sourced."
   else
     echo "Jabba installation script not found. Aborting."
