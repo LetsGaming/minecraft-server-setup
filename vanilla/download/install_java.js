@@ -24,8 +24,8 @@ function getRequiredJavaVersion(mcVersion) {
 
 function getCurrentJavaVersion() {
   try {
-    const cmd = `. ${jabbaShPath} && java -version 2>&1`;
-    const output = execSync(cmd, { shell: "/bin/bash" }).toString();
+    const cmd = `bash -c '. ${jabbaShPath} && java -version 2>&1'`;
+    const output = execSync(cmd).toString();
     const match = output.match(/version "(.*?)"/);
     if (!match) return null;
 
