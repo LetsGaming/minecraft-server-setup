@@ -54,6 +54,9 @@ function isJavaVersionInstalledWithJabba(requiredVersion) {
 function installWithJabba(requiredVersion) {
   const jabbaVersion = `adopt@${requiredVersion}`;
   try {
+    // Ensure jabba is sourced before running
+    execSync('source "$HOME/.jabba/jabba.sh"', { shell: '/bin/bash' });
+
     if (!isJavaVersionInstalledWithJabba(requiredVersion)) {
       console.log(`Installing Java ${requiredVersion} with Jabba...`);
       execSync(`jabba install ${jabbaVersion}`, { stdio: "inherit" });
@@ -91,4 +94,4 @@ function ensureJavaVersion() {
   }
 }
 
-ensureJavaVersion()
+ensureJavaVersion();
