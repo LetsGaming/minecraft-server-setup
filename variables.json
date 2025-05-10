@@ -15,7 +15,12 @@
       "VANILLA": {
         "VERSION": "latest",
         "SNAPSHOT": false,
-        "USE_FABRIC": false
+        "USE_FABRIC": false,
+        "MODS": {
+          "PERFORMANCE_MODS": true,
+          "UTILITY_MODS": true,
+          "OPTIONAL_MODS": false
+        }
       },
       "MAX_PLAYERS": 10,
       "MOTD": "A Minecraft Server",

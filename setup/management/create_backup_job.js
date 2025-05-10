@@ -16,13 +16,9 @@ try {
   const logsDir = path.join(backupDir, "logs");
 
   const runBackupPath = path.resolve(automationDir, "run_backup.sh");
-  const cleanupPath = path.resolve(automationDir, "cleanup_backups.sh");
 
   if (!fs.existsSync(runBackupPath)) {
     throw new Error(`Backup wrapper script not found: ${runBackupPath}`);
-  }
-  if (!fs.existsSync(cleanupPath)) {
-    throw new Error(`Cleanup script not found: ${cleanupPath}`);
   }
 
   // Ensure log directory exists
@@ -30,9 +26,8 @@ try {
     fs.mkdirSync(logsDir, { recursive: true });
   }
 
-  // Define cron job commands
+  // Define cron job command
   const hourlyBackupCmd = `0 * * * * bash ${runBackupPath} >> ${logsDir}/backup.log 2>&1`;
-  const cleanupCmd = `10 * * * * bash ${cleanupPath} >> ${logsDir}/cleanup.log 2>&1`;
 
   // Get existing crontab
   let existingCrontab = "";
@@ -42,36 +37,19 @@ try {
     if (err.status !== 1) throw err; // status 1 = no crontab for user
   }
 
-  const newJobs = [];
-
   // Add hourly backup if not present
   if (!existingCrontab.includes(runBackupPath)) {
-    newJobs.push(hourlyBackupCmd);
-    console.log("Added hourly backup cronjob.");
-  } else {
-    console.log("Hourly backup cronjob already exists. Skipping.");
-  }
-
-  // Add cleanup job if not present
-  if (!existingCrontab.includes(cleanupPath)) {
-    newJobs.push(cleanupCmd);
-    console.log("Added cleanup cronjob.");
-  } else {
-    console.log("Cleanup cronjob already exists. Skipping.");
-  }
-
-  if (newJobs.length > 0) {
-    const newCrontab = `${existingCrontab.trim()}\n${newJobs.join("\n")}\n`;
+    const newCrontab = `${existingCrontab.trim()}\n${hourlyBackupCmd}\n`;
     const tmpFile = "/tmp/cronjob.tmp";
 
     fs.writeFileSync(tmpFile, newCrontab);
     execSync(`crontab ${tmpFile}`);
     fs.unlinkSync(tmpFile);
+    console.log("Added hourly backup cronjob.");
   } else {
-    console.log("No new cronjobs needed.");
+    console.log("Hourly backup cronjob already exists. Skipping.");
   }
-
 } catch (err) {
-  console.error("Error setting up cronjobs:", err.message);
+  console.error("Error setting up cronjob:", err.message);
   process.exit(1);
 }

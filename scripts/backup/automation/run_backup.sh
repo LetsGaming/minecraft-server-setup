@@ -44,3 +44,5 @@ fi
 # Immer: Stündlich
 echo "[$(date +'%F %T')] Starting hourly backup..."
 bash "$BACKUP_SCRIPT"
+
+bash "$SCRIPT_DIR/cleanup_backups.sh"

@@ -1,7 +1,7 @@
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
-const { spawn, execFile } = require("child_process");
+const { spawn } = require("child_process");
 const { getVersionInfo } = require("../../setup/download/download_utils.js");
 const { JAVA } = require("../../variables.json");
 
@@ -24,31 +24,7 @@ async function installMinecraftServer() {
 
     if (useFabric) {
       await installFabricServer(versionId);
-      // === DOWNLOAD MODS ===
-      const modsFilePath = path.join(__dirname, "mods.txt");
-      const downloadModsPath = path.resolve(
-        __dirname,
-        "..",
-        "..",
-        "setup",
-        "download",
-        "download_mods.js"
-      );
-
-      console.log(`Starting mod download from ${modsFilePath}...`);
-      console.log(`Not all mods are guaranteed to be available for ${versionId}.`);
-      await new Promise((resolve, reject) => {
-        execFile(
-          "node",
-          [downloadModsPath, `--modIdsFile=${modsFilePath}`, `--downloadDir=${path.join(outputDir, "mods")}`],
-          (error, stdout, stderr) => {
-            if (stdout) process.stdout.write(stdout);
-            if (stderr) process.stderr.write(stderr);
-            if (error) reject(error);
-            else resolve();
-          }
-        );
-      });
+      await installMods();
     } else {
       await installVanillaServer(versionId, metadataUrl);
     }
@@ -109,7 +85,14 @@ async function installFabricServer(versionId) {
   await new Promise((resolve, reject) => {
     const java = spawn(
       "java",
-      ["-jar", installerPath, "server", "-mcversion", versionId, "-downloadMinecraft"],
+      [
+        "-jar",
+        installerPath,
+        "server",
+        "-mcversion",
+        versionId,
+        "-downloadMinecraft",
+      ],
       { cwd: outputDir, stdio: "inherit" }
     );
 
@@ -134,4 +117,79 @@ async function installFabricServer(versionId) {
   });
 }
 
-installMinecraftServer()
+async function installMods() {
+  const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =
+    JAVA.SERVER.VANILLA.MODS;
+
+  const modGroups = [
+    { name: "performance", file: PERFORMANCE_MODS },
+    { name: "utility", file: UTILITY_MODS },
+    { name: "optional", file: OPTIONAL_MODS },
+  ];
+
+  const modsToInstall = modGroups.filter((group) => group.file);
+
+  if (modsToInstall.length === 0) {
+    console.log("No mods specified for download.");
+    return;
+  }
+
+  console.log(`Not all mods are guaranteed to be available for ${versionId}.`);
+
+  for (const { name, file } of modsToInstall) {
+    const filePath = path.join(__dirname, `${name}_mods.txt`);
+    console.log(`Downloading ${name} mods...`);
+    await downloadFabricMods(filePath);
+  }
+}
+
+async function downloadFabricMods(modsFilePath) {
+  const downloadModsPath = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "setup",
+    "download",
+    "download_mods.js"
+  );
+
+  console.log(`Starting mod download from ${modsFilePath}...`);
+
+  await new Promise((resolve, reject) => {
+    const child = spawn(
+      "node",
+      [
+        downloadModsPath,
+        `--modIdsFile=${modsFilePath}`,
+        `--downloadDir=${path.join(outputDir, "mods")}`,
+      ],
+      {
+        stdio: ["inherit", "pipe", "pipe"],
+      }
+    );
+
+    child.stdout.on("data", (data) => {
+      process.stdout.write(data);
+    });
+
+    child.stderr.on("data", (data) => {
+      process.stderr.write(data);
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Child process exited with code ${code}`));
+      }
+    });
+  });
+}
+
+(async () => {
+  try {
+    await installMinecraftServer();
+  } catch (error) {
+    console.error("Error during installation:", error.message);
+  }
+})();
