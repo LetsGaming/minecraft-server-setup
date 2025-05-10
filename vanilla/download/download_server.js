@@ -89,7 +89,7 @@ async function installFabricServer(versionId) {
         "/bin/bash",
         [
           "-c",
-          `java -jar ${installerPath} server -mcversion ${versionId} -downloadMinecraft`,
+          `export PATH="$HOME/.jabba/bin:$PATH"; eval "$(jabba init -)"; java -jar ${installerPath} server -mcversion ${versionId} -downloadMinecraft`,
         ],
         { cwd: outputDir, stdio: "inherit" }
       );

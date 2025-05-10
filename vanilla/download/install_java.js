@@ -16,7 +16,9 @@ function getRequiredJavaVersion(mcVersion) {
   if (major === 1 && minor === 17) return 17;
   if (major === 1 && minor <= 16) return 11;
 
-  throw new Error(`Don't know which Java version to use for Minecraft ${mcVersion}`);
+  throw new Error(
+    `Don't know which Java version to use for Minecraft ${mcVersion}`
+  );
 }
 
 function getCurrentJavaVersion() {
@@ -36,29 +38,29 @@ function getCurrentJavaVersion() {
   }
 }
 
-function isJavaVersionInstalledWithJabba(requiredVersion) {
-  try {
-    const output = execSync(`jabba ls`, { shell: "/bin/bash" }).toString();
-    return output.includes(`temurin@${requiredVersion}`);
-  } catch {
-    return false;
-  }
-}
-
 function installWithJabba(requiredVersion) {
   const jabbaVersion = `temurin@${requiredVersion}`;
-  try {
-    if (!isJavaVersionInstalledWithJabba(requiredVersion)) {
-      console.log(`Installing Java ${requiredVersion} with Jabba...`);
-      execSync(`jabba install ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
-    } else {
-      console.log(`Java ${requiredVersion} is already installed with Jabba.`);
-    }
+  const cmd = `
+    export PATH="$HOME/.jabba/bin:$PATH"
+    eval "$(jabba init -)"
+    if ! jabba ls | grep -q "${jabbaVersion}"; then
+      echo "Installing Java ${requiredVersion} with Jabba..."
+      jabba install ${jabbaVersion}
+    else
+      echo "Java ${requiredVersion} is already installed with Jabba."
+    fi
+    echo "Activating Java ${requiredVersion} using Jabba..."
+    jabba use ${jabbaVersion}
+    java -version
+  `;
 
-    console.log(`Activating Java ${requiredVersion} using Jabba...`);
-    execSync(`jabba use ${jabbaVersion}`, { stdio: "inherit", shell: "/bin/bash" });
+  try {
+    execSync(`bash -c '${cmd}'`, { stdio: "inherit" });
   } catch (err) {
-    console.error(`Failed to install/use Java ${requiredVersion} via Jabba:`, err.message);
+    console.error(
+      `Failed to install/use Java ${requiredVersion} via Jabba:`,
+      err.message
+    );
     process.exit(1);
   }
 }
