@@ -3,7 +3,7 @@
 set -e
 
 # Define version if not already set
-JABBA_VERSION="${JABBA_VERSION:-0.11.2}"
+JABBA_VERSION="${JABBA_VERSION:-0.14.0}"
 
 # Check if jabba is installed
 if command -v jabba &> /dev/null; then
@@ -12,7 +12,7 @@ else
   echo "Jabba not found. Installing Jabba v$JABBA_VERSION..."
 
   # Install Jabba
-  curl -sL https://github.com/shyiko/jabba/raw/master/install.sh | bash
+  curl -sL https://github.com/Jabba-Team/jabba/raw/main/install.sh | bash
 
   # Source Jabba into current shell (assuming default install path)
   export JABBA_HOME="$HOME/.jabba"

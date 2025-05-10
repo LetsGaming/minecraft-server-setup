@@ -53,7 +53,7 @@ function isJavaVersionInstalledWithJabba(requiredVersion) {
 }
 
 function installWithJabba(requiredVersion) {
-  const jabbaVersion = `adopt@${requiredVersion}`;
+  const jabbaVersion = `temurin@${requiredVersion}`;
   try {
     // Set the full path to jabba.sh (assuming default location)
     const jabbaShPath = path.join(process.env.HOME, ".jabba", "jabba.sh");
