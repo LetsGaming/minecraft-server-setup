@@ -3,7 +3,7 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
-const { getVersionInfo } = require("../../setup/download/download_utils.js");
+const { getVersionInfo, getJavaVersionFor } = require("../../setup/download/download_utils.js");
 const { JAVA } = require("../../variables.json");
 
 const outputDir = path.resolve(__dirname, "..", "temp");
@@ -65,9 +65,21 @@ async function installFabricServer(versionId) {
 
   await downloadFile(url, installerPath);
 
-  const javaBin = path.join(process.env.HOME, ".jabba", "current", "bin", "java");
+  // Get the Java version for the Minecraft version
+  const javaVersion = getJavaVersionFor(versionId);
+
+  // Find the corresponding Java binary from Jabba
+  const jabbaDir = path.join(process.env.HOME, ".jabba", "jdk");
+  const installed = fs.readdirSync(jabbaDir).find((name) =>
+    name.includes(`@${javaVersion}.`)
+  );
+  if (!installed) {
+    throw new Error(`No installed Jabba candidate found for Java ${javaVersion}`);
+  }
+
+  const javaBin = path.join(jabbaDir, installed, "bin", "java");
   if (!fs.existsSync(javaBin)) {
-    throw new Error(`Java binary not found at ${javaBin}.`);
+    throw new Error(`Java binary not found at ${javaBin}`);
   }
 
   await new Promise((resolve, reject) => {
@@ -95,7 +107,6 @@ async function installFabricServer(versionId) {
     });
   });
 }
-
 
 async function installMods() {
   const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =

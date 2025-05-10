@@ -1,30 +1,6 @@
 const { execSync } = require("child_process");
-const semver = require("semver");
 const { JAVA } = require("../../variables.json");
-
-const MINECRAFT_JAVA_MAP = [
-  { mc: "1.21", java: "21" },
-  { mc: "1.20", java: "17" },
-  { mc: "1.18", java: "17" },
-  { mc: "1.17", java: "16" },
-  { mc: "1.16", java: "8" },
-  { mc: "1.12", java: "8" },
-];
-
-function getJavaVersionFor(mcVersion) {
-  if (mcVersion === "latest") {
-    mcVersion = MINECRAFT_JAVA_MAP[0].mc;
-  }
-  const sorted = MINECRAFT_JAVA_MAP.sort((a, b) =>
-    semver.rcompare(semver.coerce(a.mc), semver.coerce(b.mc))
-  );
-  for (const entry of sorted) {
-    if (semver.gte(semver.coerce(mcVersion), semver.coerce(entry.mc))) {
-      return entry.java;
-    }
-  }
-  throw new Error(`Unsupported Minecraft version: ${mcVersion}`);
-}
+const { getJavaVersionFor } = require("../../setup/download/download_utils.js");
 
 function getLatestJabbaCandidate(javaVersion) {
   try {

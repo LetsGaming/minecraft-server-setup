@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
+const semver = require("semver");
 
 function createDownloadDir(dir) {
   if (!fs.existsSync(dir)) {
@@ -137,6 +138,30 @@ function saveDownloadedVersion(
   fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
 }
 
+const MINECRAFT_JAVA_MAP = [
+  { mc: "1.21", java: "21" },
+  { mc: "1.20", java: "17" },
+  { mc: "1.18", java: "17" },
+  { mc: "1.17", java: "16" },
+  { mc: "1.16", java: "8" },
+  { mc: "1.12", java: "8" },
+];
+
+function getJavaVersionFor(mcVersion) {
+  if (mcVersion === "latest") {
+    mcVersion = MINECRAFT_JAVA_MAP[0].mc;
+  }
+  const sorted = MINECRAFT_JAVA_MAP.sort((a, b) =>
+    semver.rcompare(semver.coerce(a.mc), semver.coerce(b.mc))
+  );
+  for (const entry of sorted) {
+    if (semver.gte(semver.coerce(mcVersion), semver.coerce(entry.mc))) {
+      return entry.java;
+    }
+  }
+  throw new Error(`Unsupported Minecraft version: ${mcVersion}`);
+}
+
 async function getVersionInfo(requestedVersion, allowSnapshot) {
   const manifestUrl =
     "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
@@ -201,5 +226,6 @@ module.exports = {
   isAlreadyDownloaded,
   getMinecraftVersion,
   getModLoader,
-  getVersionInfo
+  getVersionInfo,
+  getJavaVersionFor
 };
