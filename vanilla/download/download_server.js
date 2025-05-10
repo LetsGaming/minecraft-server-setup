@@ -91,7 +91,7 @@ async function installFabricServer(versionId) {
   });
 }
 
-async function installMods(versionId) {
+async function installMods() {
   const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =
     JAVA.SERVER.VANILLA.MODS;
   const modsDir = path.join(outputDir, "mods");
