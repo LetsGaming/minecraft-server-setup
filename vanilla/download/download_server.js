@@ -1,3 +1,4 @@
+// download_server.js
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
@@ -6,148 +7,132 @@ const { getVersionInfo } = require("../../setup/download/download_utils.js");
 const { JAVA } = require("../../variables.json");
 
 const outputDir = path.resolve(__dirname, "..", "temp");
-if (!fs.existsSync(outputDir)) {
-  fs.mkdirSync(outputDir, { recursive: true });
-}
+if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
 async function installMinecraftServer() {
-  const VANILLA_CONFIG = JAVA.SERVER.VANILLA;
-  const requestedVersion = VANILLA_CONFIG.VERSION;
-  const allowSnapshot = VANILLA_CONFIG.SNAPSHOT;
-  const useFabric = VANILLA_CONFIG.USE_FABRIC;
+  const config = JAVA.SERVER.VANILLA;
+  const version = config.VERSION;
+  const snapshot = config.SNAPSHOT;
+  const useFabric = config.USE_FABRIC;
 
   try {
-    const { versionId, metadataUrl } = await getVersionInfo(
-      requestedVersion,
-      allowSnapshot
-    );
-
+    const { versionId, metadataUrl } = await getVersionInfo(version, snapshot);
     if (useFabric) {
       await installFabricServer(versionId);
       await installMods(versionId);
     } else {
       await installVanillaServer(versionId, metadataUrl);
     }
-  } catch (error) {
-    console.error("Failed to install server:", error.message);
+  } catch (err) {
+    console.error("Server installation failed:", err.message);
+    process.exit(1);
   }
 }
 
 async function installVanillaServer(versionId, metadataUrl) {
-  console.log(`Installing vanilla Minecraft server ${versionId}...`);
-  const versionMetaResp = await axios.get(metadataUrl);
-  const serverUrl = versionMetaResp.data.downloads.server?.url;
+  console.log(`Downloading vanilla server for ${versionId}...`);
+  const meta = await axios.get(metadataUrl);
+  const serverUrl = meta.data.downloads?.server?.url;
 
-  if (!serverUrl) {
-    throw new Error(`No server download available for version ${versionId}`);
-  }
+  if (!serverUrl) throw new Error(`No vanilla server jar for ${versionId}`);
 
-  const jarPath = path.join(outputDir, `server.jar`);
+  const jarPath = path.join(outputDir, "server.jar");
   const writer = fs.createWriteStream(jarPath);
-  const serverJarResp = await axios.get(serverUrl, {
-    responseType: "stream",
+  const response = await axios.get(serverUrl, { responseType: "stream" });
+
+  response.data.pipe(writer);
+  await new Promise((res, rej) => {
+    writer.on("finish", res);
+    writer.on("error", rej);
   });
 
-  serverJarResp.data.pipe(writer);
-
-  await new Promise((resolve, reject) => {
-    writer.on("finish", resolve);
-    writer.on("error", reject);
-  });
-
-  console.log(`Downloaded vanilla Minecraft server ${versionId} to ${jarPath}`);
+  console.log(`Vanilla server jar saved to ${jarPath}`);
 }
 
 async function installFabricServer(versionId) {
-  console.log(`Installing Fabric server ${versionId}...`);
+  console.log(`Installing Fabric server for ${versionId}...`);
 
-  const installerUrl = "https://meta.fabricmc.net/v2/versions/installer";
-  const installerResp = await axios.get(installerUrl);
-  const installer = installerResp.data.find((entry) => entry.stable);
-  if (!installer) throw new Error("No stable Fabric installer found.");
+  const installerInfo = await axios.get(
+    "https://meta.fabricmc.net/v2/versions/installer"
+  );
+  const stableInstaller = installerInfo.data.find((i) => i.stable);
+  if (!stableInstaller) throw new Error("No stable Fabric installer found");
 
-  const installerVersion = installer.version;
-  const installerJarName = `fabric-installer-${installerVersion}.jar`;
-  const installerPath = path.join(outputDir, installerJarName);
-  const jarPath = path.join(outputDir, "fabric-server-launch.jar");
+  const installerVersion = stableInstaller.version;
+  const installerJar = `fabric-installer-${installerVersion}.jar`;
+  const installerPath = path.join(outputDir, installerJar);
+  const url = `https://maven.fabricmc.net/net/fabricmc/fabric-installer/${installerVersion}/${installerJar}`;
 
-  const installerDownloadUrl = `https://maven.fabricmc.net/net/fabricmc/fabric-installer/${installerVersion}/${installerJarName}`;
-  const writer = fs.createWriteStream(installerPath);
-  const downloadResp = await axios.get(installerDownloadUrl, {
-    responseType: "stream",
-  });
+  await downloadFile(url, installerPath);
 
-  downloadResp.data.pipe(writer);
   await new Promise((resolve, reject) => {
-    writer.on("finish", resolve);
-    writer.on("error", reject);
-  });
+    const java = spawn(
+      "java",
+      [
+        "-jar",
+        installerPath,
+        "server",
+        "-mcversion",
+        versionId,
+        "-downloadMinecraft",
+      ],
+      { cwd: outputDir, stdio: "inherit" }
+    );
 
-  try {
-    await new Promise((resolve, reject) => {
-      const java = spawn(
-        "/bin/bash",
-        [
-          "-c",
-          `export PATH="$HOME/.jabba/bin:$PATH"; eval "$(jabba init -)"; java -jar ${installerPath} server -mcversion ${versionId} -downloadMinecraft`,
-        ],
-        { cwd: outputDir, stdio: "inherit" }
-      );
-
-      java.on("exit", (code) => {
-        if (code === 0) {
-          console.log(`Fabric server ${versionId} installed in ${outputDir}`);
-          fs.unlinkSync(installerPath);
-
-          if (fs.existsSync(jarPath)) {
-            console.log(`Fabric server jar created: ${jarPath}`);
-          } else {
-            console.warn(`Expected jar not found in ${outputDir}`);
-          }
-          resolve();
-        } else {
-          console.error(`Fabric installer exited with code ${code}`);
-          reject(new Error(`Fabric installer exited with code ${code}`));
-        }
-      });
+    java.on("exit", (code) => {
+      fs.unlinkSync(installerPath);
+      if (code === 0) {
+        console.log("Fabric server installed successfully.");
+        resolve();
+      } else {
+        reject(new Error(`Fabric installer failed (exit ${code})`));
+      }
     });
-  } catch (err) {
-    console.error(`Failed to install Fabric server: ${err.message}`);
-    process.exit(1);
-  }
+  });
 }
 
 async function installMods(versionId) {
   const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =
     JAVA.SERVER.VANILLA.MODS;
+  const modsDir = path.join(outputDir, "mods");
+  if (!fs.existsSync(modsDir)) fs.mkdirSync(modsDir, { recursive: true });
 
-  const modGroups = [
-    { name: "performance", bool: PERFORMANCE_MODS },
-    { name: "utility", bool: UTILITY_MODS },
-    { name: "optional", bool: OPTIONAL_MODS },
+  const categories = [
+    { flag: PERFORMANCE_MODS, name: "performance" },
+    { flag: UTILITY_MODS, name: "utility" },
+    { flag: OPTIONAL_MODS, name: "optional" },
   ];
 
-  const modsToInstall = modGroups.filter((group) => group.file);
-  if (modsToInstall.length === 0) {
-    console.log("No mods specified for download.");
-    return;
-  }
-
-  console.log(`Not all mods are guaranteed to be available for ${versionId}.`);
-
-  for (const { name, bool } of modsToInstall) {
-    if (!bool) {
-      console.log(`Skipping ${name} mods download.`);
+  for (const { flag, name } of categories) {
+    if (!flag) {
+      console.log(`Skipping ${name} mods.`);
       continue;
     }
-    const filePath = path.join(__dirname, `${name}_mods.txt`);
-    console.log(`Downloading ${name} mods...`);
-    await downloadFabricMods(filePath);
+
+    const modFile = path.join(__dirname, `${name}_mods.txt`);
+    if (!fs.existsSync(modFile)) {
+      console.warn(`Missing ${modFile}, skipping.`);
+      continue;
+    }
+
+    console.log(`Installing ${name} mods...`);
+    await spawnModDownloader(modFile, modsDir);
   }
 }
 
-async function downloadFabricMods(modsFilePath) {
-  const downloadModsPath = path.resolve(
+async function downloadFile(url, destPath) {
+  const writer = fs.createWriteStream(destPath);
+  const resp = await axios.get(url, { responseType: "stream" });
+  resp.data.pipe(writer);
+
+  return new Promise((res, rej) => {
+    writer.on("finish", res);
+    writer.on("error", rej);
+  });
+}
+
+async function spawnModDownloader(modsFilePath, modsDir) {
+  const modDownloader = path.resolve(
     __dirname,
     "..",
     "..",
@@ -156,33 +141,22 @@ async function downloadFabricMods(modsFilePath) {
     "download_mods.js"
   );
 
-  console.log(`Starting mod download from ${modsFilePath}...`);
-
   await new Promise((resolve, reject) => {
     const child = spawn(
       "node",
       [
-        downloadModsPath,
+        modDownloader,
         `--modIdsFile=${modsFilePath}`,
-        `--downloadDir=${path.join(outputDir, "mods")}`,
+        `--downloadDir=${modsDir}`,
       ],
-      { stdio: ["inherit", "pipe", "pipe"] }
+      { stdio: "inherit" }
     );
 
-    child.stdout.on("data", (data) => process.stdout.write(data));
-    child.stderr.on("data", (data) => process.stderr.write(data));
-
-    child.on("close", (code) => {
+    child.on("exit", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`Child process exited with code ${code}`));
+      else reject(new Error(`Mod downloader failed with exit ${code}`));
     });
   });
 }
 
-(async () => {
-  try {
-    await installMinecraftServer();
-  } catch (error) {
-    console.error("Error during installation:", error.message);
-  }
-})();
+installMinecraftServer();
