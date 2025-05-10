@@ -17,14 +17,11 @@ async function installMinecraftServer() {
   const useFabric = VANILLA_CONFIG.USE_FABRIC;
 
   try {
-    const { versionId, metadataUrl } = await getVersionInfo(
-      requestedVersion,
-      allowSnapshot
-    );
+    const { versionId, metadataUrl } = await getVersionInfo(requestedVersion, allowSnapshot);
 
     if (useFabric) {
       await installFabricServer(versionId);
-      await installMods();
+      await installMods(versionId);
     } else {
       await installVanillaServer(versionId, metadataUrl);
     }
@@ -101,12 +98,10 @@ async function installFabricServer(versionId) {
           console.log(`Fabric server ${versionId} installed in ${outputDir}`);
           fs.unlinkSync(installerPath);
 
-          const generatedJar = path.join(outputDir, "server.jar");
-          if (fs.existsSync(generatedJar)) {
-            fs.renameSync(generatedJar, jarPath);
-            console.log(`Renamed server.jar to ${path.basename(jarPath)}`);
+          if (fs.existsSync(jarPath)) {
+            console.log(`Fabric server jar created: ${jarPath}`);
           } else {
-            console.warn(`Expected server.jar not found in ${outputDir}`);
+            console.warn(`Expected jar not found in ${outputDir}`);
           }
           resolve();
         } else {
@@ -117,13 +112,12 @@ async function installFabricServer(versionId) {
     });
   } catch (err) {
     console.error(`Failed to install Fabric server: ${err.message}`);
-    process.exit(1); // Exit the script on failure
+    process.exit(1);
   }
 }
 
-async function installMods() {
-  const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =
-    JAVA.SERVER.VANILLA.MODS;
+async function installMods(versionId) {
+  const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } = JAVA.SERVER.VANILLA.MODS;
 
   const modGroups = [
     { name: "performance", file: PERFORMANCE_MODS },
@@ -132,7 +126,6 @@ async function installMods() {
   ];
 
   const modsToInstall = modGroups.filter((group) => group.file);
-
   if (modsToInstall.length === 0) {
     console.log("No mods specified for download.");
     return;
@@ -148,14 +141,7 @@ async function installMods() {
 }
 
 async function downloadFabricMods(modsFilePath) {
-  const downloadModsPath = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "setup",
-    "download",
-    "download_mods.js"
-  );
+  const downloadModsPath = path.resolve(__dirname, "..", "..", "setup", "download", "download_mods.js");
 
   console.log(`Starting mod download from ${modsFilePath}...`);
 
@@ -167,25 +153,15 @@ async function downloadFabricMods(modsFilePath) {
         `--modIdsFile=${modsFilePath}`,
         `--downloadDir=${path.join(outputDir, "mods")}`,
       ],
-      {
-        stdio: ["inherit", "pipe", "pipe"],
-      }
+      { stdio: ["inherit", "pipe", "pipe"] }
     );
 
-    child.stdout.on("data", (data) => {
-      process.stdout.write(data);
-    });
-
-    child.stderr.on("data", (data) => {
-      process.stderr.write(data);
-    });
+    child.stdout.on("data", (data) => process.stdout.write(data));
+    child.stderr.on("data", (data) => process.stderr.write(data));
 
     child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`Child process exited with code ${code}`));
-      }
+      if (code === 0) resolve();
+      else reject(new Error(`Child process exited with code ${code}`));
     });
   });
 }
