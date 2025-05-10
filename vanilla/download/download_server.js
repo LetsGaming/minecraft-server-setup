@@ -82,16 +82,14 @@ async function installFabricServer(versionId) {
     writer.on("error", reject);
   });
 
+  const jabbaShPath = path.join(process.env.HOME, ".jabba", "jabba.sh");
+
   await new Promise((resolve, reject) => {
     const java = spawn(
-      "java",
+      "/bin/bash",
       [
-        "-jar",
-        installerPath,
-        "server",
-        "-mcversion",
-        versionId,
-        "-downloadMinecraft",
+        "-c",
+        `source ${jabbaShPath} && java -jar ${installerPath} server -mcversion ${versionId} -downloadMinecraft`,
       ],
       { cwd: outputDir, stdio: "inherit" }
     );
