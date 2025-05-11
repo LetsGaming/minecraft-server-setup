@@ -2,9 +2,8 @@
 set -e
 
 run_modpack_setup() {
-  log "Downloading required packages..."
-  run_or_echo "bash \"$SCRIPT_DIR/setup/download/download_packages.sh\""
-
+  run_setup_startup
+  
   log "Downloading modpack..."
   run_or_echo "node \"$SCRIPT_DIR/setup/download/download_modpack.js\""
 
@@ -18,8 +17,7 @@ run_modpack_setup() {
 }
 
 run_vanilla_setup() {
-  log "Downloading required packages..."
-  run_or_echo "bash \"$SCRIPT_DIR/setup/download/download_packages.sh\""
+  run_setup_startup
 
   log "Downloading Jabba..."
   run_or_echo "bash \"$SCRIPT_DIR/vanilla/download/install_jabba.sh\""
@@ -39,10 +37,16 @@ run_vanilla_setup() {
   run_or_echo "node \"$SCRIPT_DIR/vanilla/structure/move_files.js\""
 }
 
-run_setup_steps() {
+run_setup_startup() {
+  log "Downloading required packages..."
+  run_or_echo "bash \"$SCRIPT_DIR/setup/download/download_packages.sh\""
+
+
   log "Creating server directory structure..."
   run_or_echo "node \"$SCRIPT_DIR/setup/structure/create_directories.js\""
+}
 
+run_setup_steps() {
   log "Setting variables..."
   run_or_echo "node \"$SCRIPT_DIR/setup/variables/set_common_variables.js\""
   run_or_echo "node \"$SCRIPT_DIR/setup/variables/set_update_variables.js\""
