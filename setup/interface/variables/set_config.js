@@ -26,7 +26,7 @@ if (manager_config.USER === "your_username") {
   changed = true;
 }
 
-if (manager_config.INSTANCE_NAME === "your_INSTANCE_NAME") {
+if (manager_config.INSTANCE_NAME === "your_instance_name") {
   manager_config.INSTANCE_NAME = INSTANCE_NAME;
   changed = true;
 }
