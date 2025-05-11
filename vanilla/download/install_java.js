@@ -2,6 +2,15 @@ const { execSync } = require("child_process");
 const { JAVA } = require("../../variables.json");
 const { getJavaVersionFor } = require("../../setup/download/download_utils.js");
 
+const fs = require('fs');
+const path = require('path');
+const loadVariables = require("../../setup/common/loadVariables");
+
+const {
+  TARGET_DIR_NAME,
+  INSTANCE_NAME
+} = loadVariables();
+
 function getLatestJabbaCandidate(javaVersion) {
   try {
     const listOutput = execSync(
@@ -34,10 +43,34 @@ function installJava(candidate) {
       { stdio: "inherit" }
     );
     console.log(`Java ${candidate} installed and activated.`);
+    setServerVariable(candidate);
   } catch (err) {
     console.error(`Java installation failed: ${err.message}`);
     process.exit(1);
   }
+}
+
+function setServerVariable(candidate) {
+  const version = candidate.split("@")[1];
+  const javaPath = `${process.env.HOME}/.jabba/jdk/${candidate}`;
+  const javaBin = `${javaPath}/bin/java`;
+
+  // Define the path to the variables.txt file
+  const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, INSTANCE_NAME);
+  const variablesTxtPath = path.join(MODPACK_DIR, "variables.txt");
+
+  // Add the JAVA variable to variables.txt
+  const javaVariableLine = `JAVA=${javaBin}\n`;
+
+  // Check if variables.txt exists and append the JAVA variable to it
+  if (fs.existsSync(variablesTxtPath)) {
+    fs.appendFileSync(variablesTxtPath, javaVariableLine);
+  } else {
+    // If the file doesn't exist, create it and write the JAVA variable
+    fs.writeFileSync(variablesTxtPath, javaVariableLine);
+  }
+
+  console.log(`JAVA variable set to: ${javaBin}`);
 }
 
 // Entry point

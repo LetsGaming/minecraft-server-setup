@@ -33,14 +33,19 @@ setup_server_run_command() {
     
 runJavaCommand() {
     local command="$1"
-    local java_command="java ${command}"
+    
+    # Use the JAVA variable set in variables.txt
+    local java_command="${JAVA} ${command}"
+    
     if [[ "${VERBOSE}" == "true" ]]; then
         echo "Running command: ${java_command}"
     fi
+    
     if [[ "${DRY_RUN}" == "true" ]]; then
         echo "Dry run: ${java_command}"
     else
-        java ${command}
+        # Execute the java command using the JAVA variable
+        ${JAVA} ${command}
     fi
 }
 
