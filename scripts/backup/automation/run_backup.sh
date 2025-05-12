@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKUP_SCRIPT="$SCRIPT_DIR/../backup.sh"
+AUTOMATION_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKUP_SCRIPT="$AUTOMATION_SCRIPT_DIR/../backup.sh"
 
-source "$SCRIPT_DIR/../../common/load_variables.sh"
+source "$AUTOMATION_SCRIPT_DIR/../../common/load_variables.sh"
 STATE_DIR="/tmp/backup_flags"
 
 mkdir -p "$STATE_DIR"
@@ -45,4 +45,4 @@ fi
 echo "[$(date +'%F %T')] Starting hourly backup..."
 bash "$BACKUP_SCRIPT"
 
-bash "$SCRIPT_DIR/cleanup_backups.sh"
+bash "$AUTOMATION_SCRIPT_DIR/cleanup_backups.sh"
