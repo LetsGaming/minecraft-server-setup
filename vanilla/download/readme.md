@@ -12,6 +12,7 @@ Boost server efficiency without impacting gameplay or compatibility:
 * Lithium – An optimization mod for Minecraft which improves server performance significantly
 * Smooth Chunk Save – Enables lag-free continuous chunk saving, increasing server TPS
 * Connectivity - Fix Login timeouts, Packet sizes errors, Payloads errors, ghostblocks and more.
+* Krypton - Krypton is a Fabric mod that attempts to optimize the Minecraft networking stack. 
 * ScalableLux - A Fabric mod based on Starlight that improves the performance of light updates in Minecraft.
 * Let Me Despawn - Improves performance by tweaking mob despawn rules.
 * Get It Together, Drops! - Adds tags and configuration options for defining how dropped items should combine.
@@ -27,6 +28,7 @@ Add backend tools or server-side features:
 * Login Protection - Protects the player during login from any harm
 * Chunky – Pre-generates chunks, quickly, efficiently, and safely
 * FallingTree - Break down your trees by only cutting one piece of it
+* Better Than Mending - A small quality of life tweak to the Mending enchantment
 
 ### Optional Mods
 
