@@ -37,6 +37,7 @@ Nice-to-have, but not required for running or joining the server:
 * JourneyMap – Real-time mapping in-game or your browser as you explore.
 * Simple Voice Chat – A working voice chat in Minecraft!
 * REI - Roughly Enough Items
+* Anvil Never Too Expensive - Removes the level cap in the Anvil GUI
 
 ## Configuration
 
