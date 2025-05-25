@@ -61,6 +61,6 @@ do
       fi
     exit 0
   fi
-  echo "Automatically restarting server in 5 seconds. Press CTRL + C to abort and exit."
-  sleep 5
+  echo "Automatically restarting server in 15 seconds. Press CTRL + C to abort and exit."
+  sleep 15
 done

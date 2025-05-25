@@ -33,17 +33,16 @@ log_raw() {
 }
 
 # Defaults
-ADMIN_USERNAME=""
+ADMIN_USERNAMES=()
 SERVER_PROPERTIES_FILE="$SERVER_PATH/server.properties"
 MOTD_BACKUP_FILE="$MAINTENANCE_SCRIPT_DIR/.motd_backup"
-# Removed redundant LOG_FILE assignment here (it's in server_control.sh)
 KICK_PID=""
 
 # Args
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --admin)
-            ADMIN_USERNAME="$2"
+            IFS=',' read -ra ADMIN_USERNAMES <<< "$2"
             shift 2
             ;;
         *)
@@ -53,8 +52,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ -z "$ADMIN_USERNAME" ]]; then
-    log "ERROR" "--admin <username> is required."
+if [[ ${#ADMIN_USERNAMES[@]} -eq 0 ]]; then
+    log "ERROR" "--admin <username>[,<username2>,...] is required."
     exit 1
 fi
 
@@ -74,7 +73,6 @@ change_motd() {
     current_motd=$(grep '^motd=' "$SERVER_PROPERTIES_FILE" || echo "motd=")
     echo "$current_motd" > "$MOTD_BACKUP_FILE"
 
-    # Escape & | \ for sed and use | delimiter
     local escaped_motd
     escaped_motd=$(printf '%s' "$new_motd" | sed -e 's/[&|\\]/\\&/g')
     sed -i "s|^motd=.*|motd=$escaped_motd|" "$SERVER_PROPERTIES_FILE"
@@ -120,8 +118,16 @@ kick_unauthorized_players() {
     tail -n0 -F "$LOG_FILE" 2>/dev/null | while read -r line; do
         if [[ "$line" =~ \]:\ ([a-zA-Z0-9_]+)\ joined\ the\ game ]]; then
             local player="${BASH_REMATCH[1]}"
-            # Case-insensitive comparison
-            if [[ "${player,,}" != "${ADMIN_USERNAME,,}" ]]; then
+            local player_lower="${player,,}"
+            local is_admin=false
+            for admin in "${ADMIN_USERNAMES[@]}"; do
+                if [[ "$player_lower" == "${admin,,}" ]]; then
+                    is_admin=true
+                    break
+                fi
+            done
+
+            if [[ "$is_admin" == false ]]; then
                 log "INFO" "Kicking unauthorized player: $player"
                 send_command "kick $player Server is under maintenance"
             else
@@ -132,7 +138,7 @@ kick_unauthorized_players() {
 }
 
 # Main
-log "INFO" "Starting maintenance mode (admin: $ADMIN_USERNAME)"
+log "INFO" "Starting maintenance mode (admins: ${ADMIN_USERNAMES[*]})"
 change_motd "§4§l! Maintenance Mode !§r\n§6Please come back later"
 send_command "say Server is restarting for maintenance. Please reconnect later."
 restart_server
