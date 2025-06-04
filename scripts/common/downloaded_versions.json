@@ -1,0 +1,11 @@
+{
+  "modLoader": "fabric",
+  "gameVersion": "1.21.5",
+  "modpack": {},
+  "mods": {
+    "clumps": "nH8YfRWs",
+    "fabric-api": "1Hweb6k1",
+    "sodium": "DA250htH",
+    "lithium": "VWYoZjBF"
+  }
+}

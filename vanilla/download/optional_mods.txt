@@ -1,4 +1,6 @@
-32274
-416089
-310111
-670282
+xaeros-world-map
+xaeros-minimap
+simple-voice-chat
+enhanced-groups
+rei
+ante

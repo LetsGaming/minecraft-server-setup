@@ -186,8 +186,8 @@ const saveModLoader = (modLoader) => {
 };
 
 const MINECRAFT_JAVA_MAP = [
-  { mc: "1.21", java: "21" },
-  { mc: "1.20", java: "17" },
+  { mc: "1.21", java: "24" },
+  { mc: "1.20", java: "21" },
   { mc: "1.18", java: "17" },
   { mc: "1.17", java: "16" },
   { mc: "1.16", java: "8" },
@@ -233,6 +233,7 @@ async function getVersionInfo(requestedVersion, allowSnapshot) {
 }
 
 async function getMinecraftVersion() {
+  return "1.21.5"
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) {
     // No Modpack downloaded
@@ -251,6 +252,7 @@ async function getMinecraftVersion() {
 }
 
 function getModLoader() {
+  return "fabric";
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) {
     // No Modpack downloaded

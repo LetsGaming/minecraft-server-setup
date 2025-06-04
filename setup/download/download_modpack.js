@@ -1,6 +1,6 @@
 const axios = require("axios");
 const path = require("path");
-const { pack_id, api_key } = require("./curseforge_variables.json");
+const { project_slug, version_id } = require("./modrinth_variables.json");
 const {
   createDownloadDir,
   formatBytes,
@@ -9,73 +9,62 @@ const {
 } = require("./download_utils");
 
 // Validate input
-if (!pack_id || !api_key || pack_id === "none" || api_key === "none") {
+if (
+  !project_slug ||
+  !version_id ||
+  project_slug === "none" ||
+  version_id === "none"
+) {
   console.error(
-    'Error: pack_id or api_key is missing or set to "none". Please check curseforge_variables.json.'
+    'Error: project_slug or version_id is missing or set to "none". Please check modrinth_variables.json.'
   );
   process.exit(1);
 }
-
-const packID = pack_id;
-const curseforgeAPIKey = api_key;
 
 createDownloadDir(path.join(__dirname, "temp"));
 
 fetchModPackInfo();
 
 function fetchModPackInfo() {
-  // Fetching modpack info from CurseForge API
   axios
-    .get(`https://api.curseforge.com/v1/mods/${packID}`, {
-      headers: { "x-api-key": curseforgeAPIKey },
-    })
+    .get(`https://api.modrinth.com/v2/version/${version_id}`)
     .then((response) => {
-      const mainFileId = response.data.data.mainFileId;
-      if (!mainFileId) {
-        throw new Error("No main file ID found for the modpack.");
-      }
-      // Fetching the main file info
-      return axios.get(
-        `https://api.curseforge.com/v1/mods/${packID}/files/${mainFileId}`,
-        {
-          headers: { "x-api-key": curseforgeAPIKey },
-        }
+      const versionData = response.data;
+
+      const serverFiles = versionData.files.filter(
+        (f) =>
+          f.filename.toLowerCase().includes("server") &&
+          f.url &&
+          f.filename.endsWith(".zip")
       );
-    })
-    .then((response) => {
-      const serverPackFileId = response.data.data.serverPackFileId;
-      if (!serverPackFileId) {
-        throw new Error("No server pack file ID found for the modpack.");
+
+      const serverFile = serverFiles[0] || versionData.files[0];
+
+      if (!serverFile) {
+        throw new Error("No server pack file found for the modpack.");
       }
-      // Fetching the server pack file info
-      return axios.get(
-        `https://api.curseforge.com/v1/mods/${packID}/files/${serverPackFileId}`,
-        {
-          headers: { "x-api-key": curseforgeAPIKey },
-        }
-      );
-    })
-    .then((response) => {
-      if (!response.data.data) {
-        throw new Error("No data found for the server pack file.");
-      }
-      const fileData = response.data.data;
-      const gameVersions = fileData.gameVersions || [];
-      const modLoader = gameVersions[0] || "none";
-      const gameVersion = gameVersions[1] || "none";
+
+      const gameVersion = versionData.game_versions[0] || "none";
+      const modLoader = versionData.loaders?.[0] || "none";
 
       console.log(
-        `Downloading server pack (${formatBytes(fileData.fileLength)})...`
+        `Downloading server pack (${formatBytes(serverFile.size || 0)})...`
       );
+
       const outputPath = path.join(__dirname, "temp", "server-pack.zip");
 
       return downloadFile(
-        fileData.downloadUrl,
+        serverFile.url,
         outputPath,
-        fileData.fileLength
+        serverFile.size || 0
       ).then(() => {
-        // Save downloaded version info
-        saveDownloadedVersion("modpack", packID, fileData.id, modLoader, gameVersion);
+        saveDownloadedVersion(
+          "modpack",
+          project_slug,
+          version_id,
+          modLoader,
+          gameVersion
+        );
       });
     })
     .catch((err) => {
