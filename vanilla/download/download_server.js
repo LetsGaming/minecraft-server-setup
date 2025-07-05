@@ -177,7 +177,7 @@ async function spawnModDownloader(modsFilePath, modsDir) {
       "node",
       [
         modDownloader,
-        `--modIdsFile=${modsFilePath}`,
+        `--modSlugsFile=${modsFilePath}`,
         `--downloadDir=${modsDir}`,
       ],
       { stdio: "inherit" }
