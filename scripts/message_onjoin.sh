@@ -16,7 +16,7 @@ touch "$LOCK_FILE"
 init_log_file "$ONJOIN_DIR/logs" "onjoin_message.log"
 
 # Defaults
-MESSAGE_FILE="$ONJOIN_DIR/.welcomed_players"
+MESSAGE_FILE="$ONJOIN_DIR/.messaged_players"
 DEFAULT_TITLE="§lWelcome!"
 TITLE="$DEFAULT_TITLE"
 MESSAGE="§6Please read the server rules."
