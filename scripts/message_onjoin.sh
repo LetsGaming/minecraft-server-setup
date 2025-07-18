@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common/server_control.sh"
-source "$SCRIPT_DIR/common/utils.sh"
+ONJOIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$ONJOIN_DIR/common/server_control.sh"
+source "$ONJOIN_DIR/common/utils.sh"
 
 LOCK_FILE="/tmp/minecraft_onjoin_message.lock"
 if [ -e "$LOCK_FILE" ]; then
@@ -13,10 +13,10 @@ fi
 trap 'rm -f "$LOCK_FILE"' EXIT
 touch "$LOCK_FILE"
 
-init_log_file "$SCRIPT_DIR/logs" "onjoin_message.log"
+init_log_file "$ONJOIN_DIR/logs" "onjoin_message.log"
 
 LOG_FILE="$SERVER_PATH/logs/latest.log"
-MESSAGE_FILE="$SCRIPT_DIR/.welcomed_players"
+MESSAGE_FILE="$ONJOIN_DIR/.welcomed_players"
 JOIN_MESSAGE="§6Welcome! §fPlease make sure to read the server rules."
 
 touch "$MESSAGE_FILE"
