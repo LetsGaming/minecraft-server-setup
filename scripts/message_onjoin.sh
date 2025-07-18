@@ -33,10 +33,6 @@ Options:
                            title="…" and message="…"
   --admin=USER1,USER2    Comma‑separated admins to skip messaging
   --help                 Show this help and exit
-
-Examples:
-  $(basename "$0") --title="§lHello!" --message="Enjoy your stay."
-  $(basename "$0") --messageFile="./welcome.conf" --admin=Notch,Herobrine
 EOF
 }
 
@@ -44,22 +40,18 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --help|-h)
-            print_usage
-            exit 0
+            print_usage; exit 0
             ;;
         --title=*)
-            TITLE="${1#*=}"
-            shift
+            TITLE="${1#*=}"; shift
             ;;
         --message=*)
-            MESSAGE="${1#*=}"
-            shift
+            MESSAGE="${1#*=}"; shift
             ;;
         --messageFile=*)
             mf="${1#*=}"
             if [[ ! -f "$mf" ]]; then
-                log "ERROR" "Message file not found: $mf"
-                exit 1
+                log "ERROR" "Message file not found: $mf"; exit 1
             fi
             while IFS= read -r line; do
                 if [[ "$line" =~ ^title=\"(.*)\" ]]; then
@@ -71,13 +63,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --admin=*)
-            IFS=',' read -ra ADMIN_USERS <<< "${1#*=}"
-            shift
+            IFS=',' read -ra ADMIN_USERS <<< "${1#*=}"; shift
             ;;
         *)
             log "ERROR" "Unknown argument: $1"
-            print_usage
-            exit 1
+            print_usage; exit 1
             ;;
     esac
 done
@@ -90,22 +80,23 @@ handle_player_welcome() {
 
     for adm in "${ADMIN_USERS[@]}"; do
         if [[ "$pl_lower" == "${adm,,}" ]]; then
-            log "DEBUG" "Skipping admin $player"
-            return
+            log "DEBUG" "Skipping admin $player"; return
         fi
     done
 
     if grep -iq "^$pl_lower\$" "$MESSAGE_FILE"; then
-        log "DEBUG" "Already welcomed $player"
-        return
+        log "DEBUG" "Already welcomed $player"; return
     fi
 
     log "INFO" "Sending title to $player"
-    esc_title=$(printf '%s' "$TITLE" | sed 's/"/\\"/g')
-    esc_msg=$(printf '%s' "$MESSAGE" | sed 's/"/\\"/g')
+    # Build JSON components
+    local title_json subtitle_json
+    title_json="{\"text\":\"$TITLE\"}"
+    subtitle_json="{\"text\":\"$MESSAGE\"}"
 
-    send_command "title $player title $esc_title"
-    send_command "title $player subtitle $esc_msg"
+    # Java Edition JSON /title
+    send_command "/title $player title $title_json"
+    send_command "/title $player subtitle $subtitle_json"
 
     echo "$pl_lower" >> "$MESSAGE_FILE"
 }
