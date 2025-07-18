@@ -1,44 +1,25 @@
 #!/usr/bin/env bash
 set -e
 
-MAINTENANCE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$MAINTENANCE_SCRIPT_DIR/common/server_control.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common/server_control.sh"
+source "$SCRIPT_DIR/common/utils.sh"
 
-# Lock file to prevent concurrent runs
 LOCK_FILE="/tmp/minecraft_maintenance.lock"
-
 if [ -e "$LOCK_FILE" ]; then
     echo "Maintenance script already running (lock file $LOCK_FILE exists). Exiting."
     exit 1
 fi
-
 trap 'rm -f "$LOCK_FILE"' EXIT
 touch "$LOCK_FILE"
 
-# Ensure log directory exists
-mkdir -p "$MAINTENANCE_SCRIPT_DIR/logs"
-log_file_path="$MAINTENANCE_SCRIPT_DIR/logs/maintenance.log"
+init_log_file "$SCRIPT_DIR/logs" "maintenance.log"
 
-log() {
-    local level="$1"
-    shift
-    local msg
-    msg="$(date +'%F %T') [$level] $*"
-    echo "$msg"
-    echo "$msg" >> "$log_file_path"
-}
-
-log_raw() {
-    echo "$@"
-}
-
-# Defaults
 ADMIN_USERNAMES=()
 SERVER_PROPERTIES_FILE="$SERVER_PATH/server.properties"
-MOTD_BACKUP_FILE="$MAINTENANCE_SCRIPT_DIR/.motd_backup"
+MOTD_BACKUP_FILE="$SCRIPT_DIR/.motd_backup"
 KICK_PID=""
 
-# Args
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --admin)
@@ -57,10 +38,8 @@ if [[ ${#ADMIN_USERNAMES[@]} -eq 0 ]]; then
     exit 1
 fi
 
-# Handle Ctrl+C gracefully
 trap 'log "INFO" "Interrupted by user"; exit 0' INT
 
-# MOTD Control
 change_motd() {
     local new_motd="$1"
     local current_motd
@@ -95,7 +74,7 @@ restore_motd() {
 
 restart_server() {
     log "INFO" "Restarting server..."
-    bash "$MAINTENANCE_SCRIPT_DIR/restart.sh" --force
+    bash "$SCRIPT_DIR/restart.sh" --force
 }
 
 cleanup() {
@@ -111,39 +90,37 @@ cleanup() {
 
 trap cleanup EXIT
 
-# Player Monitor
-kick_unauthorized_players() {
-    log "INFO" "Monitoring player joins to kick unauthorized users..."
+handle_join_during_maintenance() {
+    local player="$1"
+    local player_lower="${player,,}"
+    local is_admin=false
 
-    tail -n0 -F "$LOG_FILE" 2>/dev/null | while read -r line; do
-        if [[ "$line" =~ \]:\ ([a-zA-Z0-9_]+)\ joined\ the\ game ]]; then
-            local player="${BASH_REMATCH[1]}"
-            local player_lower="${player,,}"
-            local is_admin=false
-            for admin in "${ADMIN_USERNAMES[@]}"; do
-                if [[ "$player_lower" == "${admin,,}" ]]; then
-                    is_admin=true
-                    break
-                fi
-            done
-
-            if [[ "$is_admin" == false ]]; then
-                log "INFO" "Kicking unauthorized player: $player"
-                send_command "kick $player Server is under maintenance"
-            else
-                log "INFO" "Admin $player joined, not kicking."
-            fi
+    for admin in "${ADMIN_USERNAMES[@]}"; do
+        if [[ "$player_lower" == "${admin,,}" ]]; then
+            is_admin=true
+            break
         fi
     done
+
+    if [[ "$is_admin" == false ]]; then
+        log "INFO" "Kicking unauthorized player: $player"
+        send_command "kick $player Server is under maintenance"
+    else
+        log "INFO" "Admin $player joined, not kicking."
+    fi
 }
 
-# Main
+start_kick_monitor() {
+    log "INFO" "Monitoring player joins to kick unauthorized users..."
+    on_player_join "$LOG_FILE" handle_join_during_maintenance
+}
+
 log "INFO" "Starting maintenance mode (admins: ${ADMIN_USERNAMES[*]})"
 change_motd "§4§l! Maintenance Mode !§r\n§6Please come back later"
 send_command "say Server is restarting for maintenance. Please reconnect later."
 restart_server
 
-kick_unauthorized_players &
+start_kick_monitor &
 KICK_PID=$!
 
 log_raw "[INFO] Maintenance mode active. Press Ctrl+C to exit."
