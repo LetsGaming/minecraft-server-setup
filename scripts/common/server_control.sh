@@ -1,114 +1,133 @@
-#!/usr/bin/env bash
+#!/bin/bash
+
 set -e
 
+# Get the absolute path of the directory where *this script* resides
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common/server_control.sh"
-source "$SCRIPT_DIR/common/utils.sh"
 
-LOCK_FILE="/tmp/minecraft_onjoin_message.lock"
-if [ -e "$LOCK_FILE" ]; then
-    echo "Script already running (lock file $LOCK_FILE exists). Exiting."
-    exit 1
-fi
-trap 'rm -f "$LOCK_FILE"' EXIT
-touch "$LOCK_FILE"
+# Load variables from the common folder
+source "$SCRIPT_DIR/load_variables.sh"
 
-init_log_file "$SCRIPT_DIR/logs" "onjoin_message.log"
+# Reference log file based on loaded variable
+LOG_FILE="$SERVER_PATH/logs/latest.log"
 
-# Defaults
-MESSAGE_FILE="$SCRIPT_DIR/.welcomed_players"
-DEFAULT_TITLE="§lWelcome!"
-TITLE="$DEFAULT_TITLE"
-MESSAGE="§6Have a great time on the server!"
-ADMIN_USERS=()
-
-print_usage() {
-    cat <<EOF
-Usage: $(basename "$0") [options]
-
-Options:
-  --title=TEXT           Title text to display (default: $DEFAULT_TITLE)
-  --message=TEXT         Subtitle/message text (default: $MESSAGE)
-  --messageFile=PATH     Read TITLE and MESSAGE from a file containing lines:
-                           title="…" and message="…"
-  --admin=USER1,USER2    Comma‑separated admins to skip messaging
-  --help                 Show this help and exit
-
-Examples:
-  $(basename "$0") --title="§lHello!" --message="Enjoy your stay."
-  $(basename "$0") --messageFile="./welcome.conf" --admin=Notch,Herobrine
-EOF
+session_running() {
+    # Check if the screen session is running
+    if screen -list | grep -q "$INSTANCE_NAME"; then
+        return 0  # Session is running
+    else
+        return 1  # Session is not running
+    fi
 }
 
-# Parse args
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --help|-h)
-            print_usage
-            exit 0
-            ;;
-        --title=*)
-            TITLE="${1#*=}"
-            shift
-            ;;
-        --message=*)
-            MESSAGE="${1#*=}"
-            shift
-            ;;
-        --messageFile=*)
-            mf="${1#*=}"
-            if [[ ! -f "$mf" ]]; then
-                log "ERROR" "Message file not found: $mf"
-                exit 1
-            fi
-            while IFS= read -r line; do
-                if [[ "$line" =~ ^title=\"(.*)\" ]]; then
-                    TITLE="${BASH_REMATCH[1]}"
-                elif [[ "$line" =~ ^message=\"(.*)\" ]]; then
-                    MESSAGE="${BASH_REMATCH[1]}"
-                fi
-            done < "$mf"
-            shift
-            ;;
-        --admin=*)
-            IFS=',' read -ra ADMIN_USERS <<< "${1#*=}"
-            shift
-            ;;
-        *)
-            log "ERROR" "Unknown argument: $1"
-            print_usage
-            exit 1
-            ;;
-    esac
-done
+read_log() {
+    if [ -f "$LOG_FILE" ]; then
+        # Use tail to get the last 10 lines of the log file
+        tail -n 10 "$LOG_FILE"
+    else
+        echo "Log file not found: $LOG_FILE"
+        return 1
+    fi
+}
 
-touch "$MESSAGE_FILE"
-
-handle_player_welcome() {
-    local player="$1"
-    local pl_lower="${player,,}"
-
-    for adm in "${ADMIN_USERS[@]}"; do
-        if [[ "$pl_lower" == "${adm,,}" ]]; then
-            log "DEBUG" "Skipping admin $player"
-            return
-        fi
-    done
-
-    if grep -iq "^$pl_lower\$" "$MESSAGE_FILE"; then
-        log "DEBUG" "Already welcomed $player"
-        return
+send_command() {
+    # Check if the screen session is running
+    if ! session_running; then
+        echo "Screen session '$INSTANCE_NAME' is not running. Cannot send command."
+        return 1
     fi
 
-    log "INFO" "Sending title to $player"
-    esc_title=$(printf '%s' "$TITLE" | sed 's/"/\\"/g')
-    esc_msg=$(printf '%s' "$MESSAGE" | sed 's/"/\\"/g')
+    # Check if command has / prefix is provided if not add it
+    if [[ "$1" != /* ]]; then
+        echo "Command must start with a /, adding it automatically."
+        command="/$1"
+    else
+        command="$1"
+    fi
 
-    send_command "title $player title $esc_title"
-    send_command "title $player subtitle $esc_msg"
 
-    echo "$pl_lower" >> "$MESSAGE_FILE"
+    command=$1
+    if [ "$(id -u)" -eq 0 ]; then
+        # If running as root (sudo), use sudo -u to run the command as the specified user
+        sudo -u $USER screen -S $INSTANCE_NAME -p 0 -X stuff "$command$(printf \\r)"
+    else
+        # If not running as root, just run the command normally
+        screen -S $INSTANCE_NAME -p 0 -X stuff "$command$(printf \\r)"
+    fi
 }
 
-log "INFO" "Watching for joins to send /title"
-on_player_join "$LOG_FILE" handle_player_welcome
+# Function to send a message to the server via /say command in the Minecraft server
+send_message() {
+    message=$1
+    send_command "/say $message"
+}
+
+# Function to disable auto saving
+disable_auto_save() {
+    send_command "/save-off"
+}
+
+# Function to re-enable auto saving
+enable_auto_save() {
+    send_command "/save-on"
+}
+
+get_player_list() {
+    if ! session_running; then
+        echo "Screen session '$INSTANCE_NAME' is not running. Cannot get player list."
+        return 1
+    fi
+
+    if send_command "/list"; then
+        LOG_LINE=$(read_log | grep -E "There are [0-9]+ of a max of [0-9]+ players online:" | tail -n 1)
+
+        if [ -n "$LOG_LINE" ]; then
+            PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/.*There are [0-9]* of a max of [0-9]* players online: \(.*\)/\1/p')
+            if [ -n "$PLAYER_LIST" ]; then
+                # Normalize spacing and echo as a comma-separated string
+                echo "$PLAYER_LIST" | sed 's/, */, /g' | sed 's/^ *//;s/ *$//'
+            fi
+        fi
+    else
+        echo "Failed to get player list."
+        return 1
+    fi
+}
+
+# Get the number of players currently online
+get_player_count() {
+    player_list=$(get_player_list)
+    echo "$player_list" | grep -o '\S' | wc -l
+}
+
+# Function to check if the server has completed the save-all process by monitoring the log file
+wait_for_save_completion() {
+    if ! session_running; then
+        echo "Screen session '$INSTANCE_NAME' is not running. Cannot wait for save completion."
+        return 1
+    fi
+    
+    echo "Waiting for save to complete..."
+    # Tail the log file and look for the "Saved the game" message
+    tail -n 0 -f "$LOG_FILE" | while read line; do
+        if echo "$line" | grep -q "Saved the game"; then
+            echo "Save completed."
+            break
+        fi
+    done
+}
+
+# Function to countdown before shutdown or restart
+countdown() {
+    for i in 5 4 3 2 1; do
+        send_message "$1 in §4$i§r seconds!"
+        sleep 1  # Pause for 1 second to display each countdown message
+    done
+}
+
+# Function to perform server save and wait for completion
+save_and_wait() {
+    send_message "Saving the server now to ensure no data is lost..."
+    send_command "/save-all"
+    wait_for_save_completion
+}
