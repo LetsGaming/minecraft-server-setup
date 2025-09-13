@@ -1,6 +1,3 @@
-# Outdated
-## Todo: Update for Modrinth
-
 # CurseForge Modpack Downloader
 
 This JavaScript script allows you to download a modpack from CurseForge using the CurseForge API. It reads configuration details (like the `pack_id` and `api_key`) from `curseforge_variables.json` file. If these details are missing or incorrect, the script will notify you and exit gracefully.

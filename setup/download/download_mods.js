@@ -70,7 +70,7 @@ function getModSlugsFromArgs(args) {
 
 function getmodSlugsFromJson() {
   try {
-    const { mod_ids } = require("./modrinth_variables.json");
+    const { mod_ids } = require("./json/modrinth_variables.json");
     if (Array.isArray(mod_ids) && mod_ids.length > 0) {
       const ids = mod_ids.filter((id) => id && id !== "none");
       console.log(
