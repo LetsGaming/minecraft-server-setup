@@ -8,6 +8,8 @@ const {
   downloadFile,
   saveDownloadedVersion,
   isAlreadyDownloaded,
+  getMinecraftVersion,
+  getModLoader,
 } = require("./download_utils");
 
 // ==== Config & Argument Parsing ====
@@ -15,8 +17,15 @@ const {
 const args = process.argv.slice(2);
 const customDownloadDir = getDownloadDirFromArgs(args);
 const modSlugs = getModSlugsFromArgs(args) || getmodSlugsFromJson();
-const minecraftVersion = getMinecraftVersionFromArgs(args);
-const modLoader = getModLoaderFromArgs(args);
+let minecraftVersion = getMinecraftVersionFromArgs(args);
+if (!minecraftVersion) {
+  minecraftVersion = await getMinecraftVersion();
+}
+
+let modLoader = getModLoaderFromArgs(args);
+if (!modLoader) {
+  modLoader = await getModLoader();
+}
 
 validateSetup(minecraftVersion, modLoader, modSlugs);
 createDownloadDir(customDownloadDir);
