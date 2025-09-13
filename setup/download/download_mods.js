@@ -19,12 +19,16 @@ const customDownloadDir = getDownloadDirFromArgs(args);
 const modSlugs = getModSlugsFromArgs(args) || getmodSlugsFromJson();
 let minecraftVersion = getMinecraftVersionFromArgs(args);
 if (!minecraftVersion) {
-  minecraftVersion = await getMinecraftVersion();
+  (async () => {
+    minecraftVersion = await getMinecraftVersion();
+  })();
 }
 
 let modLoader = getModLoaderFromArgs(args);
 if (!modLoader) {
-  modLoader = await getModLoader();
+  (async () => {
+    modLoader = await getModLoader();
+  })();
 }
 
 validateSetup(minecraftVersion, modLoader, modSlugs);
