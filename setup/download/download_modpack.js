@@ -1,3 +1,4 @@
+const axios = require("axios");
 const path = require("path");
 const { pack_id, api_key } = require("./json/curseforge_variables.json");
 const {
@@ -6,75 +7,82 @@ const {
   downloadFile,
   saveDownloadedVersion,
 } = require("./download_utils");
-const axios = require("axios");
 
 // Validate input
 if (!pack_id || !api_key || pack_id === "none" || api_key === "none") {
   console.error(
-    "Error: pack_id or api_key is missing or incorrect. Please check the 'curseforge_variables.json' file."
+    'Error: pack_id or api_key is missing or set to "none". Please check curseforge_variables.json.'
   );
   process.exit(1);
 }
 
-// Ensure temp directory exists
-const tempDir = path.join(__dirname, "temp");
-createDownloadDir(tempDir);
+const packID = pack_id;
+const curseforgeAPIKey = api_key;
 
-const outputPath = path.join(tempDir, "server-pack.zip");
+createDownloadDir(path.join(__dirname, "temp"));
 
-(async () => {
-  try {
-    // 1. Fetch modpack files
-    const filesResponse = await axios.get(
-      `https://api.curseforge.com/v1/mods/${pack_id}/files`,
-      {
-        headers: { "x-api-key": api_key },
+fetchModPackInfo();
+
+function fetchModPackInfo() {
+  // Fetching modpack info from CurseForge API
+  axios
+    .get(`https://api.curseforge.com/v1/mods/${packID}`, {
+      headers: { "x-api-key": curseforgeAPIKey },
+    })
+    .then((response) => {
+      const mainFileId = response.data.data.mainFileId;
+      if (!mainFileId) {
+        throw new Error("No main file ID found for the modpack.");
       }
-    );
+      // Fetching the main file info
+      return axios.get(
+        `https://api.curseforge.com/v1/mods/${packID}/files/${mainFileId}`,
+        {
+          headers: { "x-api-key": curseforgeAPIKey },
+        }
+      );
+    })
+    .then((response) => {
+      const serverPackFileId = response.data.data.serverPackFileId;
+      if (!serverPackFileId) {
+        throw new Error("No server pack file ID found for the modpack.");
+      }
+      // Fetching the server pack file info
+      return axios.get(
+        `https://api.curseforge.com/v1/mods/${packID}/files/${serverPackFileId}`,
+        {
+          headers: { "x-api-key": curseforgeAPIKey },
+        }
+      );
+    })
+    .then((response) => {
+      if (!response.data.data) {
+        throw new Error("No data found for the server pack file.");
+      }
+      const fileData = response.data.data;
+      const gameVersions = fileData.gameVersions || [];
+      const modLoader = gameVersions[0] || "none";
+      const gameVersion = gameVersions[1] || "none";
 
-    const files = filesResponse.data?.data || [];
+      console.log(
+        `Downloading server pack (${formatBytes(fileData.fileLength)})...`
+      );
+      const outputPath = path.join(__dirname, "temp", "server-pack.zip");
 
-    if (!files.length) {
-      throw new Error("No files found for this modpack.");
-    }
-
-    // 2. Filter for server pack .zip (case-insensitive)
-    const serverFile = files.find((f) => {
-      const name = f.fileName?.toLowerCase() || "";
-      return name.includes("server") && name.endsWith(".zip");
+      return downloadFile(
+        fileData.downloadUrl,
+        outputPath,
+        fileData.fileLength
+      ).then(() => {
+        // Save downloaded version info
+        saveDownloadedVersion("modpack", packID, fileData.id, modLoader, gameVersion);
+      });
+    })
+    .catch((err) => {
+      console.error(
+        "Error during modpack download process:",
+        err.response?.data || err.message
+      );
+      process.exit(1);
     });
-
-    if (!serverFile) {
-      throw new Error("No server pack file found for this modpack.");
-    }
-
-    // Some API versions nest the download URL differently
-    const downloadUrl =
-      serverFile.downloadUrl || serverFile.download?.url;
-
-    if (!downloadUrl) {
-      throw new Error("Server pack download URL not found.");
-    }
-
-    const totalSize = serverFile.fileLength || 0;
-
-    console.log(`Downloading server pack (${formatBytes(totalSize)})...`);
-
-    // 3. Download using download_utils
-    await downloadFile(downloadUrl, outputPath, totalSize);
-
-    // 4. Save downloaded version info
-    saveDownloadedVersion(
-      "modpack",
-      pack_id,
-      serverFile.id,
-      serverFile.modLoader || null,
-      serverFile.gameVersion?.[0] || null
-    );
-
-    console.log("Server pack downloaded and version saved successfully!");
-  } catch (err) {
-    console.error("Error during modpack download process:", err.message);
-    process.exit(1);
-  }
-})();
+}
