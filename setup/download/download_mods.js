@@ -18,18 +18,23 @@ const modSlugs = getModSlugsFromArgs(args) || getmodSlugsFromJson();
 const minecraftVersion = getMinecraftVersionFromArgs(args);
 const modLoader = getModLoaderFromArgs(args);
 
-validateSetup(minecraftVersion, modLoader, modSlugs);
-createDownloadDir(customDownloadDir);
+try {
+  validateSetup(minecraftVersion, modLoader, modSlugs);
+  createDownloadDir(customDownloadDir);
 
-let processedMods = new Set();
+  let processedMods = new Set();
 
-// ==== Main Entrypoint ====
-(async () => {
-  for (const projectId of modSlugs) {
-    console.log(`\nProcessing project ID: ${projectId}`);
-    await downloadModrinthProject(projectId, minecraftVersion, modLoader);
-  }
-})();
+  // ==== Main Entrypoint ====
+  (async () => {
+    for (const projectId of modSlugs) {
+      console.log(`\nProcessing project ID: ${projectId}`);
+      await downloadModrinthProject(projectId, minecraftVersion, modLoader, processedMods);
+    }
+  })();
+} catch (err) {
+  console.error("Script aborted:", err.message);
+  // only exit this script’s execution, no process.exit
+}
 
 // ==== Argument Helpers ====
 
@@ -46,8 +51,7 @@ function getModSlugsFromArgs(args) {
 
   const filePath = path.resolve(fileArg.split("=")[1]);
   if (!fs.existsSync(filePath)) {
-    console.error(`Mod IDs file not found: ${filePath}`);
-    process.exit(1);
+    throw new Error(`Mod IDs file not found: ${filePath}`);
   }
 
   try {
@@ -61,8 +65,7 @@ function getModSlugsFromArgs(args) {
       return ids;
     }
   } catch (err) {
-    console.error(`Failed to read mod IDs file: ${err.message}`);
-    process.exit(1);
+    throw new Error(`Failed to read mod IDs file: ${err.message}`);
   }
 
   return null;
@@ -82,8 +85,7 @@ function getmodSlugsFromJson() {
     // continue
   }
 
-  console.error("No mod IDs provided via args or JSON.");
-  process.exit(1);
+  throw new Error("No mod IDs provided via args or JSON.");
 }
 
 function getMinecraftVersionFromArgs(args) {
@@ -100,24 +102,21 @@ function getModLoaderFromArgs(args) {
 
 function validateSetup(mcVersion, loader, ids) {
   if (!mcVersion) {
-    console.error("Missing required argument: --mcVersion=...");
-    process.exit(1);
+    throw new Error("Missing required argument: --mcVersion=...");
   }
 
   if (!loader) {
-    console.error("Missing required argument: --modLoader=...");
-    process.exit(1);
+    throw new Error("Missing required argument: --modLoader=...");
   }
 
   if (!Array.isArray(ids) || ids.length === 0) {
-    console.error("No valid mod IDs found.");
-    process.exit(1);
+    throw new Error("No valid mod IDs found.");
   }
 }
 
 // ==== Core Download Logic ====
 
-async function downloadModrinthProject(projectId, mcVersion, loader) {
+async function downloadModrinthProject(projectId, mcVersion, loader, processedMods) {
   if (processedMods.has(projectId)) return;
   processedMods.add(projectId);
 
@@ -163,7 +162,7 @@ async function downloadModrinthProject(projectId, mcVersion, loader) {
     for (const dep of dependencies) {
       if (dep.project_id && dep.required) {
         console.log(`→ Found dependency: ${dep.project_id}`);
-        await downloadModrinthProject(dep.project_id, mcVersion, loader);
+        await downloadModrinthProject(dep.project_id, mcVersion, loader, processedMods);
       }
     }
   } catch (err) {
