@@ -2,7 +2,7 @@ const path = require("path");
 const fs = require("fs");
 
 // Load variables
-const curseforge_variables = require("../download/curseforge_variables.json");
+const curseforge_variables = require("../download/json/curseforge_variables.json");
 const { api_key } = curseforge_variables;
 // Construct path
 const variablesFilePath = path.resolve(
