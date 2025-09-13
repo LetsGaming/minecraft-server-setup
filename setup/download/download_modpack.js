@@ -6,6 +6,7 @@ const {
   downloadFile,
   saveDownloadedVersion,
 } = require("./download_utils");
+const axios = require("axios");
 
 // Validate input
 if (!pack_id || !api_key || pack_id === "none" || api_key === "none") {
@@ -21,8 +22,6 @@ createDownloadDir(tempDir);
 
 const outputPath = path.join(tempDir, "server-pack.zip");
 
-const axios = require("axios");
-
 (async () => {
   try {
     // 1. Fetch modpack files
@@ -33,24 +32,33 @@ const axios = require("axios");
       }
     );
 
-    const files = filesResponse.data.data;
+    const files = filesResponse.data?.data || [];
 
-    // 2. Filter for server pack .zip
-    const serverFile = files.find(
-      (f) =>
-        f.fileName.toLowerCase().includes("server") && f.fileName.endsWith(".zip")
-    );
+    if (!files.length) {
+      throw new Error("No files found for this modpack.");
+    }
+
+    // 2. Filter for server pack .zip (case-insensitive)
+    const serverFile = files.find((f) => {
+      const name = f.fileName?.toLowerCase() || "";
+      return name.includes("server") && name.endsWith(".zip");
+    });
 
     if (!serverFile) {
       throw new Error("No server pack file found for this modpack.");
     }
 
-    const downloadUrl = serverFile.downloadUrl;
+    // Some API versions nest the download URL differently
+    const downloadUrl =
+      serverFile.downloadUrl || serverFile.download?.url;
+
+    if (!downloadUrl) {
+      throw new Error("Server pack download URL not found.");
+    }
+
     const totalSize = serverFile.fileLength || 0;
 
-    console.log(
-      `Downloading server pack (${formatBytes(totalSize)})...`
-    );
+    console.log(`Downloading server pack (${formatBytes(totalSize)})...`);
 
     // 3. Download using download_utils
     await downloadFile(downloadUrl, outputPath, totalSize);
