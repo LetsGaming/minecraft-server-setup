@@ -72,37 +72,54 @@ enable_auto_save() {
     send_command "/save-on"
 }
 
+# Strip the typical Minecraft log prefix from a line
+strip_log_prefix() {
+    local line="$1"
+    # Match the last "]: " and take everything after it
+    if [[ "$line" == *"]: "* ]]; then
+        echo "${line##*]: }"
+    elif [[ "$line" == *"]: "* ]]; then
+        echo "${line##*]:}" | sed 's/^[: ]*//'
+    elif [[ "$line" == *": "* ]]; then
+        echo "${line##*: }"
+    else
+        echo "$line"
+    fi
+}
+
 get_player_list() {
     if ! session_running; then
         echo "Screen session '$INSTANCE_NAME' is not running. Cannot get player list."
         return 1
     fi
 
-    if send_command "/list"; then
-        # Match both styles of the "players online" message
-        LOG_LINE=$(read_log | grep -E "There are [0-9]+(/[0-9]+| of a max of [0-9]+) players online:" | tail -n 1)
-
-        if [ -n "$LOG_LINE" ]; then
-            # Try to extract inline player list (newer versions)
-            PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/.*players online:\s*\(.*\)/\1/p')
-
-            if [ -z "$PLAYER_LIST" ]; then
-                # If empty, it's probably an older version → grab the *next line* after the match
-                PLAYER_LIST=$(read_log | grep -A1 -F "$LOG_LINE" | tail -n 1)
-
-                # If the "next line" is just another log prefix without names, ignore it
-                if echo "$PLAYER_LIST" | grep -q "DedicatedServer"; then
-                    PLAYER_LIST=""
-                fi
-            fi
-
-            if [ -n "$PLAYER_LIST" ]; then
-                echo "$PLAYER_LIST" | sed 's/, */, /g' | sed 's/^ *//;s/ *$//'
-            fi
-        fi
-    else
+    if ! send_command "/list"; then
         echo "Failed to get player list."
         return 1
+    fi
+
+    # grab the last "There are ... players online" line (matches both new and old formats)
+    local log_line
+    log_line=$(read_log | grep -E "There are [0-9]+(/[0-9]+| of a max of [0-9]+) players online" | tail -n 1)
+
+    if [[ -z "$log_line" ]]; then
+        return 0
+    fi
+
+    # Try inline player list (newer versions)
+    local player_list
+    player_list=$(echo "$log_line" | sed -n 's/.*players online:\s*\(.*\)/\1/p')
+
+    if [[ -z "$player_list" ]]; then
+        # Older versions → get the *next line* after the match
+        local next_line
+        next_line=$(read_log | grep -A1 -F "$log_line" | tail -n 1)
+        player_list=$(strip_log_prefix "$next_line")
+    fi
+
+    # Normalize spacing and echo as comma-separated string
+    if [[ -n "$player_list" ]]; then
+        echo "$player_list" | sed 's/, */, /g' | sed 's/^ *//;s/ *$//'
     fi
 }
 
