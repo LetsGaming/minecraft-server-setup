@@ -79,12 +79,24 @@ get_player_list() {
     fi
 
     if send_command "/list"; then
-        LOG_LINE=$(read_log | grep -E "There are [0-9]+ of a max of [0-9]+ players online:" | tail -n 1)
+        # Match both styles of the "players online" message
+        LOG_LINE=$(read_log | grep -E "There are [0-9]+(/[0-9]+| of a max of [0-9]+) players online:" | tail -n 1)
 
         if [ -n "$LOG_LINE" ]; then
-            PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/.*There are [0-9]* of a max of [0-9]* players online: \(.*\)/\1/p')
+            # Try to extract inline player list (newer versions)
+            PLAYER_LIST=$(echo "$LOG_LINE" | sed -n 's/.*players online:\s*\(.*\)/\1/p')
+
+            if [ -z "$PLAYER_LIST" ]; then
+                # If empty, it's probably an older version → grab the *next line* after the match
+                PLAYER_LIST=$(read_log | grep -A1 -F "$LOG_LINE" | tail -n 1)
+
+                # If the "next line" is just another log prefix without names, ignore it
+                if echo "$PLAYER_LIST" | grep -q "DedicatedServer"; then
+                    PLAYER_LIST=""
+                fi
+            fi
+
             if [ -n "$PLAYER_LIST" ]; then
-                # Normalize spacing and echo as a comma-separated string
                 echo "$PLAYER_LIST" | sed 's/, */, /g' | sed 's/^ *//;s/ *$//'
             fi
         fi
@@ -106,11 +118,11 @@ wait_for_save_completion() {
         echo "Screen session '$INSTANCE_NAME' is not running. Cannot wait for save completion."
         return 1
     fi
-    
+
     echo "Waiting for save to complete..."
-    # Tail the log file and look for the "Saved the game" message
-    tail -n 0 -f "$LOG_FILE" | while read line; do
-        if echo "$line" | grep -q "Saved the game"; then
+    # Tail log and stop once a save completion line appears
+    tail -n 0 -f "$LOG_FILE" | while read -r line; do
+        if echo "$line" | grep -Eq "Saved the (game|world)|Saved"; then
             echo "Save completed."
             break
         fi
