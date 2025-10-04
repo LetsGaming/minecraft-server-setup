@@ -2,6 +2,7 @@
   "INSTANCE_NAME": "server",
   "TARGET_DIR_NAME": "minecraft-server",
   "BACKUPS": {
+    "BACKUPS_PATH": "none",
     "COMPRESSION_LEVEL": 15,
     "MAX_STORAGE_GB": 30,
     "DO_GENERATION_BACKUPS": true,

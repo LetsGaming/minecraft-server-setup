@@ -17,11 +17,17 @@ const variablesFilePath = path.resolve(
   "variables.txt"
 );
 
+let backupsPath = BACKUPS.BACKUPS_PATH;
+if (backupsPath === "none") {
+  backupsPath = path.join(BASE_DIR, "backups", INSTANCE_NAME);
+}
+
 // Prepare content
 const variablesContent = [
   `USER="${process.env.USER}"`,
   `INSTANCE_NAME="${INSTANCE_NAME}"`,
   `SERVER_PATH="${serverPath}"`,
+  `BACKUPS_PATH="${backupsPath}"`,
   `COMPRESSION_LEVEL="${BACKUPS.COMPRESSION_LEVEL}"`,
   `MAX_STORAGE_GB="${BACKUPS.MAX_STORAGE_GB}"`,
   `DO_GENERATION_BACKUPS="${BACKUPS.DO_GENERATION_BACKUPS}"`,

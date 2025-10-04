@@ -59,7 +59,7 @@ $DRY_RUN && log INFO "Dry run mode enabled — no data will be written"
 $VERBOSE && log INFO "Verbose mode enabled"
 
 # ——— setup ———
-BACKUP_BASE="$SERVER_PATH/backups"
+BACKUP_BASE="$BACKUPS_PATH"
 JAR_STORAGE="$BACKUP_BASE/jars"
 DATE=$(date +'%Y-%m-%d_%H-%M-%S')
 START_TIME=$(date +%s)
