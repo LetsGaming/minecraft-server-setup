@@ -174,7 +174,7 @@ async function downloadModrinthProject(projectId, mcVersion, loader) {
     // Handle dependencies
     const dependencies = compatibleVersion.dependencies || [];
     for (const dep of dependencies) {
-      if (dep.project_id && dep.required) {
+      if (dep.project_id && dep.dependency_type === "required") {
         console.log(`→ Found dependency: ${dep.project_id}`);
         await downloadModrinthProject(dep.project_id, mcVersion, loader);
       }
