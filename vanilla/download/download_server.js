@@ -180,6 +180,7 @@ async function spawnModDownloader(modsFilePath, modsDir, versionId) {
         `--modSlugsFile=${modsFilePath}`,
         `--downloadDir=${modsDir}`,
         `--mcVersion=${versionId}`,
+        `--modLoader=fabric`,
       ],
       { stdio: "inherit" }
     );
