@@ -122,7 +122,7 @@ async function installFabricServer(versionId) {
   });
 }
 
-async function installMods() {
+async function installMods(versionId) {
   const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =
     JAVA.SERVER.VANILLA.MODS;
   const modsDir = path.join(outputDir, "mods");
@@ -147,7 +147,7 @@ async function installMods() {
     }
 
     console.log(`Installing ${name} mods...`);
-    await spawnModDownloader(modFile, modsDir);
+    await spawnModDownloader(modFile, modsDir, versionId);
   }
 }
 
@@ -162,7 +162,7 @@ async function downloadFile(url, destPath) {
   });
 }
 
-async function spawnModDownloader(modsFilePath, modsDir) {
+async function spawnModDownloader(modsFilePath, modsDir, versionId) {
   const modDownloader = path.resolve(
     __dirname,
     "..",
@@ -179,6 +179,7 @@ async function spawnModDownloader(modsFilePath, modsDir) {
         modDownloader,
         `--modSlugsFile=${modsFilePath}`,
         `--downloadDir=${modsDir}`,
+        `--mcVersion=${versionId}`,
       ],
       { stdio: "inherit" }
     );
