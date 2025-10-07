@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../common/load_variables.sh"
 
-BASE_BACKUP_DIR="$SERVER_PATH/backups"
+BASE_BACKUP_DIR="$BACKUPS_PATH"
 BACKUP_DIR="$BASE_BACKUP_DIR"
 SKIP_CONFIRMATION=false
 SPECIFIC_BACKUP=""

@@ -8,7 +8,7 @@ log() {
 }
 
 log "Starting backup cleanup..."
-BACKUP_BASE="$SERVER_PATH/backups"
+BACKUP_BASE="$BACKUPS_PATH"
 
 delete_old_archives() {
   local type="$1"
