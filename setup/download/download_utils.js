@@ -161,7 +161,6 @@ const saveGameVersion = (gameVersion) => {
   fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
 };
 
-
 const saveModLoader = (modLoader) => {
   const versionFile = path.resolve(
     __dirname,

@@ -25,10 +25,10 @@ function loadVariables() {
 }
 
 // Run check-updates.js with --json and return parsed JSON
-function runCheckUpdates() {
+function runCheckUpdates(version) {
   return new Promise((resolve, reject) => {
     const checkUpdatesPath = path.resolve(__dirname, "check-updates.js");
-    execFile("node", [checkUpdatesPath, "--json"], (err, stdout, stderr) => {
+    execFile("node", [checkUpdatesPath, version, "--json"], (err, stdout, stderr) => {
       if (err) {
         return reject(
           new Error(`Failed to run check-updates.js: ${stderr || err.message}`)
@@ -87,8 +87,9 @@ async function main() {
     }
     const downloadedVersions = JSON.parse(fs.readFileSync(downloadedVersionsPath, "utf8"));
 
+    const version = process.argv[2] || downloadedVersions.gameVersion || "latest";
     console.log("Running check-updates.js to get update info...");
-    const updateData = await runCheckUpdates();
+    const updateData = await runCheckUpdates(version);
     const { results } = updateData;
 
     for (const mod of results) {

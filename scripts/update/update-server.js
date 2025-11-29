@@ -5,13 +5,6 @@ const readline = require("readline");
 const { execFile, spawn } = require("child_process");
 const axios = require("axios");
 
-const {
-  getVersionInfo,
-  getJavaVersionFor,
-  saveGameVersion,
-  saveModLoader,
-} = require("../../setup/download/download_utils.js");
-
 const updateModsScript = path.resolve(__dirname, "update-mods.js");
 const checkUpdatesScript = path.resolve(__dirname, "check-updates.js");
 
@@ -39,9 +32,9 @@ function loadVariables() {
   return vars;
 }
 
-function runCheckUpdatesJSON() {
+function runCheckUpdatesJSON(version) {
   return new Promise((resolve, reject) => {
-    execFile("node", [checkUpdatesScript, "--json"], (err, stdout, stderr) => {
+    execFile("node", [checkUpdatesScript, version, "--json"], (err, stdout, stderr) => {
       if (err) return reject(err);
       try {
         resolve(JSON.parse(stdout));
@@ -187,7 +180,7 @@ async function performUpdateFlow({ currentVersion, modLoader, serverPath }) {
   saveModLoader(modLoader);
 
   await applyGameUpdate(modLoader, versionId, metadataUrl, serverPath);
-  await runModUpdate();
+  await runModUpdate(versionId);
 }
 
 async function applyGameUpdate(modLoader, versionId, metadataUrl, serverPath) {
@@ -221,9 +214,79 @@ async function getVersionInfo(requestedVersion, allowSnapshot) {
   return { versionId, metadataUrl: versionData.url };
 }
 
-function runModUpdate() {
+const saveGameVersion = (gameVersion) => {
+  const versionFile = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "scripts",
+    "common",
+    "downloaded_versions.json"
+  );
+  let existing = {};
+  if (fs.existsSync(versionFile)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+    } catch (err) {
+      console.warn(
+        "Warning: Could not parse downloaded_versions.json. Overwriting..."
+      );
+    }
+  }
+  existing.gameVersion = gameVersion;
+  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
+};
+
+const saveModLoader = (modLoader) => {
+  const versionFile = path.resolve(
+    __dirname,
+    "..",
+    "..",
+    "scripts",
+    "common",
+    "downloaded_versions.json"
+  );
+  let existing = {};
+  if (fs.existsSync(versionFile)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+    } catch (err) {
+      console.warn(
+        "Warning: Could not parse downloaded_versions.json. Overwriting..."
+      );
+    }
+  }
+  existing.modLoader = modLoader;
+  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
+};
+
+const MINECRAFT_JAVA_MAP = [
+  { mc: "1.21", java: "24" },
+  { mc: "1.20", java: "21" },
+  { mc: "1.18", java: "17" },
+  { mc: "1.17", java: "16" },
+  { mc: "1.16", java: "8" },
+  { mc: "1.12", java: "8" },
+];
+
+function getJavaVersionFor(mcVersion) {
+  if (mcVersion === "latest") {
+    mcVersion = MINECRAFT_JAVA_MAP[0].mc;
+  }
+  const sorted = MINECRAFT_JAVA_MAP.sort((a, b) =>
+    semver.rcompare(semver.coerce(a.mc), semver.coerce(b.mc))
+  );
+  for (const entry of sorted) {
+    if (semver.gte(semver.coerce(mcVersion), semver.coerce(entry.mc))) {
+      return entry.java;
+    }
+  }
+  throw new Error(`Unsupported Minecraft version: ${mcVersion}`);
+}
+
+function runModUpdate(version) {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", [updateModsScript], { stdio: "inherit" });
+    const child = spawn("node", [updateModsScript, version], { stdio: "inherit" });
     child.on("exit", (code) => {
       if (code === 0) resolve();
       else reject(new Error("update-mods.js failed"));
@@ -270,11 +333,11 @@ async function removeIncompatibleMods(serverPath, incompatible) {
     const currentVersion = targetVersionArg || "latest";
     const modLoader = installed.modLoader;
 
-    console.log(`Installed version: ${currentVersion}`);
+    console.log(`Updating to version: ${currentVersion}`);
     console.log(`Mod loader: ${modLoader}`);
 
     console.log("\nChecking mod compatibility...");
-    const updateInfo = await runCheckUpdatesJSON();
+    const updateInfo = await runCheckUpdatesJSON(currentVersion);
 
     const incompatible = updateInfo.results.filter((m) =>
       ["no_versions", "no_matching_version", "error"].includes(m.status)
