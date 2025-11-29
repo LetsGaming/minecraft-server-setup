@@ -22,7 +22,7 @@ const downloadedVersions = JSON.parse(
 );
 
 // Extract game and mod loader versions
-const mcVersion = downloadedVersions.gameVersion;
+const mcVersion = process.argv[2] || downloadedVersions.gameVersion;
 const modLoader = downloadedVersions.modLoader;
 const mods = downloadedVersions.mods || {};
 
