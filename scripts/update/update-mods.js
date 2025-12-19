@@ -4,22 +4,24 @@ const { execFile } = require("child_process");
 const axios = require("axios");
 
 // Read variables.txt and parse SERVER_PATH
+const variablesPath = path.resolve(__dirname, "..", "common", "variables.txt");
 function loadVariables() {
-  const variablesPath = path.resolve(__dirname, "..", "common", "variables.txt");
-  if (!fs.existsSync(variablesPath)) {
-    throw new Error("variables.txt not found in ../common");
-  }
   const content = fs.readFileSync(variablesPath, "utf8");
   const lines = content.split(/\r?\n/);
+
   const vars = {};
   for (const line of lines) {
     const match = line.match(/^(\w+)=(.*)$/);
     if (match) {
-      vars[match[1]] = match[2];
+      let value = match[2].trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      vars[match[1]] = value;
     }
-  }
-  if (!vars.SERVER_PATH) {
-    throw new Error("SERVER_PATH not defined in variables.txt");
   }
   return vars;
 }
@@ -28,19 +30,27 @@ function loadVariables() {
 function runCheckUpdates(version) {
   return new Promise((resolve, reject) => {
     const checkUpdatesPath = path.resolve(__dirname, "check-updates.js");
-    execFile("node", [checkUpdatesPath, version, "--json"], (err, stdout, stderr) => {
-      if (err) {
-        return reject(
-          new Error(`Failed to run check-updates.js: ${stderr || err.message}`)
-        );
+    execFile(
+      "node",
+      [checkUpdatesPath, version, "--json"],
+      (err, stdout, stderr) => {
+        if (err) {
+          return reject(
+            new Error(
+              `Failed to run check-updates.js: ${stderr || err.message}`
+            )
+          );
+        }
+        try {
+          const data = JSON.parse(stdout);
+          resolve(data);
+        } catch {
+          reject(
+            new Error("Failed to parse JSON output from check-updates.js")
+          );
+        }
       }
-      try {
-        const data = JSON.parse(stdout);
-        resolve(data);
-      } catch (parseErr) {
-        reject(new Error("Failed to parse JSON output from check-updates.js"));
-      }
-    });
+    );
   });
 }
 
@@ -67,6 +77,75 @@ async function downloadFile(url, filepath) {
   });
 }
 
+// ---------- robust outdated mod detection & removal ----------
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findOutdatedModFiles(existingFiles, modsDir, slug) {
+  const slugLower = slug.toLowerCase();
+  const slugEscaped = escapeRegex(slugLower);
+
+  const modRegex = new RegExp(
+    `^${slugEscaped}(?:[-_.]|$).+\\.jar$`,
+    "i"
+  );
+
+  const candidates = [];
+
+  for (const file of existingFiles) {
+    if (!modRegex.test(file)) continue;
+
+    const filePath = path.join(modsDir, file);
+    let stat;
+
+    try {
+      stat = fs.lstatSync(filePath);
+    } catch {
+      console.warn(`Could not stat file: ${filePath}, skipping.`);
+      continue;
+    }
+
+    if (!stat.isFile()) {
+      console.warn(`Skipping non-file entry: ${filePath}`);
+      continue;
+    }
+
+    if (stat.isSymbolicLink()) {
+      console.warn(`Skipping symlink: ${filePath}`);
+      continue;
+    }
+
+    candidates.push({
+      file,
+      filePath,
+      mtime: stat.mtimeMs,
+    });
+  }
+
+  if (candidates.length <= 1) return [];
+
+  candidates.sort((a, b) => a.mtime - b.mtime);
+
+  return candidates.slice(0, -1);
+}
+
+function removeOutdatedMods(existingFiles, modsDir, slug) {
+  const outdated = findOutdatedModFiles(existingFiles, modsDir, slug);
+
+  for (const { file, filePath } of outdated) {
+    console.log(`Removing outdated mod: ${file}`);
+    try {
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      console.error(`Failed to remove ${filePath}: ${err.message}`);
+    }
+  }
+}
+
+// ------------------------------------------------------------
+
 async function main() {
   try {
     const vars = loadVariables();
@@ -74,20 +153,30 @@ async function main() {
     if (!fs.existsSync(serverPath)) {
       throw new Error(`SERVER_PATH does not exist: ${serverPath}`);
     }
+
     const modsDir = path.join(serverPath, "mods");
     if (!fs.existsSync(modsDir)) {
       console.log(`Mods directory does not exist, creating: ${modsDir}`);
       fs.mkdirSync(modsDir, { recursive: true });
     }
 
-    // Load downloaded_versions.json for updating version info
-    const downloadedVersionsPath = path.resolve(__dirname, "..", "common", "downloaded_versions.json");
+    const downloadedVersionsPath = path.resolve(
+      __dirname,
+      "..",
+      "common",
+      "downloaded_versions.json"
+    );
     if (!fs.existsSync(downloadedVersionsPath)) {
       throw new Error("downloaded_versions.json not found.");
     }
-    const downloadedVersions = JSON.parse(fs.readFileSync(downloadedVersionsPath, "utf8"));
 
-    const version = process.argv[2] || downloadedVersions.gameVersion || "latest";
+    const downloadedVersions = JSON.parse(
+      fs.readFileSync(downloadedVersionsPath, "utf8")
+    );
+
+    const version =
+      process.argv[2] || downloadedVersions.gameVersion || "latest";
+
     console.log("Running check-updates.js to get update info...");
     const updateData = await runCheckUpdates(version);
     const { results } = updateData;
@@ -98,40 +187,30 @@ async function main() {
         continue;
       }
 
-      const downloadUrl = mod.downloadUrl;
-      if (!downloadUrl) {
+      if (!mod.downloadUrl) {
         console.warn(`No download URL for mod '${mod.slug}', skipping.`);
         continue;
       }
 
-      // Remove all existing mod files related to this slug
       const existingFiles = fs.readdirSync(modsDir);
-      const slugLower = mod.slug.toLowerCase();
+      removeOutdatedMods(existingFiles, modsDir, mod.slug);
 
-      for (const file of existingFiles) {
-        if (file.toLowerCase().includes(slugLower)) {
-          const filePath = path.join(modsDir, file);
-          console.log(`Removing outdated mod file: ${file}`);
-          fs.unlinkSync(filePath);
-        }
-      }
-
-      // Determine filename from URL, decode URI components to fix %2B -> +
-      const urlPath = new URL(downloadUrl).pathname;
+      const urlPath = new URL(mod.downloadUrl).pathname;
       const encodedFilename = path.basename(urlPath);
       const filename = decodeURIComponent(encodedFilename);
-
       const targetPath = path.join(modsDir, filename);
 
       console.log(`Downloading latest version of mod '${mod.slug}'...`);
-      await downloadFile(downloadUrl, targetPath);
+      await downloadFile(mod.downloadUrl, targetPath);
       console.log(`Downloaded and saved to ${targetPath}`);
 
-      // Update downloaded_versions.json for this mod
       downloadedVersions.mods[mod.slug] = mod.latestVersionId;
 
-      // Write back updated JSON to file
-      fs.writeFileSync(downloadedVersionsPath, JSON.stringify(downloadedVersions, null, 2), "utf8");
+      fs.writeFileSync(
+        downloadedVersionsPath,
+        JSON.stringify(downloadedVersions, null, 2),
+        "utf8"
+      );
       console.log(`Updated downloaded_versions.json for mod '${mod.slug}'`);
     }
 

@@ -98,6 +98,7 @@ EXCLUDES=(
   --exclude='*.tmp'
   --exclude='crash-reports/*'
   --exclude='*.gz'
+  --exclude='ledger.sqlite'
 )
 
 if ! $ARCHIVE_MODE; then

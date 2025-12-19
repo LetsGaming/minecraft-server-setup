@@ -1,6 +1,6 @@
-// update_server.js
 const fs = require("fs");
 const path = require("path");
+const semver = require("semver");
 const readline = require("readline");
 const { execFile, spawn } = require("child_process");
 const axios = require("axios");
@@ -27,7 +27,15 @@ function loadVariables() {
   const vars = {};
   for (const line of lines) {
     const match = line.match(/^(\w+)=(.*)$/);
-    if (match) vars[match[1]] = match[2];
+    if (match) {
+      let value = match[2].trim();
+      // Remove surrounding quotes if present
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      vars[match[1]] = value;
+    }
   }
   return vars;
 }
@@ -215,18 +223,10 @@ async function getVersionInfo(requestedVersion, allowSnapshot) {
 }
 
 const saveGameVersion = (gameVersion) => {
-  const versionFile = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "scripts",
-    "common",
-    "downloaded_versions.json"
-  );
   let existing = {};
-  if (fs.existsSync(versionFile)) {
+  if (fs.existsSync(downloadedVersionsPath)) {
     try {
-      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+      existing = JSON.parse(fs.readFileSync(downloadedVersionsPath, "utf-8"));
     } catch (err) {
       console.warn(
         "Warning: Could not parse downloaded_versions.json. Overwriting..."
@@ -234,22 +234,14 @@ const saveGameVersion = (gameVersion) => {
     }
   }
   existing.gameVersion = gameVersion;
-  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
+  fs.writeFileSync(downloadedVersionsPath, JSON.stringify(existing, null, 2), "utf-8");
 };
 
 const saveModLoader = (modLoader) => {
-  const versionFile = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "scripts",
-    "common",
-    "downloaded_versions.json"
-  );
   let existing = {};
-  if (fs.existsSync(versionFile)) {
+  if (fs.existsSync(downloadedVersionsPath)) {
     try {
-      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+      existing = JSON.parse(fs.readFileSync(downloadedVersionsPath, "utf-8"));
     } catch (err) {
       console.warn(
         "Warning: Could not parse downloaded_versions.json. Overwriting..."
@@ -257,7 +249,7 @@ const saveModLoader = (modLoader) => {
     }
   }
   existing.modLoader = modLoader;
-  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
+  fs.writeFileSync(downloadedVersionsPath, JSON.stringify(existing, null, 2), "utf-8");
 };
 
 const MINECRAFT_JAVA_MAP = [
@@ -313,6 +305,7 @@ async function removeIncompatibleMods(serverPath, incompatible) {
 // MAIN
 // ------------------------------------------------------------
 
+let removeIncompatibleModsFlag = false;
 (async () => {
   try {
     const vars = loadVariables();
@@ -352,12 +345,17 @@ async function removeIncompatibleMods(serverPath, incompatible) {
       );
 
       const proceed = await askYesNo(
-        "\nDo you want to update anyway and remove incompatible mods?"
+        "\nDo you want to update anyway?"
+      );
+      removeIncompatibleModsFlag = await askYesNo(
+        "Do you want to remove incompatible mods from the server?"
       );
       if (!proceed) {
         console.log("Aborted by user.");
         process.exit(0);
       }
+
+      console.log("Proceeding with update...");
     }
 
     // ------------------------------------------
@@ -366,8 +364,12 @@ async function removeIncompatibleMods(serverPath, incompatible) {
     await performUpdateFlow({ currentVersion, modLoader, serverPath });
 
     if (!allCompatible) {
-      await removeIncompatibleMods(serverPath, incompatible);
-      console.log("\nUpdate completed with incompatible mods removed.");
+      if (removeIncompatibleModsFlag) {
+        await removeIncompatibleMods(serverPath, incompatible);
+        console.log("\nUpdate completed with incompatible mods removed.");
+      } else {
+        console.log("\nUpdate completed with incompatible mods retained.");
+      }
     } else {
       console.log("\nServer fully updated.");
     }

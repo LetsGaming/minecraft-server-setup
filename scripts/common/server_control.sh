@@ -148,9 +148,13 @@ wait_for_save_completion() {
 
 # Function to countdown before shutdown or restart
 countdown() {
-    for i in 5 4 3 2 1; do
-        send_message "$1 in §4$i§r seconds!"
-        sleep 1  # Pause for 1 second to display each countdown message
+    local message="$1"
+    local start="${2:-5}"
+    local end="${3:-1}"
+
+    for ((i=start; i>=end; i--)); do
+        send_message "$message in §4$i§r seconds!"
+        sleep 1
     done
 }
 

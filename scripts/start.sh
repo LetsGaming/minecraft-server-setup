@@ -1,11 +1,10 @@
 #!/bin/bash
 set -e
 
-# Check if the script has sudo privileges
-if ! sudo -v &>/dev/null; then
-  echo "This script requires sudo privileges to run."
-  exit 1
-fi
+# Source the common server control functions
+source "$(dirname "$0")/common/utils.sh"
+# Check for sudo privileges
+check_sudo
 
 source "$(dirname "$0")/common/load_variables.sh"
 

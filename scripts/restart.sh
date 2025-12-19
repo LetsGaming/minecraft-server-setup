@@ -3,6 +3,10 @@
 set -e
 
 # Source the common server control functions
+source "$(dirname "$0")/common/utils.sh"
+# Check for sudo privileges
+check_sudo
+
 source "$(dirname "$0")/common/server_control.sh"
 
 echo "Starting server restart script..."
