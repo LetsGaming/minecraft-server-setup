@@ -52,9 +52,9 @@ function safeUnlink(filePath) {
   }
 }
 
-// ---------------- migration ----------------
+// ---------------- detection ----------------
 
-function detectInstalledJar(modsDir, slug) {
+function detectInstalledJar(modsDir, slug, excludeFilename) {
   const slugRegex = new RegExp(
     `(^|[-_.])${escapeRegex(slug)}([-.+_]|$).*\\.jar$`,
     "i"
@@ -63,6 +63,7 @@ function detectInstalledJar(modsDir, slug) {
   return fs
     .readdirSync(modsDir)
     .filter((f) => f.endsWith(".jar"))
+    .filter((f) => f !== excludeFilename)
     .map((file) => {
       const fullPath = path.join(modsDir, file);
       try {
@@ -74,8 +75,10 @@ function detectInstalledJar(modsDir, slug) {
       }
     })
     .filter(Boolean)
-    .filter((entry) => slugRegex.test(entry.file));
+    .filter((e) => slugRegex.test(e.file));
 }
+
+// ---------------- migration ----------------
 
 function migrateDownloadedVersions(downloadedVersions, modsDir) {
   let changed = false;
@@ -101,9 +104,7 @@ function migrateDownloadedVersions(downloadedVersions, modsDir) {
       console.warn(`  no installed jar found`);
     } else {
       throw new Error(
-        `Ambiguous jars for ${slug}: ${matches
-          .map((m) => m.file)
-          .join(", ")}`
+        `Ambiguous jars for ${slug}: ${matches.map((m) => m.file).join(", ")}`
       );
     }
 
@@ -125,6 +126,7 @@ function migrateDownloadedVersions(downloadedVersions, modsDir) {
 // ---------------- update logic ----------------
 
 function runCheckUpdates(version) {
+  console.log(`Checking for mod updates for game version: ${version}`);
   return new Promise((resolve, reject) => {
     const checkUpdatesPath = path.resolve(__dirname, "check-updates.js");
     execFile(
@@ -199,7 +201,11 @@ async function main() {
     const { results } = await runCheckUpdates(version);
 
     for (const mod of results) {
-      if (mod.status !== "update_available") continue;
+      if (mod.status !== "update_available") {
+        console.log(`No update available for: ${mod.name}`);
+        continue;
+      }
+
       if (!mod.downloadUrl) continue;
 
       const filename = decodeURIComponent(
@@ -209,11 +215,20 @@ async function main() {
       const targetPath = path.join(modsDir, filename);
       const tempPath = `${targetPath}.tmp`;
 
+      console.log(
+        `Updating mod: ${mod.name} to version ${mod.latestVersionId}`
+      );
+
       await downloadFile(mod.downloadUrl, tempPath);
 
       const previous = downloadedVersions.mods[mod.slug];
       if (previous?.filename) {
         safeUnlink(path.join(modsDir, previous.filename));
+      } else {
+        const installedJars = detectInstalledJar(modsDir, mod.slug, filename);
+        for (const jar of installedJars) {
+          safeUnlink(jar.fullPath);
+        }
       }
 
       fs.renameSync(tempPath, targetPath);
