@@ -202,7 +202,7 @@ async function main() {
 
     for (const mod of results) {
       if (mod.status !== "update_available") {
-        console.log(`No update available for: ${mod.slug}`);
+        console.log(`No update available for: ${mod.slug}\n`);
         continue;
       }
 
@@ -243,6 +243,7 @@ async function main() {
         JSON.stringify(downloadedVersions, null, 2),
         "utf8"
       );
+      console.log(`Downloaded and installed: ${filename}\n`);
     }
 
     console.log("Mod updates completed.");

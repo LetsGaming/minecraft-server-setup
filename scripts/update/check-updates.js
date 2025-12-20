@@ -33,16 +33,28 @@ if (!mcVersion || !modLoader) {
   process.exit(1);
 }
 
+function extractVersionId(entry) {
+  if (!entry) return null;
+
+  if (typeof entry === "string") {
+    return entry;
+  }
+
+  if (typeof entry === "object" && typeof entry.versionId === "string") {
+    return entry.versionId;
+  }
+
+  return null;
+}
+
 async function checkModUpdate(slug, currentVersionId) {
   try {
-    // Get project info to confirm slug
     const projectRes = await axios.get(
       `https://api.modrinth.com/v2/project/${slug}`
     );
     const project = projectRes.data;
     const projectId = project.project_id || project.id;
 
-    // Get versions filtered by MC version and mod loader
     const versionRes = await axios.get(
       `https://api.modrinth.com/v2/project/${projectId}/version`,
       {
@@ -52,6 +64,7 @@ async function checkModUpdate(slug, currentVersionId) {
         },
       }
     );
+
     const versions = versionRes.data;
 
     if (!versions.length) {
@@ -67,15 +80,14 @@ async function checkModUpdate(slug, currentVersionId) {
       };
     }
 
-    // Sort versions descending by date published (just to be safe)
     versions.sort(
       (a, b) => new Date(b.date_published) - new Date(a.date_published)
     );
 
-    // Find the latest version that actually includes both mcVersion and modLoader
     const latestVersion = versions.find(
-      (v) =>
-        v.game_versions.includes(mcVersion) && v.loaders.includes(modLoader)
+      v =>
+        v.game_versions.includes(mcVersion) &&
+        v.loaders.includes(modLoader)
     );
 
     if (!latestVersion) {
@@ -104,25 +116,26 @@ async function checkModUpdate(slug, currentVersionId) {
         status: "up_to_date",
         currentVersionId,
       };
-    } else {
-      if (!useJsonOutput) {
-        console.log(`Update available for mod '${slug}':`);
-        console.log(`  Current version ID: ${currentVersionId}`);
-        console.log(`  Latest version ID : ${latestVersionId}`);
-        console.log(`  Latest version name: ${latestVersion.name}`);
-        console.log(`  Published on: ${latestVersion.date_published}`);
-        console.log(`  Download URL: ${latestVersion.files[0]?.url || "N/A"}`);
-      }
-      return {
-        slug,
-        status: "update_available",
-        currentVersionId,
-        latestVersionId,
-        latestVersionName: latestVersion.name,
-        datePublished: latestVersion.date_published,
-        downloadUrl: latestVersion.files[0]?.url || null,
-      };
     }
+
+    if (!useJsonOutput) {
+      console.log(`Update available for mod '${slug}':`);
+      console.log(`  Current version ID: ${currentVersionId}`);
+      console.log(`  Latest version ID : ${latestVersionId}`);
+      console.log(`  Latest version name: ${latestVersion.name}`);
+      console.log(`  Published on: ${latestVersion.date_published}`);
+      console.log(`  Download URL: ${latestVersion.files[0]?.url || "N/A"}`);
+    }
+
+    return {
+      slug,
+      status: "update_available",
+      currentVersionId,
+      latestVersionId,
+      latestVersionName: latestVersion.name,
+      datePublished: latestVersion.date_published,
+      downloadUrl: latestVersion.files[0]?.url || null,
+    };
   } catch (err) {
     const errMsg = err.response?.data || err.message;
     if (!useJsonOutput) {
@@ -144,14 +157,24 @@ async function main() {
   }
 
   const results = [];
-  for (const [slug, currentVersionId] of Object.entries(mods)) {
+
+  for (const [slug, entry] of Object.entries(mods)) {
+    const currentVersionId = extractVersionId(entry);
+    if (!currentVersionId) {
+      results.push({
+        slug,
+        status: "invalid_entry",
+        message: "Missing or invalid versionId in downloaded_versions.json",
+      });
+      continue;
+    }
+
     // eslint-disable-next-line no-await-in-loop
     const result = await checkModUpdate(slug, currentVersionId);
     results.push(result);
   }
 
   if (useJsonOutput) {
-    // Output JSON array for easy parsing by other scripts
     console.log(JSON.stringify({ mcVersion, modLoader, results }, null, 2));
   }
 }
