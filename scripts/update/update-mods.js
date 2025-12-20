@@ -202,7 +202,7 @@ async function main() {
 
     for (const mod of results) {
       if (mod.status !== "update_available") {
-        console.log(`No update available for: ${mod.name}`);
+        console.log(`No update available for: ${mod.slug}`);
         continue;
       }
 
@@ -216,7 +216,7 @@ async function main() {
       const tempPath = `${targetPath}.tmp`;
 
       console.log(
-        `Updating mod: ${mod.name} to version ${mod.latestVersionId}`
+        `Updating mod: ${mod.slug} to version ${mod.latestVersionId}`
       );
 
       await downloadFile(mod.downloadUrl, tempPath);
