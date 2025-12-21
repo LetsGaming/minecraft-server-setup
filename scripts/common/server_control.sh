@@ -148,13 +148,21 @@ wait_for_save_completion() {
 
 # Function to countdown before shutdown or restart
 countdown() {
-    local message="$1"
+    local base_message="$1" # e.g., "Restarting"
     local start="${2:-5}"
     local end="${3:-1}"
 
     for ((i=start; i>=end; i--)); do
-        send_message "$message in §4$i§r seconds!"
-        sleep 1
+        # We construct the message fresh every time to avoid appending
+        local current_announcement="$base_message in §4$i§r seconds!"
+        
+        send_message "$current_announcement"
+        
+        # Only sleep if we aren't at the last second to keep the 
+        # execution timing tight
+        if [ $i -gt $end ]; then
+            sleep 1
+        fi
     done
 }
 
