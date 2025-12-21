@@ -7,13 +7,6 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-check_sudo() {
-    if [[ $EUID -ne 0 ]]; then
-        echo "This script requires sudo privileges. Please run with sudo."
-        exit 1
-    fi
-}
-
 # Logging setup
 log_file_path=""
 

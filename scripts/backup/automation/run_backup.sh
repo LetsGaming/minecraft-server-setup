@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+LOGS_DIR="$(dirname "$0")/../logs"
+mkdir -p "$LOGS_DIR"
+
 AUTOMATION_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_SCRIPT="$AUTOMATION_SCRIPT_DIR/../backup.sh"
 

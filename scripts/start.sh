@@ -1,11 +1,6 @@
 #!/bin/bash
 set -e
 
-# Source the common server control functions
-source "$(dirname "$0")/common/utils.sh"
-# Check for sudo privileges
-check_sudo
-
 source "$(dirname "$0")/common/load_variables.sh"
 
 echo "Starting $INSTANCE_NAME server..."
