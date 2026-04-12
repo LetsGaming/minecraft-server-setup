@@ -142,7 +142,9 @@ if ! $DRY_RUN; then
   ARCHIVE_PATH="$BACKUP_DIR/minecraft_backup_$DATE.tar.zst"
 
   if $ARCHIVE_MODE; then
-    ZSTD_OPTS+=(-15 -o "$ARCHIVE_PATH")
+    # Archives use the higher of configured level and 15 for long-term storage
+    archive_level=$(( COMPRESSION_LEVEL > 15 ? COMPRESSION_LEVEL : 15 ))
+    ZSTD_OPTS+=(-$archive_level -o "$ARCHIVE_PATH")
   else
     ZSTD_OPTS+=(-$COMPRESSION_LEVEL -o "$ARCHIVE_PATH")
   fi
@@ -158,7 +160,7 @@ if ! $DRY_RUN; then
     send_message "Backup archive appears corrupted. Removing"
     log ERROR "Validation failed — corrupted archive removed"
     rm -f "$FINAL_ARCHIVE"
-    rm -f "$TMP_DIR"
+    rm -rf "$TMP_DIR"
     exit 1
   fi
 fi

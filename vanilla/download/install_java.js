@@ -1,15 +1,12 @@
 const { execSync } = require("child_process");
 const { JAVA } = require("../../variables.json");
-const { getJavaVersionFor } = require("../../setup/download/download_utils.js");
+const { getJavaVersionFor, getVersionInfo } = require("../../setup/download/download_utils.js");
 
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 const loadVariables = require("../../setup/common/loadVariables");
 
-const {
-  TARGET_DIR_NAME,
-  INSTANCE_NAME
-} = loadVariables();
+const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
 function getLatestJabbaCandidate(javaVersion) {
   try {
@@ -22,12 +19,11 @@ function getLatestJabbaCandidate(javaVersion) {
       .map((line) => line.trim())
       .filter(
         (line) =>
-          line.startsWith(`adopt@` + javaVersion + `.`) ||
-          line.startsWith(`temurin@` + javaVersion + `.`)
+          line.startsWith(`adopt@${javaVersion}.`) ||
+          line.startsWith(`temurin@${javaVersion}.`)
       );
     if (versions.length === 0)
       throw new Error(`No Jabba candidates found for Java ${javaVersion}`);
-    // Use the latest available
     return versions.sort().reverse()[0];
   } catch (err) {
     console.error(`Failed to fetch remote Jabba versions: ${err.message}`);
@@ -51,42 +47,52 @@ function installJava(candidate) {
 }
 
 function setServerVariable(candidate) {
-  const version = candidate.split("@")[1];
   const javaPath = `${process.env.HOME}/.jabba/jdk/${candidate}`;
   const javaBin = `${javaPath}/bin/java`;
 
-  // Define the path to the variables.txt file
   const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, INSTANCE_NAME);
   const variablesTxtPath = path.join(MODPACK_DIR, "variables.txt");
 
-  // Add the JAVA variable to variables.txt
   const javaVariableLine = `JAVA=${javaBin}\n`;
 
-  // Check if variables.txt exists and append the JAVA variable to it
   if (fs.existsSync(variablesTxtPath)) {
-    fs.appendFileSync(variablesTxtPath, javaVariableLine);
+    // Replace existing JAVA= line or append
+    let content = fs.readFileSync(variablesTxtPath, "utf-8");
+    if (/^JAVA=.*$/m.test(content)) {
+      content = content.replace(/^JAVA=.*$/m, `JAVA=${javaBin}`);
+      fs.writeFileSync(variablesTxtPath, content);
+    } else {
+      fs.appendFileSync(variablesTxtPath, javaVariableLine);
+    }
   } else {
-    // If the file doesn't exist, create it and write the JAVA variable
     fs.writeFileSync(variablesTxtPath, javaVariableLine);
   }
 
   console.log(`JAVA variable set to: ${javaBin}`);
 }
 
-// Entry point
-const mcVersion = JAVA.SERVER.VANILLA.VERSION;
-if (!mcVersion) {
-  console.error(
-    "Minecraft version not specified in JAVA.SERVER.VANILLA.VERSION"
-  );
-  process.exit(1);
-}
+// Entry point — now async to support dynamic Java version lookup
+(async () => {
+  let mcVersion = JAVA.SERVER.VANILLA.VERSION;
+  if (!mcVersion) {
+    console.error("Minecraft version not specified in JAVA.SERVER.VANILLA.VERSION");
+    process.exit(1);
+  }
 
-try {
-  const javaVersion = getJavaVersionFor(mcVersion);
-  const jabbaCandidate = getLatestJabbaCandidate(javaVersion);
-  installJava(jabbaCandidate);
-} catch (err) {
-  console.error(err.message);
-  process.exit(1);
-}
+  try {
+    // Resolve "latest" to an actual version first
+    if (mcVersion === "latest") {
+      const { versionId } = await getVersionInfo("latest", JAVA.SERVER.VANILLA.SNAPSHOT);
+      mcVersion = versionId;
+      console.log(`Resolved "latest" to version ${mcVersion}`);
+    }
+
+    const javaVersion = await getJavaVersionFor(mcVersion);
+    console.log(`Minecraft ${mcVersion} requires Java ${javaVersion}`);
+    const jabbaCandidate = getLatestJabbaCandidate(javaVersion);
+    installJava(jabbaCandidate);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+})();

@@ -109,6 +109,11 @@ run_cleanup() {
 }
 
 maybe_start_server() {
+  # Read instance/target names from variables.json for display purposes
+  local instance_name target_dir
+  instance_name=$(node -e "console.log(require('$SCRIPT_DIR/variables.json').INSTANCE_NAME)")
+  target_dir=$(node -e "console.log(require('$SCRIPT_DIR/variables.json').TARGET_DIR_NAME)")
+
   if [ "$NO_START" = false ]; then
     if sudo -v &>/dev/null; then
       log "Starting the server..."
@@ -117,7 +122,7 @@ maybe_start_server() {
         echo
         warn "Server started but EULA not yet accepted."
         echo "Attach to the server with:"
-        echo "  screen -r INSTANCE_NAME"
+        echo "  screen -r $instance_name"
         echo "Then type 'I agree' and press Enter."
       fi
     else
@@ -127,10 +132,10 @@ maybe_start_server() {
   else
     log "Server will not be started (--no-start)."
     echo "You can start it manually with:"
-    echo "  bash $HOME/TARGET_DIR/scripts/INSTANCE_NAME/start.sh"
+    echo "  bash $HOME/$target_dir/scripts/$instance_name/start.sh"
     if [ "$NO_SERVICE" = false ]; then
       echo "Or use the systemd service with:"
-      echo "  sudo systemctl start INSTANCE_NAME.service"
+      echo "  sudo systemctl start $instance_name.service"
     fi
   fi
 }

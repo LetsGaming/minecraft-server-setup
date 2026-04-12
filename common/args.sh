@@ -17,11 +17,12 @@ declare -A ARG_DESCRIPTIONS
 parse_args() {
   for key in "${!ARG_OPTS[@]}"; do
     IFS='|' read -r val desc <<< "${ARG_OPTS[$key]}"
-    var="${val%%=*}"
-    default="${val#*=}"
+    local var="${val%%=*}"
+    local default="${val#*=}"
     ARG_DEFAULTS["$key"]="$default"
     ARG_DESCRIPTIONS["$key"]="$desc"
-    eval "$var=$default"
+    # Use declare -g instead of eval for safety
+    declare -g "$var=$default"
   done
 
   while [[ $# -gt 0 ]]; do
@@ -35,8 +36,8 @@ parse_args() {
         ;;
       *)
         if [[ -v ARG_OPTS["$1"] ]]; then
-          var="${ARG_OPTS[$1]%%=*}"
-          eval "$var=true"
+          local var="${ARG_OPTS[$1]%%=*}"
+          declare -g "$var=true"
         else
           echo "[ERROR] Unknown option: $1"
           echo "Use --help to see available options."

@@ -12,6 +12,9 @@ STATE_DIR="/tmp/backup_flags"
 
 mkdir -p "$STATE_DIR"
 
+# Clean up stale flag files older than 7 days to prevent accumulation
+find "$STATE_DIR" -type f -mtime +7 -delete 2>/dev/null || true
+
 HOUR=$(date +%H)
 DAY_OF_WEEK=$(date +%u)  # 1 (Mo) – 7 (So)
 DAY_OF_MONTH=$(date +%d)

@@ -1,7 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
-const semver = require("semver");
+
+const MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
 function createDownloadDir(dir) {
   if (!fs.existsSync(dir)) {
@@ -38,16 +39,18 @@ function downloadFile(url, fileName, totalSize) {
 
         response.data.on("data", (chunk) => {
           downloaded += chunk.length;
-          const progress = ((downloaded / totalSize) * 100).toFixed(2);
+          if (totalSize) {
+            const progress = ((downloaded / totalSize) * 100).toFixed(2);
 
-          if (progress >= lastProgress + 1) {
-            const elapsed = (Date.now() - startTime) / 1000;
-            const speed = downloaded / elapsed;
-            const eta = (totalSize - downloaded) / speed;
-            process.stdout.write(
-              `Downloading... ${progress}% | Remaining: ${formatTime(eta)}\r`
-            );
-            lastProgress = Math.floor(progress);
+            if (progress >= lastProgress + 1) {
+              const elapsed = (Date.now() - startTime) / 1000;
+              const speed = downloaded / elapsed;
+              const eta = (totalSize - downloaded) / speed;
+              process.stdout.write(
+                `Downloading... ${progress}% | Remaining: ${formatTime(eta)}\r`
+              );
+              lastProgress = Math.floor(progress);
+            }
           }
         });
 
@@ -68,151 +71,96 @@ function downloadFile(url, fileName, totalSize) {
   });
 }
 
-function getDownloadedVersions() {
-  const versionFile = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "scripts",
-    "common",
-    "downloaded_versions.json"
-  );
-  if (!fs.existsSync(versionFile)) return null;
+// ===== Version tracking =====
 
-  let downloadedVersions = {};
+const VERSIONS_FILE_PATH = path.resolve(
+  __dirname, "..", "..", "scripts", "common", "downloaded_versions.json"
+);
+
+function getDownloadedVersions() {
+  if (!fs.existsSync(VERSIONS_FILE_PATH)) return null;
+
   try {
-    downloadedVersions = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
+    return JSON.parse(fs.readFileSync(VERSIONS_FILE_PATH, "utf-8"));
   } catch (err) {
     console.warn(
       "Warning: Could not parse downloaded_versions.json. Assuming no mods are downloaded."
     );
     return null;
   }
-  return downloadedVersions;
 }
 
-function saveDownloadedVersion(
-  type,
-  modId,
-  fileId,
-  modLoader = null,
-  gameVersion = null
-) {
-  const versionFile = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "scripts",
-    "common",
-    "downloaded_versions.json"
-  );
-
-  let existing = {};
-  if (fs.existsSync(versionFile)) {
-    try {
-      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
-    } catch (err) {
-      console.warn(
-        "Warning: Could not parse downloaded_versions.json. Overwriting..."
-      );
-    }
+function readVersionsFile() {
+  if (!fs.existsSync(VERSIONS_FILE_PATH)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(VERSIONS_FILE_PATH, "utf-8"));
+  } catch {
+    console.warn("Warning: Could not parse downloaded_versions.json. Overwriting...");
+    return {};
   }
+}
 
-  // Set modLoader and gameVersion if provided
+function writeVersionsFile(data) {
+  const dir = path.dirname(VERSIONS_FILE_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(VERSIONS_FILE_PATH, JSON.stringify(data, null, 2), "utf-8");
+}
+
+function saveDownloadedVersion(type, modId, fileId, modLoader = null, gameVersion = null) {
+  const existing = readVersionsFile();
+
   if (modLoader) existing.modLoader = modLoader;
   if (gameVersion) existing.gameVersion = gameVersion;
 
-  // Ensure 'modpack' and 'mods' objects exist
   if (!existing.modpack) existing.modpack = {};
   if (!existing.mods) existing.mods = {};
 
-  // Only allow 'modpack' or 'mods' as valid types
   if (type !== "modpack" && type !== "mods") {
     console.warn(`Warning: Unknown type '${type}' provided. Skipping.`);
     return;
   }
 
   existing[type][modId] = fileId;
-
-  // Write back to file
-  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
+  writeVersionsFile(existing);
 }
 
-const saveGameVersion = (gameVersion) => {
-  const versionFile = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "scripts",
-    "common",
-    "downloaded_versions.json"
-  );
-  let existing = {};
-  if (fs.existsSync(versionFile)) {
-    try {
-      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
-    } catch (err) {
-      console.warn(
-        "Warning: Could not parse downloaded_versions.json. Overwriting..."
-      );
-    }
-  }
+function saveGameVersion(gameVersion) {
+  const existing = readVersionsFile();
   existing.gameVersion = gameVersion;
-  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
-};
-
-const saveModLoader = (modLoader) => {
-  const versionFile = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "scripts",
-    "common",
-    "downloaded_versions.json"
-  );
-  let existing = {};
-  if (fs.existsSync(versionFile)) {
-    try {
-      existing = JSON.parse(fs.readFileSync(versionFile, "utf-8"));
-    } catch (err) {
-      console.warn(
-        "Warning: Could not parse downloaded_versions.json. Overwriting..."
-      );
-    }
-  }
-  existing.modLoader = modLoader;
-  fs.writeFileSync(versionFile, JSON.stringify(existing, null, 2), "utf-8");
-};
-
-const MINECRAFT_JAVA_MAP = [
-  { mc: "1.21", java: "24" },
-  { mc: "1.20", java: "21" },
-  { mc: "1.18", java: "17" },
-  { mc: "1.17", java: "16" },
-  { mc: "1.16", java: "8" },
-  { mc: "1.12", java: "8" },
-];
-
-function getJavaVersionFor(mcVersion) {
-  if (mcVersion === "latest") {
-    mcVersion = MINECRAFT_JAVA_MAP[0].mc;
-  }
-  const sorted = MINECRAFT_JAVA_MAP.sort((a, b) =>
-    semver.rcompare(semver.coerce(a.mc), semver.coerce(b.mc))
-  );
-  for (const entry of sorted) {
-    if (semver.gte(semver.coerce(mcVersion), semver.coerce(entry.mc))) {
-      return entry.java;
-    }
-  }
-  throw new Error(`Unsupported Minecraft version: ${mcVersion}`);
+  writeVersionsFile(existing);
 }
 
-async function getVersionInfo(requestedVersion, allowSnapshot) {
-  const manifestUrl =
-    "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
-  const manifestResp = await axios.get(manifestUrl);
-  const manifest = manifestResp.data;
+function saveModLoader(modLoader) {
+  const existing = readVersionsFile();
+  existing.modLoader = modLoader;
+  writeVersionsFile(existing);
+}
+
+function isAlreadyDownloaded(type, modID, fileID) {
+  const downloadedVersions = getDownloadedVersions();
+  if (!downloadedVersions) return false;
+  return downloadedVersions?.[type]?.[modID] === fileID;
+}
+
+// ===== Mojang Version Manifest =====
+
+let _manifestCache = null;
+
+async function fetchManifest() {
+  if (_manifestCache) return _manifestCache;
+  const resp = await axios.get(MANIFEST_URL);
+  _manifestCache = resp.data;
+  return _manifestCache;
+}
+
+/**
+ * Resolve a version string ("latest", "26.1", "1.21.4", etc.) to its
+ * version ID and metadata URL from Mojang's version manifest.
+ */
+async function getVersionInfo(requestedVersion, allowSnapshot = false) {
+  const manifest = await fetchManifest();
 
   let versionId = requestedVersion;
 
@@ -231,19 +179,44 @@ async function getVersionInfo(requestedVersion, allowSnapshot) {
   return { versionId, metadataUrl: versionData.url };
 }
 
+/**
+ * Dynamically determine the required Java major version for a given
+ * Minecraft version by querying the version's metadata from Mojang's API.
+ *
+ * This replaces the old hardcoded MINECRAFT_JAVA_MAP and works with both
+ * the legacy 1.x.y format and the new YY.D.H format (26.1, 26.2, etc.).
+ */
+async function getJavaVersionFor(mcVersion) {
+  const { metadataUrl } = await getVersionInfo(mcVersion);
+  const metaResp = await axios.get(metadataUrl);
+  const meta = metaResp.data;
+
+  if (meta.javaVersion && meta.javaVersion.majorVersion) {
+    return String(meta.javaVersion.majorVersion);
+  }
+
+  // Fallback for very old versions that don't have javaVersion in metadata
+  console.warn(
+    `No javaVersion field in metadata for ${mcVersion}. Falling back to Java 8.`
+  );
+  return "8";
+}
+
+// ===== Minecraft version resolution helpers =====
+
 async function getMinecraftVersion() {
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) {
-    // No Modpack downloaded
     const { JAVA } = require("../../variables.json");
     const VERSION = JAVA.SERVER.VANILLA.VERSION;
-    if (VERSION == "latest") {
+    if (VERSION === "latest") {
       const { versionId } = await getVersionInfo(
         "latest",
         JAVA.SERVER.VANILLA.SNAPSHOT
       );
       return versionId;
     }
+    return VERSION;
   }
 
   return downloadedVersions?.gameVersion || null;
@@ -252,18 +225,11 @@ async function getMinecraftVersion() {
 function getModLoader() {
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) {
-    // No Modpack downloaded
     const { JAVA } = require("../../variables.json");
     return JAVA.SERVER.VANILLA.USE_FABRIC ? "fabric" : null;
   }
 
   return downloadedVersions?.modLoader || null;
-}
-
-function isAlreadyDownloaded(type, modID, fileID) {
-  const downloadedVersions = getDownloadedVersions();
-  if (!downloadedVersions) return false;
-  return downloadedVersions?.[type]?.[modID] === fileID;
 }
 
 module.exports = {
@@ -279,4 +245,5 @@ module.exports = {
   getJavaVersionFor,
   saveGameVersion,
   saveModLoader,
+  fetchManifest,
 };

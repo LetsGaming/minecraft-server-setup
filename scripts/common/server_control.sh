@@ -37,22 +37,17 @@ send_command() {
         return 1
     fi
 
-    # Check if command has / prefix is provided if not add it
-    if [[ "$1" != /* ]]; then
-        echo "Command must start with a /, adding it automatically."
-        command="/$1"
-    else
-        command="$1"
+    local command="$1"
+
+    # Check if command has / prefix, if not add it
+    if [[ "$command" != /* ]]; then
+        command="/$command"
     fi
 
-
-    command=$1
     if [ "$(id -u)" -eq 0 ]; then
-        # If running as root (sudo), use sudo -u to run the command as the specified user
-        sudo -u $USER screen -S $INSTANCE_NAME -p 0 -X stuff "$command$(printf \\r)"
+        sudo -u "$USER" screen -S "$INSTANCE_NAME" -p 0 -X stuff "$command$(printf \\r)"
     else
-        # If not running as root, just run the command normally
-        screen -S $INSTANCE_NAME -p 0 -X stuff "$command$(printf \\r)"
+        screen -S "$INSTANCE_NAME" -p 0 -X stuff "$command$(printf \\r)"
     fi
 }
 
@@ -125,8 +120,13 @@ get_player_list() {
 
 # Get the number of players currently online
 get_player_count() {
+    local player_list
     player_list=$(get_player_list)
-    echo "$player_list" | grep -o '\S' | wc -l
+    if [[ -z "$player_list" ]]; then
+        echo 0
+    else
+        echo "$player_list" | tr ',' '\n' | sed '/^\s*$/d' | wc -l
+    fi
 }
 
 # Function to check if the server has completed the save-all process by monitoring the log file
@@ -136,14 +136,24 @@ wait_for_save_completion() {
         return 1
     fi
 
-    echo "Waiting for save to complete..."
-    # Tail log and stop once a save completion line appears
-    tail -n 0 -f "$LOG_FILE" | while read -r line; do
-        if echo "$line" | grep -Eq "Saved the (game|world)|Saved"; then
-            echo "Save completed."
-            break
-        fi
-    done
+    local timeout="${1:-60}"
+    echo "Waiting for save to complete (timeout: ${timeout}s)..."
+
+    local save_done=false
+    # Use timeout to prevent infinite blocking
+    timeout "$timeout" bash -c "
+        tail -n 0 -f \"$LOG_FILE\" | while read -r line; do
+            if echo \"\$line\" | grep -Eq 'Saved the (game|world)|Saved'; then
+                echo 'Save completed.'
+                exit 0
+            fi
+        done
+    " && save_done=true
+
+    if ! $save_done; then
+        echo "[WARN] Save did not complete within ${timeout}s. Proceeding anyway."
+        return 1
+    fi
 }
 
 # Function to countdown before shutdown or restart

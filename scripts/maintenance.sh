@@ -62,9 +62,12 @@ change_motd() {
 restore_motd() {
     log "INFO" "Restoring original MOTD..."
     if [[ -f "$MOTD_BACKUP_FILE" ]]; then
-        grep -v '^motd=' "$SERVER_PROPERTIES_FILE" > "${SERVER_PROPERTIES_FILE}.tmp"
-        cat "$MOTD_BACKUP_FILE" >> "${SERVER_PROPERTIES_FILE}.tmp"
-        mv "${SERVER_PROPERTIES_FILE}.tmp" "$SERVER_PROPERTIES_FILE"
+        local original_motd
+        original_motd=$(cat "$MOTD_BACKUP_FILE")
+        # Use sed to safely replace the motd line in-place
+        local escaped_motd
+        escaped_motd=$(printf '%s' "$original_motd" | sed -e 's/[&|\\\/]/\\&/g')
+        sed -i "s|^motd=.*|$escaped_motd|" "$SERVER_PROPERTIES_FILE"
         rm -f "$MOTD_BACKUP_FILE"
         log "INFO" "Original MOTD restored."
     else

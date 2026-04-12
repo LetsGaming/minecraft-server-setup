@@ -77,8 +77,8 @@ async function installFabricServer(versionId) {
 
   await downloadFile(url, installerPath);
 
-  // Get the Java version for the Minecraft version
-  const javaVersion = getJavaVersionFor(versionId);
+  // Get the Java version for the Minecraft version (async API lookup)
+  const javaVersion = await getJavaVersionFor(versionId);
 
   // Find the corresponding Java binary from Jabba
   const jabbaDir = path.join(process.env.HOME, ".jabba", "jdk");

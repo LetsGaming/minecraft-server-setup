@@ -7,7 +7,7 @@ try {
   // Load variables from JSON
   const vars = loadVariables();
   const { TARGET_DIR_NAME, INSTANCE_NAME } = vars;
-  const BASE_DIR = path.join(process.env.HOME, TARGET_DIR_NAME);
+  const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
   const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", INSTANCE_NAME);
 
   // Define backup paths
