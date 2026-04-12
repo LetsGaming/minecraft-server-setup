@@ -1,11 +1,17 @@
 {
   "name": "minecraft-server-setup",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Automated Minecraft server setup and management scripts",
   "license": "MIT",
   "private": true,
   "engines": {
     "node": ">=18"
+  },
+  "scripts": {
+    "setup": "bash main.sh",
+    "setup:vanilla": "bash main-vanilla.sh",
+    "check": "bash main.sh --check",
+    "check:vanilla": "bash main-vanilla.sh --check"
   },
   "dependencies": {
     "axios": "^1.13.2",

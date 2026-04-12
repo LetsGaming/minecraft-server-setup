@@ -87,6 +87,14 @@ run_optional_setup() {
   else
     warn "Skipping web interface setup (--interface)."
   fi
+
+  # Setup restart cron if enabled
+  local restart_enabled
+  restart_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.RESTART_SCHEDULE?.ENABLED || false)" 2>/dev/null)
+  if [ "$restart_enabled" = "true" ]; then
+    log "Setting up scheduled restart cron..."
+    run_or_echo "node \"$SCRIPT_DIR/setup/management/create_restart_job.js\""
+  fi
 }
 
 run_modpack_cleanup() {
@@ -137,5 +145,130 @@ maybe_start_server() {
       echo "Or use the systemd service with:"
       echo "  sudo systemctl start $instance_name.service"
     fi
+  fi
+}
+
+# ── Preflight validation (--check mode) ──
+
+run_preflight_check() {
+  local errors=0
+  local warnings=0
+
+  echo "=== Preflight Check ==="
+  echo
+
+  # 1. Check variables.json
+  echo "[CHECK] Validating variables.json..."
+  if node -e "require('$SCRIPT_DIR/setup/common/loadVariables')()" 2>/dev/null; then
+    echo "  ✓ variables.json is valid"
+  else
+    echo "  ✗ variables.json validation failed"
+    node -e "require('$SCRIPT_DIR/setup/common/loadVariables')()" 2>&1 | sed 's/^/    /'
+    errors=$((errors + 1))
+  fi
+
+  # 2. Check Node.js
+  echo "[CHECK] Node.js..."
+  if command -v node &>/dev/null; then
+    local node_version
+    node_version=$(node -v)
+    echo "  ✓ Node.js $node_version found"
+  else
+    echo "  ✗ Node.js not found"
+    errors=$((errors + 1))
+  fi
+
+  # 3. Check npm dependencies
+  echo "[CHECK] npm dependencies..."
+  if [ -d "$SCRIPT_DIR/node_modules" ]; then
+    echo "  ✓ node_modules present"
+  else
+    echo "  ✗ node_modules not found — run 'npm install'"
+    errors=$((errors + 1))
+  fi
+
+  # 4. Check required tools
+  echo "[CHECK] Required tools..."
+  for tool in screen rsync zstd tar curl; do
+    if command -v "$tool" &>/dev/null; then
+      echo "  ✓ $tool"
+    else
+      echo "  ✗ $tool not found"
+      errors=$((errors + 1))
+    fi
+  done
+
+  # 5. Check CurseForge API config (for modpack mode)
+  echo "[CHECK] CurseForge config..."
+  local cf_config="$SCRIPT_DIR/setup/download/json/curseforge_variables.json"
+  if [ -f "$cf_config" ]; then
+    local api_key pack_id
+    api_key=$(node -e "console.log(require('$cf_config').api_key)" 2>/dev/null)
+    pack_id=$(node -e "console.log(require('$cf_config').pack_id)" 2>/dev/null)
+    if [[ "$api_key" == "none" || -z "$api_key" ]]; then
+      echo "  ⚠ API key not set (required for modpack setup)"
+      warnings=$((warnings + 1))
+    else
+      echo "  ✓ API key configured"
+    fi
+    if [[ "$pack_id" == "none" || -z "$pack_id" ]]; then
+      echo "  ⚠ Pack ID not set (required for modpack setup)"
+      warnings=$((warnings + 1))
+    else
+      echo "  ✓ Pack ID configured ($pack_id)"
+    fi
+  else
+    echo "  ⚠ curseforge_variables.json not found"
+    warnings=$((warnings + 1))
+  fi
+
+  # 6. Check disk space
+  echo "[CHECK] Disk space..."
+  local avail_gb
+  avail_gb=$(df -BG "$HOME" | tail -1 | awk '{print $4}' | tr -d 'G')
+  if (( avail_gb < 5 )); then
+    echo "  ✗ Only ${avail_gb}GB available — need at least 5GB"
+    errors=$((errors + 1))
+  else
+    echo "  ✓ ${avail_gb}GB available"
+  fi
+
+  # 7. Check RCON config
+  echo "[CHECK] RCON config..."
+  local use_rcon
+  use_rcon=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.SERVER_CONTROL?.USE_RCON || false)" 2>/dev/null)
+  if [ "$use_rcon" = "true" ]; then
+    local rcon_pw
+    rcon_pw=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.SERVER_CONTROL?.RCON_PASSWORD || '')" 2>/dev/null)
+    if [[ -z "$rcon_pw" ]]; then
+      echo "  ✗ RCON enabled but no password set"
+      errors=$((errors + 1))
+    else
+      echo "  ✓ RCON enabled (port $(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.SERVER_CONTROL?.RCON_PORT || 25575)" 2>/dev/null))"
+    fi
+  else
+    echo "  ✓ Using screen mode (RCON disabled)"
+  fi
+
+  # 8. Check webhook config
+  echo "[CHECK] Webhook config..."
+  local webhook_url
+  webhook_url=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.NOTIFICATIONS?.WEBHOOK_URL || '')" 2>/dev/null)
+  if [[ -n "$webhook_url" && "$webhook_url" != "none" ]]; then
+    echo "  ✓ Webhook configured"
+  else
+    echo "  ⚠ No webhook URL configured (notifications disabled)"
+    warnings=$((warnings + 1))
+  fi
+
+  # Summary
+  echo
+  echo "=== Result ==="
+  if [ $errors -eq 0 ]; then
+    echo "✓ All checks passed ($warnings warning(s)). Ready to run setup."
+    return 0
+  else
+    echo "✗ $errors error(s), $warnings warning(s). Fix errors before running setup."
+    return 1
   fi
 }

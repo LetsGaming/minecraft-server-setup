@@ -11,6 +11,22 @@
     "MAX_WEEKLY_BACKUPS": 2,
     "MAX_MONTHLY_BACKUPS": 1
   },
+  "SERVER_CONTROL": {
+    "USE_RCON": false,
+    "RCON_PORT": 25575,
+    "RCON_PASSWORD": "",
+    "RCON_HOST": "localhost"
+  },
+  "NOTIFICATIONS": {
+    "WEBHOOK_URL": "",
+    "WEBHOOK_EVENTS": ["backup_complete", "backup_failed", "update_complete", "update_failed", "server_start", "server_stop", "storage_warning"]
+  },
+  "RESTART_SCHEDULE": {
+    "ENABLED": false,
+    "INTERVAL_HOURS": 12,
+    "SKIP_IF_EMPTY": true,
+    "WARN_SECONDS": 30
+  },
   "JAVA": {
     "SERVER": {
       "VANILLA": {

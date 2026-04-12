@@ -105,7 +105,10 @@ function writeVersionsFile(data) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(VERSIONS_FILE_PATH, JSON.stringify(data, null, 2), "utf-8");
+  // Atomic write: write to temp file, then rename into place
+  const tmpPath = `${VERSIONS_FILE_PATH}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
+  fs.renameSync(tmpPath, VERSIONS_FILE_PATH);
 }
 
 function saveDownloadedVersion(type, modId, fileId, modLoader = null, gameVersion = null) {

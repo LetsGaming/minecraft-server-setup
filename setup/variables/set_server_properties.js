@@ -2,22 +2,20 @@ const path = require("path");
 const fs = require("fs");
 const loadVariables = require("../common/loadVariables");
 
+const vars = loadVariables();
 const {
   TARGET_DIR_NAME,
   INSTANCE_NAME,
   JAVA: {
     SERVER: {
-      MAX_PLAYERS,
-      MOTD,
-      SEED,
-      WHITELIST,
-      DIFFICULTY,
-      PVP,
-      FLIGHT_ENABLED,
-      ALLOW_CRACKED
+      MAX_PLAYERS, MOTD, SEED, WHITELIST,
+      DIFFICULTY, PVP, FLIGHT_ENABLED, ALLOW_CRACKED
     }
   }
-} = loadVariables();
+} = vars;
+
+// Optional RCON config
+const serverControl = vars.SERVER_CONTROL || {};
 
 const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, INSTANCE_NAME);
 const serverPropsPath = path.join(MODPACK_DIR, "server.properties");
@@ -40,8 +38,16 @@ function updateServerProperties() {
     "online-mode": !ALLOW_CRACKED,
   };
 
+  // Add RCON settings if enabled
+  if (serverControl.USE_RCON) {
+    updates["enable-rcon"] = true;
+    updates["rcon.port"] = serverControl.RCON_PORT || 25575;
+    updates["rcon.password"] = serverControl.RCON_PASSWORD || "";
+  }
+
   for (const [key, value] of Object.entries(updates)) {
-    const regex = new RegExp(`^${key}=.*$`, "m");
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`^${escapedKey}=.*$`, "m");
     const line = `${key}=${value}`;
     if (regex.test(content)) {
       content = content.replace(regex, line);
@@ -51,7 +57,9 @@ function updateServerProperties() {
   }
 
   fs.writeFileSync(serverPropsPath, content, "utf-8");
-  console.log(`Updated server.properties with max-players, motd, and server settings.`);
+
+  const rconStatus = serverControl.USE_RCON ? " (RCON enabled)" : "";
+  console.log(`Updated server.properties${rconStatus}.`);
 }
 
 updateServerProperties();

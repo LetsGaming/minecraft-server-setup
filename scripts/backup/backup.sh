@@ -5,6 +5,18 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../common/server_control.sh"
 
+# Track auto-save state so we can always re-enable on exit
+_AUTO_SAVE_DISABLED=false
+
+_backup_cleanup() {
+  if $_AUTO_SAVE_DISABLED; then
+    log INFO "Re-enabling auto-save (cleanup trap)..."
+    enable_auto_save 2>/dev/null || log WARN "Failed to re-enable auto-save — run /save-on manually"
+    _AUTO_SAVE_DISABLED=false
+  fi
+}
+trap _backup_cleanup EXIT
+
 # ——— helpers ———
 log() {
     local level="$1"
@@ -76,7 +88,9 @@ log INFO "Backup directory: $BACKUP_DIR"
 
 # ——— disable auto‑save ———
 log INFO "Disabling auto-save..."
-$DRY_RUN || disable_auto_save || log WARN "disable_auto_save failed"
+if ! $DRY_RUN; then
+  disable_auto_save && _AUTO_SAVE_DISABLED=true || log WARN "disable_auto_save failed"
+fi
 
 # ——— force a save ———
 log INFO "Saving world to disk..."
@@ -159,6 +173,7 @@ if ! $DRY_RUN; then
   if ! zstd -t "$FINAL_ARCHIVE" &>/dev/null; then
     send_message "Backup archive appears corrupted. Removing"
     log ERROR "Validation failed — corrupted archive removed"
+    notify_error "backup_failed" "Backup archive was corrupted and removed."
     rm -f "$FINAL_ARCHIVE"
     rm -rf "$TMP_DIR"
     exit 1
@@ -168,9 +183,11 @@ fi
 # ——— cleanup ———
 $DRY_RUN || rm -rf "$TMP_DIR"
 
-# ——— re‑enable auto‑save ———
-log INFO "Re-enabling auto-save..."
-$DRY_RUN || enable_auto_save || log WARN "enable_auto_save failed — run /save-on manually"
+# ——— re‑enable auto‑save (explicit + trap handles edge cases) ———
+if $_AUTO_SAVE_DISABLED && ! $DRY_RUN; then
+  log INFO "Re-enabling auto-save..."
+  enable_auto_save && _AUTO_SAVE_DISABLED=false || log WARN "enable_auto_save failed — run /save-on manually"
+fi
 
 # ——— success message ———
 TIME_TAKEN=$(( $(date +%s) - START_TIME ))
@@ -178,17 +195,21 @@ TIME_TAKEN_STMP=$(printf '%02d:%02d:%02d' $((TIME_TAKEN/3600)) $((TIME_TAKEN%360
 
 log SUCCESS "Backup complete: $FINAL_ARCHIVE"
 
+BACKUP_SIZE=""
+if [[ -n "$FINAL_ARCHIVE" && ! $DRY_RUN ]]; then
+  BACKUP_SIZE=$(du -sh "$FINAL_ARCHIVE" | cut -f1)
+  log INFO "Backup size: $BACKUP_SIZE"
+fi
+
 if $ARCHIVE_MODE; then
   send_message "Archive backup ($ARCHIVE_TYPE) completed | In $TIME_TAKEN_STMP" || log WARN "Failed to notify server"
+  notify_success "backup_complete" "Archive backup ($ARCHIVE_TYPE) completed in $TIME_TAKEN_STMP. Size: $BACKUP_SIZE"
 else
   send_message "Hourly backup completed | In $TIME_TAKEN_STMP" || log WARN "Failed to notify server"
+  notify_success "backup_complete" "Hourly backup completed in $TIME_TAKEN_STMP. Size: $BACKUP_SIZE"
 fi
 
 log INFO "Backup took: $TIME_TAKEN_STMP"
-
-if [[ -n "$FINAL_ARCHIVE" && ! $DRY_RUN ]]; then
-  log INFO "Backup size: $(du -sh "$FINAL_ARCHIVE" | cut -f1)"
-fi
 
 if ! $DRY_RUN; then
   log INFO "Backups storage usage: $(du -sh "$BACKUP_BASE" | cut -f1)"

@@ -20,6 +20,7 @@ declare -A ARG_OPTS=(
   ["--dry-run"]="DRY_RUN=false|Only print what would be done"
   ["--verbose"]="VERBOSE=false|Print additional logging info"
   ["--y"]="ACCEPT_ALL=false|Accept all defaults and skip prompts"
+  ["--check"]="CHECK_ONLY=false|Validate config and environment without running setup"
 )
 
 # Run lifecycle
@@ -28,6 +29,13 @@ require_sudo
 set_environment
 
 parse_args "$@"
+
+# Check-only mode: validate and exit
+if [ "$CHECK_ONLY" = true ]; then
+  run_preflight_check
+  exit $?
+fi
+
 set_flags_from_defaults "$@"
 prompt_for_flags
 run_modpack_setup
