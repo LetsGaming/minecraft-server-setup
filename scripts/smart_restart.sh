@@ -41,7 +41,7 @@ PLAYER_COUNT=$(get_player_count 2>/dev/null || echo 0)
 if [[ "$PLAYER_COUNT" -eq 0 && "$FORCE" != true && "$RESTART_SKIP_IF_EMPTY" == "true" ]]; then
   echo "[INFO] No players online. Restarting immediately (no warning needed)."
   save_and_wait 2>/dev/null || true
-  sudo systemctl restart "$INSTANCE_NAME".service
+  systemctl_cmd restart
   echo "[INFO] Server restarted."
   notify_success "server_restart" "Server $INSTANCE_NAME restarted (no players online)."
   wait_for_server_ready 120 || true
@@ -64,7 +64,7 @@ fi
 # ── Save and restart ──
 save_and_wait 2>/dev/null || true
 send_message "Server §6is restarting§r now!"
-sudo systemctl restart "$INSTANCE_NAME".service
+systemctl_cmd restart
 
 echo "[INFO] Server restarted."
 notify_success "server_restart" "Server $INSTANCE_NAME restarted ($PLAYER_COUNT players were online)."

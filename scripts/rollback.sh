@@ -71,7 +71,7 @@ fi
 echo "[INFO] Stopping server..."
 send_message "Server is rolling back to a previous version. Going down now." 2>/dev/null || true
 sleep 2
-sudo systemctl stop "$INSTANCE_NAME".service 2>/dev/null || true
+sudo -n systemctl stop "$INSTANCE_NAME".service 2>/dev/null || true
 sleep 3
 
 notify_warning "rollback_start" "Server $INSTANCE_NAME is rolling back to backup from $BACKUP_DATE"
@@ -90,7 +90,7 @@ fi
 
 # Restart the server
 echo "[INFO] Starting server..."
-sudo systemctl start "$INSTANCE_NAME".service
+systemctl_cmd start
 
 echo "[INFO] Rollback complete. Server is starting with the restored files."
 notify_success "rollback_complete" "Server $INSTANCE_NAME has been rolled back to backup from $BACKUP_DATE"

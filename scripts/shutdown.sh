@@ -23,6 +23,6 @@ save_and_wait
 send_message "Server §6is shutting down§r now!"
 
 # Stop the server
-sudo systemctl stop "$INSTANCE_NAME".service
+systemctl_cmd stop
 
 echo "Server stopped."

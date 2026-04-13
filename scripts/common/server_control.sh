@@ -36,9 +36,35 @@ session_running() {
 _screen_send() {
   local command="$1"
   if [ "$(id -u)" -eq 0 ]; then
-    sudo -u "$USER" screen -S "$INSTANCE_NAME" -p 0 -X stuff "$command$(printf \\r)"
+    sudo -n -u "$USER" screen -S "$INSTANCE_NAME" -p 0 -X stuff "$command$(printf \\r)"
   else
     screen -S "$INSTANCE_NAME" -p 0 -X stuff "$command$(printf \\r)"
+  fi
+}
+
+# ── Systemctl wrapper (passwordless sudo) ──
+
+systemctl_cmd() {
+  local action="$1"
+  local service="${INSTANCE_NAME}.service"
+  local extra_args=("${@:2}")
+  local output
+
+  if ! output=$(sudo -n systemctl "$action" "${extra_args[@]}" "$service" 2>&1); then
+    if echo "$output" | grep -qiE "password is required|not in the sudoers|authentication failure|a terminal is required"; then
+      echo "[SUDO ERROR] Passwordless sudo is not configured for 'systemctl $action $service'." >&2
+      echo "[SUDO ERROR] Required sudoers rule:" >&2
+      echo "[SUDO ERROR]   $USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl start $service, /usr/bin/systemctl stop $service, /usr/bin/systemctl restart $service, /usr/bin/systemctl enable $service" >&2
+      echo "[SUDO ERROR] See docs/sudoers-setup.md for full instructions." >&2
+      return 1
+    fi
+    # Not a sudo error — propagate the original output and fail
+    echo "$output" >&2
+    return 1
+  fi
+
+  if [[ -n "$output" ]]; then
+    echo "$output"
   fi
 }
 
