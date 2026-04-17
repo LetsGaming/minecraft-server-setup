@@ -13,7 +13,7 @@
   },
   "API_SERVER": {
     "ENABLED": false,
-    "PORT": 3000,
+    "PORT": 3030,
     "API_KEY": ""
   },
   "SERVER_CONTROL": {
