@@ -1,0 +1,16 @@
+{
+  "name": "minecraft-bot-api-server",
+  "version": "1.0.0",
+  "description": "HTTP API wrapper for minecraft-bot. Exposes local MC instance operations over HTTP.",
+  "type": "commonjs",
+  "main": "index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

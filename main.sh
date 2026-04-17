@@ -16,6 +16,7 @@ declare -A ARG_OPTS=(
   ["--agree-eula"]="EULA=false|Accept the EULA"
   ["--no-service"]="NO_SERVICE=false|Skip creating the systemd service"
   ["--no-backup"]="NO_BACKUP=false|Skip creating the backup job"
+  ["--api-server"]="SETUP_API_SERVER=false|Set up the minecraft-bot API wrapper service"
   ["--interface"]="SETUP_INTERFACE=false|Setup the web interface"
   ["--dry-run"]="DRY_RUN=false|Only print what would be done"
   ["--verbose"]="VERBOSE=false|Print additional logging info"

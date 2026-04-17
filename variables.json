@@ -11,6 +11,11 @@
     "MAX_WEEKLY_BACKUPS": 2,
     "MAX_MONTHLY_BACKUPS": 1
   },
+  "API_SERVER": {
+    "ENABLED": false,
+    "PORT": 3000,
+    "API_KEY": ""
+  },
   "SERVER_CONTROL": {
     "USE_RCON": false,
     "RCON_PORT": 25575,

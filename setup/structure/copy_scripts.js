@@ -1,34 +1,52 @@
+'use strict';
+
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const loadVariables = require('../common/loadVariables');
 
-// Load the existing variables
 const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
-// Zielverzeichnis für die Scripts (z. B. /home/minecraft/instances/<modpack>/scripts)
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
 const SCRIPTS_DIR = path.join(BASE_DIR, 'scripts', INSTANCE_NAME);
+const sourceDir = path.resolve(__dirname, '..', '..', 'scripts');
 
-// Quelle der Scripts liegt im Projekt-Root unter /scripts
-const sourceDir = path.resolve(__dirname, '..', "..", 'scripts');
-
-// Sicherstellen, dass das Zielverzeichnis existiert
 fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
 
-// Scripts kopieren
+// Copy all scripts
 fs.readdirSync(sourceDir).forEach(file => {
-  const sourceFile = path.join(sourceDir, file);
-  const targetFile = path.join(SCRIPTS_DIR, file);
-  
-  // Prüfen, ob es sich um eine Datei oder ein Verzeichnis handelt
-  const stats = fs.statSync(sourceFile);
+  const src = path.join(sourceDir, file);
+  const dst = path.join(SCRIPTS_DIR, file);
+  const stats = fs.statSync(src);
   if (stats.isDirectory()) {
-    // Falls es ein Verzeichnis ist, es rekursiv kopieren
-    fs.cpSync(sourceFile, targetFile, { recursive: true });
+    fs.cpSync(src, dst, { recursive: true });
   } else if (stats.isFile()) {
-    // Falls es eine Datei ist, sie kopieren
-    fs.copyFileSync(sourceFile, targetFile);
+    fs.copyFileSync(src, dst);
   }
 });
 
-console.log('Scripts copied successfully and INSTANCE_NAME written to common/variables.txt.');
+console.log('Scripts copied successfully.');
+
+// Install npm dependencies for self-contained subdirectories.
+// Each subdirectory with its own package.json manages its own node_modules so
+// the scripts work after deployment without the setup project being present.
+const npmDirs = [
+  path.join(SCRIPTS_DIR, 'update'),
+  path.join(SCRIPTS_DIR, 'api-server'),
+];
+
+for (const dir of npmDirs) {
+  if (fs.existsSync(path.join(dir, 'package.json'))) {
+    const label = path.relative(BASE_DIR, dir);
+    console.log(`Installing npm dependencies in ${label}...`);
+    try {
+      execSync('npm install --omit=dev', { cwd: dir, stdio: 'inherit' });
+      console.log(`  done`);
+    } catch (err) {
+      console.error(`  Failed to install in ${dir}: ${err.message}`);
+      process.exit(1);
+    }
+  }
+}
+
+console.log('All script dependencies installed.');

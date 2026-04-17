@@ -40,6 +40,22 @@ function loadVariables() {
     }
   }
 
+  // ── API_SERVER (optional) ──
+  if (data.API_SERVER) {
+    const api = data.API_SERVER;
+    if (api.ENABLED !== undefined && typeof api.ENABLED !== 'boolean') {
+      throw new Error('API_SERVER.ENABLED must be a boolean.');
+    }
+    if (api.PORT !== undefined) {
+      if (typeof api.PORT !== 'number' || api.PORT < 1 || api.PORT > 65535) {
+        throw new Error('API_SERVER.PORT must be a valid port number (1–65535).');
+      }
+    }
+    if (api.API_KEY !== undefined && typeof api.API_KEY !== 'string') {
+      throw new Error('API_SERVER.API_KEY must be a string.');
+    }
+  }
+
   // ── SERVER_CONTROL (optional) ──
   if (data.SERVER_CONTROL) {
     const sc = data.SERVER_CONTROL;

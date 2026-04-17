@@ -81,6 +81,21 @@ run_optional_setup() {
     warn "EULA not accepted. Please do so before launching the server."
   fi
 
+  if [ "$SETUP_API_SERVER" = true ]; then
+    log "Setting up minecraft-bot API wrapper service..."
+    run_or_echo "node \"$SCRIPT_DIR/setup/management/create_api_server_service.js\""
+  else
+    # Still set up if enabled in variables.json and flag wasn't explicitly suppressed
+    local api_enabled
+    api_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.ENABLED || false)" 2>/dev/null)
+    if [ "$api_enabled" = "true" ]; then
+      log "API_SERVER.ENABLED=true — setting up minecraft-bot API wrapper service..."
+      run_or_echo "node \"$SCRIPT_DIR/setup/management/create_api_server_service.js\""
+    else
+      warn "Skipping API wrapper setup (use --api-server or set API_SERVER.ENABLED=true)."
+    fi
+  fi
+
   if [ "$SETUP_INTERFACE" = true ]; then
     log "Setting up web interface..."
     run_or_echo "bash \"$SCRIPT_DIR/setup/interface/setup_interface.sh\""
@@ -259,6 +274,28 @@ run_preflight_check() {
   else
     echo "  ⚠ No webhook URL configured (notifications disabled)"
     warnings=$((warnings + 1))
+  fi
+
+  # 9. Check API server config
+  echo "[CHECK] API server config..."
+  local api_enabled api_port api_key
+  api_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.ENABLED || false)" 2>/dev/null)
+  if [ "$api_enabled" = "true" ]; then
+    api_port=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.PORT || 3000)" 2>/dev/null)
+    api_key=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.API_KEY || '')" 2>/dev/null)
+    if [[ -z "$api_key" ]]; then
+      echo "  ⚠ API_SERVER enabled but no API_KEY set — wrapper will be unauthenticated"
+      warnings=$((warnings + 1))
+    else
+      echo "  ✓ API server enabled (port $api_port, key configured)"
+    fi
+    # Check that node is available (required to run the wrapper)
+    if ! command -v node &>/dev/null; then
+      echo "  ✗ node not found — required to run the API wrapper"
+      errors=$((errors + 1))
+    fi
+  else
+    echo "  ✓ API server disabled (set API_SERVER.ENABLED=true to enable)"
   fi
 
   # Summary

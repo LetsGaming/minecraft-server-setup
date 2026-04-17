@@ -61,6 +61,12 @@ Edit [`variables.json`](./variables.json) — all settings are in one file:
     "WARN_SECONDS": 30
   },
 
+  "API_SERVER": {
+    "ENABLED": false,                 // true = set up the minecraft-bot API wrapper
+    "PORT": 3000,                     // Port the wrapper listens on
+    "API_KEY": ""                     // Shared secret — must match apiKey in the bot's config.json
+  },
+
   "BACKUPS": { ... },
   "JAVA": { ... }
 }
@@ -83,6 +89,9 @@ sudo -u <user> bash main.sh
 
 # Vanilla/Fabric server
 sudo -u <user> bash main-vanilla.sh
+
+# With minecraft-bot API wrapper (for remote bot deployments)
+sudo -u <user> bash main.sh --api-server
 
 # Or via npm
 npm run check
@@ -107,6 +116,7 @@ After setup, management scripts are in `<target>/scripts/<instance>/`:
 | `update/update-server.js` | Update server version (auto Java install) |
 | `update/check-updates.js` | Check for mod updates |
 | `misc/status.sh` | Show server status and players |
+| `api-server/index.js` | minecraft-bot HTTP API wrapper (managed by systemd) |
 
 ### Multi-Instance Management
 
@@ -138,6 +148,63 @@ Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhook
 | New `YY.D.H` | `26.1`, `26.1.1` | Dynamic (Mojang API) |
 
 Set `"VERSION": "latest"` for newest release, or any specific version string.
+
+## minecraft-bot API Wrapper
+
+The setup includes an HTTP API wrapper (`scripts/api-server/index.js`) for the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot. It lets the bot manage and monitor this MC instance from a different machine.
+
+### When to use it
+
+Only needed when the bot runs on a **different VM** from the MC server. If both run on the same machine, the bot accesses files and scripts directly — no wrapper needed.
+
+### Setup
+
+Enable it in `variables.json` before running setup:
+
+```json
+"API_SERVER": {
+  "ENABLED": true,
+  "PORT": 3000,
+  "API_KEY": "replace-with-a-long-random-secret"
+}
+```
+
+Then run setup normally (it will prompt) or pass the flag explicitly:
+
+```bash
+sudo -u <user> bash main.sh --api-server
+```
+
+This installs `express`, creates, and starts a systemd service named `<INSTANCE_NAME>-api-server.service`.
+
+### Bot configuration
+
+In the bot's `config.json`, add `apiUrl` and `apiKey` to the server entry:
+
+```json
+"servers": {
+  "survival": {
+    "apiUrl": "http://<MC_SERVER_IP>:3000",
+    "apiKey": "replace-with-a-long-random-secret"
+  }
+}
+```
+
+### Firewall
+
+Allow inbound TCP on the configured port from the bot VM's IP only:
+
+```bash
+ufw allow from <BOT_IP> to any port 3000 proto tcp
+```
+
+### Managing the service
+
+```bash
+systemctl status survival-api-server
+journalctl -u survival-api-server -f
+systemctl restart survival-api-server
+```
 
 ## Contributing
 

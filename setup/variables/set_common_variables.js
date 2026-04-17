@@ -9,6 +9,7 @@ const { TARGET_DIR_NAME, INSTANCE_NAME, BACKUPS } = vars;
 const serverControl = vars.SERVER_CONTROL || {};
 const notifications = vars.NOTIFICATIONS || {};
 const restartSchedule = vars.RESTART_SCHEDULE || {};
+const apiServer = vars.API_SERVER || {};
 
 // Construct paths
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
@@ -50,6 +51,10 @@ const lines = [
   `RESTART_INTERVAL_HOURS="${restartSchedule.INTERVAL_HOURS || 12}"`,
   `RESTART_SKIP_IF_EMPTY="${restartSchedule.SKIP_IF_EMPTY !== false}"`,
   `RESTART_WARN_SECONDS="${restartSchedule.WARN_SECONDS || 30}"`,
+  // API server (Discord bot integration)
+  `API_SERVER_ENABLED="${apiServer.ENABLED || false}"`,
+  `API_SERVER_PORT="${apiServer.PORT || 3000}"`,
+  `API_SERVER_KEY="${apiServer.API_KEY || ''}"`,
 ];
 
 const variablesContent = lines.join("\n");

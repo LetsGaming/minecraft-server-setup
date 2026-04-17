@@ -7,6 +7,7 @@ set_flags_from_defaults() {
     [[ ! "$*" =~ "--agree-eula" ]] && EULA=true
     [[ ! "$*" =~ "--no-service" ]] && NO_SERVICE=false
     [[ ! "$*" =~ "--no-backup" ]] && NO_BACKUP=false
+    [[ ! "$*" =~ "--api-server" ]] && SETUP_API_SERVER=false
     [[ ! "$*" =~ "--interface" ]] && SETUP_INTERFACE=true
   fi
 }
@@ -24,6 +25,9 @@ prompt_for_flags() {
     fi
     if [ "$NO_BACKUP" = false ]; then
       ask_yes_no "Do you want a backup job?" && NO_BACKUP=false || NO_BACKUP=true
+    fi
+    if [ "$SETUP_API_SERVER" = false ]; then
+      ask_yes_no "Do you want to set up the minecraft-bot API wrapper?" && SETUP_API_SERVER=true || SETUP_API_SERVER=false
     fi
     if [ "$SETUP_INTERFACE" = false ]; then
       ask_yes_no "Do you want to setup the web interface?" && SETUP_INTERFACE=true || SETUP_INTERFACE=false
