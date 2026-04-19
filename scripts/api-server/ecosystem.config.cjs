@@ -27,6 +27,9 @@
 const path = require('path');
 const fs = require('fs');
 
+// F-007: use shared parser — eliminates the duplicate variables.txt loop
+const { parseVarsFile } = require('./src/parseVars');
+
 // ── Resolve instance name from variables.txt ──────────────────────────────
 // This lets PM2 show a meaningful process name in `pm2 list` without
 // hardcoding anything in this file.
@@ -35,10 +38,8 @@ const VARS_FILE = path.resolve(__dirname, '..', 'common', 'variables.txt');
 
 let instanceName = 'mc-api';
 if (fs.existsSync(VARS_FILE)) {
-  for (const line of fs.readFileSync(VARS_FILE, 'utf-8').split(/\r?\n/)) {
-    const m = line.match(/^INSTANCE_NAME="?([^"]+)"?$/);
-    if (m) { instanceName = m[1]; break; }
-  }
+  const vars = parseVarsFile(VARS_FILE);
+  if (vars['INSTANCE_NAME']) instanceName = vars['INSTANCE_NAME'];
 }
 
 // ─────────────────────────────────────────────────────────────────────────
