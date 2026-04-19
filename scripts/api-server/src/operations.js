@@ -54,6 +54,12 @@ async function sendCommand(command) {
     }
   }
   const formatted = command.startsWith("/") ? command : `/${command}`;
+
+  // A-01: strip CR, LF and all other control characters before handing the
+  // string to `screen stuff`. A command containing \r would be interpreted
+  // by screen as multiple key-presses and could inject additional commands.
+  const safe = formatted.replace(/[\r\n\x00-\x1f\x7f]/g, "");
+
   await new Promise((resolve) => {
     execFile(
       "sudo",
@@ -66,7 +72,7 @@ async function sendCommand(command) {
         INSTANCE_NAME,
         "-X",
         "stuff",
-        `${formatted}\r`,
+        `${safe}\r`,
       ],
       { timeout: 15_000 },
       (err) => {
@@ -141,14 +147,18 @@ async function getTps() {
   // Try Paper-style /tps first
   try {
     const r = await rcon.send("tps");
-    if (!r.toLowerCase().includes("unknown")) {
-      const m = r.match(/([\d.]+)(?:,\s*([\d.]+)(?:,\s*([\d.]+))?)?/);
+    if (r.toLowerCase().includes("unknown")) {
+      // Server does not know this command — fall through to tick query.
+    } else {
+      const m =
+        r.match(/:\s*\*?([\d.]+),\s*\*?([\d.]+),\s*\*?([\d.]+)/) ??
+        r.match(/^\s*\*?([\d.]+),\s*\*?([\d.]+),\s*\*?([\d.]+)/m);
       if (m) {
         return {
           type: "paper",
           tps1m: parseFloat(m[1]),
-          tps5m: parseFloat(m[2] ?? m[1]),
-          tps15m: parseFloat(m[3] ?? m[1]),
+          tps5m: parseFloat(m[2]),
+          tps15m: parseFloat(m[3]),
           raw: r,
         };
       }
@@ -163,7 +173,7 @@ async function getTps() {
     if (r.toLowerCase().includes("unknown")) return null;
 
     const msptMatch = r.match(/Average time per tick:\s*([\d.]+)\s*ms/i);
-    if (!msptMatch) return { type: "minimal", tps1m: 0, raw: r };
+    if (!msptMatch) return null; // unparseable response — do not signal 0 TPS
 
     const mspt = parseFloat(msptMatch[1]);
     const result = {
@@ -184,15 +194,27 @@ async function getTps() {
   }
 }
 
+// A-03: cache level-name for 60 s — server.properties rarely changes at
+// runtime and getLevelName() is called on every getStats/listStatsUuids
+// request, making repeated synchronous readFileSync calls unnecessary.
+let _levelNameCache = null;
+let _levelNameCachedAt = 0;
+const LEVEL_NAME_TTL_MS = 60_000;
+
 async function getLevelName() {
+  if (_levelNameCache && Date.now() - _levelNameCachedAt < LEVEL_NAME_TTL_MS) {
+    return _levelNameCache;
+  }
   const propsPath = path.join(SERVER_PATH, "server.properties");
   try {
     const text = fs.readFileSync(propsPath, "utf-8");
     const m = text.match(/^level-name\s*=\s*(.+)$/m);
-    return m?.[1]?.trim() ?? "world";
+    _levelNameCache = m?.[1]?.trim() ?? "world";
   } catch {
-    return "world";
+    _levelNameCache = "world";
   }
+  _levelNameCachedAt = Date.now();
+  return _levelNameCache;
 }
 
 async function tailLog(lines) {
@@ -223,10 +245,11 @@ async function getStats(uuid) {
   const levelName = await getLevelName();
   const statsDir = path.join(SERVER_PATH, levelName, "stats");
 
-  // F-001: verify the resolved path stays inside the stats directory to
-  // prevent path-traversal attacks (e.g. uuid = "../../server.properties").
+  // A-11: use path.relative() instead of startsWith() — more robust across
+  // platforms and avoids edge cases where statsDir itself has no trailing sep.
   const resolved = path.resolve(statsDir, `${uuid}.json`);
-  if (!resolved.startsWith(statsDir + path.sep)) return null;
+  const rel = path.relative(statsDir, resolved);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
 
   try {
     return JSON.parse(fs.readFileSync(resolved, "utf-8"));
@@ -248,18 +271,23 @@ async function listStatsUuids() {
   }
 }
 
-// F-008: return null when the file is missing instead of throwing, so the
-// route handler can respond with 404 rather than 500.
+// A-04: remove TOCTOU existsSync/statSync/readFileSync sequence — use a
+// single try/catch instead, consistent with getWhitelist() and getStats().
+// Only re-throw errors that are not "file not found".
 function getModSlugs() {
   const jsonPath = path.join(
     INSTANCE_SCRIPTS_DIR,
     "common",
     "downloaded_versions.json",
   );
-  if (!fs.existsSync(jsonPath)) return null;
-  const stat = fs.statSync(jsonPath);
-  const raw = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
-  return { slugs: Object.keys(raw.mods ?? {}), mtimeMs: stat.mtimeMs };
+  try {
+    const stat = fs.statSync(jsonPath);
+    const raw = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
+    return { slugs: Object.keys(raw.mods ?? {}), mtimeMs: stat.mtimeMs };
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err; // surface genuine parse errors as 500
+  }
 }
 
 function getBackups() {
@@ -284,7 +312,17 @@ function getBackups() {
 
     files.sort().reverse();
     const latest = files[0];
-    const stat = fs.statSync(path.join(fullDir, latest));
+
+    // A-06: stat the latest file inside its own try/catch — backup rotation
+    // can delete the file between readdirSync and statSync, which would throw
+    // ENOENT and abort the entire response. Skip this directory instead.
+    let stat;
+    try {
+      stat = fs.statSync(path.join(fullDir, latest));
+    } catch {
+      continue;
+    }
+
     totalBytes += stat.size;
     dirs.push({
       dir,
@@ -325,7 +363,15 @@ function runScript(action, args) {
 
     const timer = setTimeout(() => {
       killed = true;
-      child.kill("SIGTERM");
+      // A-02: SIGTERM to the sudo wrapper does not reach the actual script
+      // process, which has already been forked as LINUX_USER. Kill the whole
+      // process group by signalling the negative PID (POSIX process groups).
+      // Falls back to a direct child.kill() if the pgid signal fails.
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        child.kill("SIGTERM");
+      }
       reject(
         new Error(
           `Script timed out after ${timeoutMs / 1000}s\n\nOutput:\n${stdout.slice(-500)}`,

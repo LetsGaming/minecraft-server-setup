@@ -11,7 +11,10 @@ const instancesRouter = require("./src/routes/instances");
 // ── Express app ───────────────────────────────────────────────────────────
 
 const app = express();
-app.use(express.json());
+// A-07: explicit 4 KB limit — this API only receives short commands and
+// script action names; the default 100 KB is unnecessarily large and would
+// let any key-holder trigger expensive JSON parses with large payloads.
+app.use(express.json({ limit: "4kb" }));
 
 // Ensure log directory exists (used by PM2 / ecosystem.config.cjs)
 const LOG_DIR = path.join(__dirname, "logs");
@@ -41,8 +44,23 @@ app.use("/instances", instancesRouter);
 
 // ── Start ─────────────────────────────────────────────────────────────────
 
-logStream.init();
+// A-10: init() now returns the fs.watch handle and polling interval so we
+// can clean them up on shutdown — otherwise a long processLogChanges()
+// iteration can prevent a clean SIGTERM exit.
+const { watcher: logWatcher, poller: logPoller } = logStream.init();
 
 app.listen(PORT, () => {
   console.log(`[api-server] ${INSTANCE_NAME} — listening on :${PORT}`);
 });
+
+// ── Graceful shutdown ─────────────────────────────────────────────────────
+
+function shutdown(signal) {
+  console.log(`[api-server] ${signal} received — shutting down`);
+  clearInterval(logPoller);
+  if (logWatcher) logWatcher.close();
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

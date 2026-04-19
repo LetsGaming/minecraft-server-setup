@@ -29,7 +29,6 @@ describe("RCON packet codec", () => {
 
   it("returns null when the buffer contains a partial packet", () => {
     const full = encodePkt(7, 2, "say hello world");
-    // slice off the last few bytes to simulate an incomplete TCP read
     const partial = full.subarray(0, full.length - 4);
     assert.equal(decodePkt(partial), null);
   });
@@ -39,5 +38,30 @@ describe("RCON packet codec", () => {
     const encoded = encodePkt(99, 2, body);
     const decoded = decodePkt(encoded);
     assert.equal(decoded.body, body);
+  });
+
+  // A-09 regression tests
+  it("returns null for a packet with a negative length field", () => {
+    const buf = Buffer.alloc(20);
+    buf.writeInt32LE(-1, 0); // length = -1
+    buf.writeInt32LE(42, 4);
+    buf.writeInt32LE(2, 8);
+    assert.equal(decodePkt(buf), null);
+  });
+
+  it("returns null for a packet with an absurdly large length field", () => {
+    const buf = Buffer.alloc(20);
+    buf.writeInt32LE(99999, 0); // length = 99999, way above 4096 cap
+    buf.writeInt32LE(42, 4);
+    buf.writeInt32LE(2, 8);
+    assert.equal(decodePkt(buf), null);
+  });
+
+  it("returns null for a packet with length = 9 (below minimum of 10)", () => {
+    const buf = Buffer.alloc(20);
+    buf.writeInt32LE(9, 0);
+    buf.writeInt32LE(1, 4);
+    buf.writeInt32LE(3, 8);
+    assert.equal(decodePkt(buf), null);
   });
 });

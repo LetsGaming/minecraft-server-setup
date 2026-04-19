@@ -169,8 +169,14 @@ router.get("/:id/tps", instanceGuard, async (_req, res) => {
 
 router.post("/:id/command", instanceGuard, async (req, res) => {
   const { command } = req.body;
-  if (!command) {
+  // A-08: validate type and length — Minecraft commands are at most 256 chars;
+  // an unbounded string could stress the RCON/screen paths unnecessarily.
+  if (!command || typeof command !== "string") {
     res.status(400).json({ error: "Missing command" });
+    return;
+  }
+  if (command.length > 256) {
+    res.status(400).json({ error: "command must be ≤ 256 characters" });
     return;
   }
   try {

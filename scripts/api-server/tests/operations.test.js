@@ -6,16 +6,10 @@ const os = require("os");
 const fs = require("fs");
 const path = require("path");
 
-// ── Minimal environment setup ─────────────────────────────────────────────
-// operations.js reads config at require-time, so we need SERVER_PATH to point
-// at a writable temp directory before the module is loaded.
-
 let tmpDir;
 
 before(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-ops-test-"));
-
-  // Write a minimal variables.txt so config.js doesn't process.exit
   const commonDir = path.join(tmpDir, "common");
   fs.mkdirSync(commonDir, { recursive: true });
   fs.writeFileSync(
@@ -34,90 +28,149 @@ after(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-// ── getStats path-traversal guard (F-001) ─────────────────────────────────
+// ── getStats path-traversal guard (F-001 / A-11) ──────────────────────────
 
-describe("getStats", () => {
-  it("returns null for a traversal UUID", async () => {
-    // We can't require operations.js directly because config is already loaded
-    // from the environment. Instead, test the path guard logic in isolation.
+describe("getStats path guard", () => {
+  it("blocks a traversal UUID with startsWith logic", () => {
     const levelName = "world";
     const statsDir = path.join(tmpDir, levelName, "stats");
-
     const uuid = "../../server.properties";
     const resolved = path.resolve(statsDir, `${uuid}.json`);
-    // the guard: resolved must start with statsDir + sep
-    const blocked = !resolved.startsWith(statsDir + path.sep);
-    assert.equal(blocked, true, "traversal UUID should be blocked");
+    const rel = path.relative(statsDir, resolved);
+    assert.equal(rel.startsWith("..") || path.isAbsolute(rel), true);
   });
 
-  it("accepts a valid UUID path", async () => {
+  it("accepts a valid UUID (A-11 path.relative guard)", () => {
     const levelName = "world";
     const statsDir = path.join(tmpDir, levelName, "stats");
     fs.mkdirSync(statsDir, { recursive: true });
-
     const uuid = "550e8400-e29b-41d4-a716-446655440000";
     const resolved = path.resolve(statsDir, `${uuid}.json`);
-    const blocked = !resolved.startsWith(statsDir + path.sep);
-    assert.equal(blocked, false, "valid UUID should not be blocked");
+    const rel = path.relative(statsDir, resolved);
+    assert.equal(rel.startsWith("..") || path.isAbsolute(rel), false);
   });
 });
 
 // ── tailLog integer validation (F-009) ────────────────────────────────────
 
 describe("tailLog lines parameter validation", () => {
-  function sanitizeLines(raw) {
+  function sanitize(raw) {
     const parsed = parseInt(raw ?? "10", 10);
     return Number.isNaN(parsed) ? 10 : Math.min(Math.max(parsed, 1), 500);
   }
 
-  it("clamps to 500 for large integers", () => {
-    assert.equal(sanitizeLines("9999"), 500);
-  });
-
-  it("blocks scientific notation bypass", () => {
-    // parseInt("1e6") === 1, not 1000000 — safe by default with parseInt
-    assert.equal(sanitizeLines("1e6"), 1);
-  });
-
-  it("falls back to 10 for NaN input", () => {
-    assert.equal(sanitizeLines("abc"), 10);
-  });
-
-  it("passes through a normal value", () => {
-    assert.equal(sanitizeLines("50"), 50);
-  });
-
-  it("clamps minimum to 1", () => {
-    assert.equal(sanitizeLines("0"), 1);
-    assert.equal(sanitizeLines("-5"), 1);
-  });
+  it("clamps to 500 for large integers", () => assert.equal(sanitize("9999"), 500));
+  it("blocks scientific notation bypass", () => assert.equal(sanitize("1e6"), 1));
+  it("falls back to 10 for NaN input", () => assert.equal(sanitize("abc"), 10));
+  it("passes through a normal value", () => assert.equal(sanitize("50"), 50));
+  it("clamps minimum to 1", () => { assert.equal(sanitize("0"), 1); assert.equal(sanitize("-5"), 1); });
 });
 
-// ── UUID validation regex (F-001) ─────────────────────────────────────────
+// ── UUID allowlist regex (F-001) ──────────────────────────────────────────
 
 describe("UUID allowlist regex", () => {
-  const UUID_RE =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
   const valid = [
     "550e8400-e29b-41d4-a716-446655440000",
     "00000000-0000-0000-0000-000000000000",
     "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
   ];
-
   const invalid = [
     "../../server.properties",
     "not-a-uuid",
     "",
-    "550e8400-e29b-41d4-a716-44665544000g", // invalid hex char
-    "550e8400e29b41d4a716446655440000",      // no hyphens
+    "550e8400-e29b-41d4-a716-44665544000g",
+    "550e8400e29b41d4a716446655440000",
   ];
 
-  for (const u of valid) {
-    it(`accepts ${u}`, () => assert.equal(UUID_RE.test(u), true));
+  for (const u of valid) it(`accepts ${u}`, () => assert.equal(UUID_RE.test(u), true));
+  for (const u of invalid) it(`rejects "${u}"`, () => assert.equal(UUID_RE.test(u), false));
+});
+
+// ── A-01: screen injection sanitisation ──────────────────────────────────
+
+describe("sendCommand screen injection sanitisation (A-01)", () => {
+  function sanitize(command) {
+    const formatted = command.startsWith("/") ? command : `/${command}`;
+    return formatted.replace(/[\r\n\x00-\x1f\x7f]/g, "");
   }
 
-  for (const u of invalid) {
-    it(`rejects "${u}"`, () => assert.equal(UUID_RE.test(u), false));
-  }
+  it("strips carriage return that would inject a second command", () => {
+    const result = sanitize("list\r/op attacker");
+    assert.equal(result.includes("\r"), false);
+    assert.equal(result, "/list/op attacker"); // CR gone, safe remainder
+  });
+
+  it("strips newline", () => {
+    const result = sanitize("say hello\nworld");
+    assert.equal(result.includes("\n"), false);
+  });
+
+  it("strips null byte", () => {
+    const result = sanitize("list\x00inject");
+    assert.equal(result.includes("\x00"), false);
+  });
+
+  it("leaves a clean command untouched", () => {
+    assert.equal(sanitize("list"), "/list");
+    assert.equal(sanitize("/say hello world"), "/say hello world");
+  });
+});
+
+// ── A-03: getLevelName cache behaviour ───────────────────────────────────
+
+describe("getLevelName cache (A-03)", () => {
+  it("returns 'world' when server.properties does not exist", async () => {
+    // Simulate the cache being cold and the file missing
+    const propsPath = path.join(tmpDir, "server.properties");
+    if (fs.existsSync(propsPath)) fs.unlinkSync(propsPath);
+
+    // Inline the cache logic to verify it without requiring config side-effects
+    let cache = null;
+    let cachedAt = 0;
+    const TTL = 60_000;
+
+    async function getLevelName() {
+      if (cache && Date.now() - cachedAt < TTL) return cache;
+      try {
+        const text = fs.readFileSync(propsPath, "utf-8");
+        const m = text.match(/^level-name\s*=\s*(.+)$/m);
+        cache = m?.[1]?.trim() ?? "world";
+      } catch {
+        cache = "world";
+      }
+      cachedAt = Date.now();
+      return cache;
+    }
+
+    assert.equal(await getLevelName(), "world");
+  });
+
+  it("reads level-name from server.properties", async () => {
+    const propsPath = path.join(tmpDir, "server.properties");
+    fs.writeFileSync(propsPath, "level-name=survival_world\n");
+
+    let cache = null;
+    let cachedAt = 0;
+    const TTL = 60_000;
+
+    async function getLevelName() {
+      if (cache && Date.now() - cachedAt < TTL) return cache;
+      try {
+        const text = fs.readFileSync(propsPath, "utf-8");
+        const m = text.match(/^level-name\s*=\s*(.+)$/m);
+        cache = m?.[1]?.trim() ?? "world";
+      } catch {
+        cache = "world";
+      }
+      cachedAt = Date.now();
+      return cache;
+    }
+
+    assert.equal(await getLevelName(), "survival_world");
+    // Second call should use cache (file could be deleted — cache still returns value)
+    fs.unlinkSync(propsPath);
+    assert.equal(await getLevelName(), "survival_world");
+  });
 });
