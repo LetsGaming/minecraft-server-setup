@@ -26,7 +26,8 @@ const downloadedVersionsPath = path.resolve(
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
 // Usage:
-//   node add-mod.js <slug> [--slug=<slug>] [--mcVersion=<ver>] [--modLoader=<loader>]
+//   node add-mod.js <slug> [mcVersion] [modLoader]
+//         [--slug=<slug>] [--mcVersion=<ver>] [--modLoader=<loader>]
 //
 //   slug       Modrinth slug or project ID — positional or --slug=.
 //   mcVersion  Target MC version. Falls back to downloaded_versions.json.
@@ -35,7 +36,7 @@ const { parseArgs } = require("./args");
 
 const cliArgs = parseArgs({
   flags: { slug: null, mcVersion: null, modLoader: null },
-  positional: ["slug"],
+  positional: ["slug", "mcVersion", "modLoader"],
 });
 
 const slug = cliArgs.get("slug");
