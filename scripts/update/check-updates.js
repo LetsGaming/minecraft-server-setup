@@ -1,16 +1,28 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
+const { parseArgs } = require("./args");
 
-// Parse CLI args for --json flag
-const useJsonOutput = process.argv.includes("--json");
+// Usage:
+//   node check-updates.js [mcVersion] [--mcVersion=<ver>] [--json]
+//
+//   mcVersion  MC version to check against — positional or --mcVersion=.
+//              Falls back to gameVersion in downloaded_versions.json.
+//   --json     Output results as a JSON blob instead of human-readable text.
+const args = parseArgs({
+  flags: { mcVersion: null },
+  boolFlags: ["json"],
+  positional: ["mcVersion"],
+});
+
+const useJsonOutput = args.bool("json");
 
 // Load the downloaded versions JSON
 const downloadedVersionsPath = path.resolve(
   __dirname,
   "..",
   "common",
-  "downloaded_versions.json"
+  "downloaded_versions.json",
 );
 if (!fs.existsSync(downloadedVersionsPath)) {
   console.error("downloaded_versions.json not found.");
@@ -18,17 +30,17 @@ if (!fs.existsSync(downloadedVersionsPath)) {
 }
 
 const downloadedVersions = JSON.parse(
-  fs.readFileSync(downloadedVersionsPath, "utf8")
+  fs.readFileSync(downloadedVersionsPath, "utf8"),
 );
 
 // Extract game and mod loader versions
-const mcVersion = process.argv[2] || downloadedVersions.gameVersion;
+const mcVersion = args.get("mcVersion") || downloadedVersions.gameVersion;
 const modLoader = downloadedVersions.modLoader;
 const mods = downloadedVersions.mods || {};
 
 if (!mcVersion || !modLoader) {
   console.error(
-    "Minecraft version or mod loader missing in downloaded_versions.json"
+    "Minecraft version or mod loader missing in downloaded_versions.json",
   );
   process.exit(1);
 }
@@ -50,7 +62,7 @@ function extractVersionId(entry) {
 async function checkModUpdate(slug, currentVersionId) {
   try {
     const projectRes = await axios.get(
-      `https://api.modrinth.com/v2/project/${slug}`
+      `https://api.modrinth.com/v2/project/${slug}`,
     );
     const project = projectRes.data;
     const projectId = project.project_id || project.id;
@@ -62,7 +74,7 @@ async function checkModUpdate(slug, currentVersionId) {
           game_versions: [mcVersion],
           loaders: [modLoader],
         },
-      }
+      },
     );
 
     const versions = versionRes.data;
@@ -70,7 +82,7 @@ async function checkModUpdate(slug, currentVersionId) {
     if (!versions.length) {
       if (!useJsonOutput) {
         console.log(
-          `No compatible versions found for mod '${slug}' on MC ${mcVersion} with loader ${modLoader}`
+          `No compatible versions found for mod '${slug}' on MC ${mcVersion} with loader ${modLoader}`,
         );
       }
       return {
@@ -81,19 +93,18 @@ async function checkModUpdate(slug, currentVersionId) {
     }
 
     versions.sort(
-      (a, b) => new Date(b.date_published) - new Date(a.date_published)
+      (a, b) => new Date(b.date_published) - new Date(a.date_published),
     );
 
     const latestVersion = versions.find(
-      v =>
-        v.game_versions.includes(mcVersion) &&
-        v.loaders.includes(modLoader)
+      (v) =>
+        v.game_versions.includes(mcVersion) && v.loaders.includes(modLoader),
     );
 
     if (!latestVersion) {
       if (!useJsonOutput) {
         console.log(
-          `No version matching MC ${mcVersion} and loader ${modLoader} found for mod '${slug}'.`
+          `No version matching MC ${mcVersion} and loader ${modLoader} found for mod '${slug}'.`,
         );
       }
       return {
@@ -108,7 +119,7 @@ async function checkModUpdate(slug, currentVersionId) {
     if (currentVersionId === latestVersionId) {
       if (!useJsonOutput) {
         console.log(
-          `Mod '${slug}' is up to date (version ID: ${currentVersionId})`
+          `Mod '${slug}' is up to date (version ID: ${currentVersionId})`,
         );
       }
       return {
@@ -152,7 +163,7 @@ async function checkModUpdate(slug, currentVersionId) {
 async function main() {
   if (!useJsonOutput) {
     console.log(
-      `Checking updates for Minecraft version ${mcVersion} with mod loader ${modLoader}\n`
+      `Checking updates for Minecraft version ${mcVersion} with mod loader ${modLoader}\n`,
     );
   }
 

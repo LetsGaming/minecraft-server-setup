@@ -2,6 +2,15 @@ const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
 const axios = require("axios");
+const { parseArgs } = require("./args");
+
+// Usage:
+//   node update-mods.js [mcVersion] [--mcVersion=<ver>] [--migrate]
+//
+//   mcVersion  Target MC version — positional or --mcVersion=.
+//              Falls back to gameVersion in downloaded_versions.json.
+//   --migrate  Migrate legacy string entries in downloaded_versions.json to
+//              { versionId, filename } format. No download is performed.
 
 // ---------------- paths ----------------
 
@@ -10,7 +19,7 @@ const downloadedVersionsPath = path.resolve(
   __dirname,
   "..",
   "common",
-  "downloaded_versions.json"
+  "downloaded_versions.json",
 );
 
 // ---------------- helpers ----------------
@@ -57,7 +66,7 @@ function safeUnlink(filePath) {
 function detectInstalledJar(modsDir, slug, excludeFilename) {
   const slugRegex = new RegExp(
     `(^|[-_.])${escapeRegex(slug)}([-.+_]|$).*\\.jar$`,
-    "i"
+    "i",
   );
 
   return fs
@@ -104,7 +113,7 @@ function migrateDownloadedVersions(downloadedVersions, modsDir) {
       console.warn(`  no installed jar found`);
     } else {
       throw new Error(
-        `Ambiguous jars for ${slug}: ${matches.map((m) => m.file).join(", ")}`
+        `Ambiguous jars for ${slug}: ${matches.map((m) => m.file).join(", ")}`,
       );
     }
 
@@ -115,7 +124,7 @@ function migrateDownloadedVersions(downloadedVersions, modsDir) {
     fs.writeFileSync(
       downloadedVersionsPath,
       JSON.stringify(downloadedVersions, null, 2),
-      "utf8"
+      "utf8",
     );
     console.log("Migration completed successfully.");
   } else {
@@ -136,8 +145,8 @@ function runCheckUpdates(version) {
         if (err) {
           return reject(
             new Error(
-              `Failed to run check-updates.js: ${stderr || err.message}`
-            )
+              `Failed to run check-updates.js: ${stderr || err.message}`,
+            ),
           );
         }
 
@@ -145,10 +154,10 @@ function runCheckUpdates(version) {
           resolve(JSON.parse(stdout));
         } catch {
           reject(
-            new Error("Failed to parse JSON output from check-updates.js")
+            new Error("Failed to parse JSON output from check-updates.js"),
           );
         }
-      }
+      },
     );
   });
 }
@@ -173,7 +182,13 @@ async function downloadFile(url, targetPath) {
 
 async function main() {
   try {
-    const migrateOnly = process.argv.includes("--migrate");
+    const args = parseArgs({
+      flags: { mcVersion: null },
+      boolFlags: ["migrate"],
+      positional: ["mcVersion"],
+    });
+
+    const migrateOnly = args.bool("migrate");
 
     const vars = loadVariables();
     const serverPath = vars.SERVER_PATH;
@@ -185,7 +200,7 @@ async function main() {
     fs.mkdirSync(modsDir, { recursive: true });
 
     const downloadedVersions = JSON.parse(
-      fs.readFileSync(downloadedVersionsPath, "utf8")
+      fs.readFileSync(downloadedVersionsPath, "utf8"),
     );
 
     downloadedVersions.mods ??= {};
@@ -196,7 +211,7 @@ async function main() {
     }
 
     const version =
-      process.argv[2] || downloadedVersions.gameVersion || "latest";
+      args.get("mcVersion") || downloadedVersions.gameVersion || "latest";
 
     const { results } = await runCheckUpdates(version);
 
@@ -209,14 +224,14 @@ async function main() {
       if (!mod.downloadUrl) continue;
 
       const filename = decodeURIComponent(
-        path.basename(new URL(mod.downloadUrl).pathname)
+        path.basename(new URL(mod.downloadUrl).pathname),
       );
 
       const targetPath = path.join(modsDir, filename);
       const tempPath = `${targetPath}.tmp`;
 
       console.log(
-        `Updating mod: ${mod.slug} to version ${mod.latestVersionId}`
+        `Updating mod: ${mod.slug} to version ${mod.latestVersionId}`,
       );
 
       await downloadFile(mod.downloadUrl, tempPath);
@@ -241,7 +256,7 @@ async function main() {
       fs.writeFileSync(
         downloadedVersionsPath,
         JSON.stringify(downloadedVersions, null, 2),
-        "utf8"
+        "utf8",
       );
       console.log(`Downloaded and installed: ${filename}\n`);
     }
