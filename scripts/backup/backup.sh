@@ -60,8 +60,8 @@ done
 # ——— backup message ———
 if $ARCHIVE_MODE; then
   ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"
-  send_message "Starting archive backup" || log WARN "Failed to send message to server"
-  log INFO "Archive mode ON"
+  send_message "Starting archive backup ($ARCHIVE_TYPE)" || log WARN "Failed to send message to server"
+  log INFO "Archive mode ON — type: $ARCHIVE_TYPE"
 else
   send_message "Starting hourly backup" || log WARN "Failed to send message to server"
   log INFO "Hourly backup mode"
@@ -143,6 +143,34 @@ if $ARCHIVE_MODE && ! $DRY_RUN; then
     fi
     ln -sf "../../../jars/$jarname" "$TMP_DIR/$jarname"
   done < <(find "$SERVER_PATH" -type f -name '*.jar' -print0)
+fi
+
+# ——— stage instance metadata (archive mode only) ———
+# variables.txt and downloaded_versions.json are not under SERVER_PATH so the
+# rsync above does not capture them. Include them in archive backups so a
+# full rebuild from scratch has everything it needs: paths, retention config,
+# RCON/webhook settings, and the installed mod/pack version baseline.
+if $ARCHIVE_MODE && ! $DRY_RUN; then
+  log INFO "Staging instance metadata..."
+
+  COMMON_DIR="$SCRIPT_DIR/../common"
+  VERSIONS_FILE="$SCRIPT_DIR/../update/downloaded_versions.json"
+  META_DIR="$TMP_DIR/.mc-meta"
+  mkdir -p "$META_DIR"
+
+  if [[ -f "$COMMON_DIR/variables.txt" ]]; then
+    cp "$COMMON_DIR/variables.txt" "$META_DIR/variables.txt"
+    log INFO "  ✓ variables.txt"
+  else
+    log WARN "  variables.txt not found at $COMMON_DIR/variables.txt — skipping"
+  fi
+
+  if [[ -f "$VERSIONS_FILE" ]]; then
+    cp "$VERSIONS_FILE" "$META_DIR/downloaded_versions.json"
+    log INFO "  ✓ downloaded_versions.json"
+  else
+    log INFO "  downloaded_versions.json not found — skipping (normal if no updates have run)"
+  fi
 fi
 
 # ——— compress with tar + zstd ———
