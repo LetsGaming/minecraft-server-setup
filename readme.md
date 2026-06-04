@@ -28,10 +28,15 @@ Automated Minecraft server setup and management with backup rotation, mod update
 ## Installation
 
 ```bash
-git clone https://github.com/LetsGaming/minecraft-server-setup.git
+git clone --recurse-submodules https://github.com/LetsGaming/minecraft-server-setup.git
 cd minecraft-server-setup
 npm install
 ```
+
+> **Submodules:** The API server (`scripts/api-server/`) is a git submodule pointing to the [mc-api-server](https://github.com/your-org/mc-api-server) repo. `--recurse-submodules` pulls it automatically. If you already cloned without it, run:
+> ```bash
+> git submodule update --init
+> ```
 
 ## Configuration
 
@@ -151,7 +156,7 @@ Set `"VERSION": "latest"` for newest release, or any specific version string.
 
 ## minecraft-bot API Wrapper
 
-The setup includes an HTTP API wrapper (`scripts/api-server/index.js`) for the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot. It lets the bot manage and monitor this MC instance from a different machine.
+The API wrapper (`scripts/api-server/`) is a standalone [mc-api-server](https://github.com/your-org/mc-api-server) repo included as a git submodule. It lets the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot manage and monitor this MC instance over HTTP from a different machine.
 
 ### When to use it
 
@@ -175,7 +180,7 @@ Then run setup normally (it will prompt) or pass the flag explicitly:
 sudo -u <user> bash main.sh --api-server
 ```
 
-This installs `express`, creates, and starts a systemd service named `<INSTANCE_NAME>-api-server.service`.
+This installs dependencies and creates and starts a systemd service named `<INSTANCE_NAME>-api-server.service`.
 
 ### Bot configuration
 
@@ -205,6 +210,10 @@ systemctl status survival-api-server
 journalctl -u survival-api-server -f
 systemctl restart survival-api-server
 ```
+
+### Standalone deployment
+
+The API server can also be deployed independently without this setup project. See the [mc-api-server README](./scripts/api-server/README.md) for standalone install and configuration instructions.
 
 ## Contributing
 

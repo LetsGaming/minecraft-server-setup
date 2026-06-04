@@ -1,20 +1,36 @@
-'use strict';
+"use strict";
 
-const fs = require('fs');
-const path = require('path');
-const { execSync } = require('child_process');
-const loadVariables = require('../common/loadVariables');
+const fs = require("fs");
+const path = require("path");
+const { execSync } = require("child_process");
+const loadVariables = require("../common/loadVariables");
 
 const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
-const SCRIPTS_DIR = path.join(BASE_DIR, 'scripts', INSTANCE_NAME);
-const sourceDir = path.resolve(__dirname, '..', '..', 'scripts');
+const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", INSTANCE_NAME);
+const sourceDir = path.resolve(__dirname, "..", "..", "scripts");
 
 fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
 
-// Copy all scripts
-fs.readdirSync(sourceDir).forEach(file => {
+// Copy all scripts from the source directory.
+// scripts/api-server/ is a git submodule — it must be populated before setup.
+// If the directory exists but is empty (uninitialised submodule), bail early
+// with a clear message rather than copying an empty directory silently.
+const apiServerSrc = path.join(sourceDir, "api-server");
+if (
+  fs.existsSync(apiServerSrc) &&
+  fs.readdirSync(apiServerSrc).length === 0
+) {
+  console.error(
+    "[setup] scripts/api-server/ is empty.\n" +
+      "  The api-server is a git submodule. Initialise it before running setup:\n" +
+      "    git submodule update --init",
+  );
+  process.exit(1);
+}
+
+fs.readdirSync(sourceDir).forEach((file) => {
   const src = path.join(sourceDir, file);
   const dst = path.join(SCRIPTS_DIR, file);
   const stats = fs.statSync(src);
@@ -25,23 +41,23 @@ fs.readdirSync(sourceDir).forEach(file => {
   }
 });
 
-console.log('Scripts copied successfully.');
+console.log("Scripts copied successfully.");
 
 // Install npm dependencies for self-contained subdirectories.
 // Each subdirectory with its own package.json manages its own node_modules so
 // the scripts work after deployment without the setup project being present.
 const npmDirs = [
-  path.join(SCRIPTS_DIR, 'update'),
-  path.join(SCRIPTS_DIR, 'api-server'),
+  path.join(SCRIPTS_DIR, "update"),
+  path.join(SCRIPTS_DIR, "api-server"),
 ];
 
 for (const dir of npmDirs) {
-  if (fs.existsSync(path.join(dir, 'package.json'))) {
+  if (fs.existsSync(path.join(dir, "package.json"))) {
     const label = path.relative(BASE_DIR, dir);
     console.log(`Installing npm dependencies in ${label}...`);
     try {
-      execSync('npm install --omit=dev', { cwd: dir, stdio: 'inherit' });
-      console.log(`  done`);
+      execSync("npm install --omit=dev", { cwd: dir, stdio: "inherit" });
+      console.log("  done");
     } catch (err) {
       console.error(`  Failed to install in ${dir}: ${err.message}`);
       process.exit(1);
@@ -49,4 +65,4 @@ for (const dir of npmDirs) {
   }
 }
 
-console.log('All script dependencies installed.');
+console.log("All script dependencies installed.");
