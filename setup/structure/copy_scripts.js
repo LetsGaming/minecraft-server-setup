@@ -1,39 +1,29 @@
 "use strict";
 
-const fs = require("fs");
+const fs   = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 const loadVariables = require("../common/loadVariables");
 
 const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
-const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
+const BASE_DIR   = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
 const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", INSTANCE_NAME);
-const sourceDir = path.resolve(__dirname, "..", "..", "scripts");
+const sourceDir  = path.resolve(__dirname, "..", "..", "scripts");
 
 fs.mkdirSync(SCRIPTS_DIR, { recursive: true });
 
-// Copy all scripts from the source directory.
-// scripts/api-server/ is a git submodule — it must be populated before setup.
-// If the directory exists but is empty (uninitialised submodule), bail early
-// with a clear message rather than copying an empty directory silently.
-const apiServerSrc = path.join(sourceDir, "api-server");
-if (
-  fs.existsSync(apiServerSrc) &&
-  fs.readdirSync(apiServerSrc).length === 0
-) {
-  console.error(
-    "[setup] scripts/api-server/ is empty.\n" +
-      "  The api-server is a git submodule. Initialise it before running setup:\n" +
-      "    git submodule update --init",
-  );
-  process.exit(1);
-}
-
+// Copy management scripts for this instance.
+// The api-server is NOT copied here — it is a shared, single-process
+// deployment handled by create_api_server_service.js, which places it at
+// <target>/api-server/ (one copy for all instances on the machine).
 fs.readdirSync(sourceDir).forEach((file) => {
-  const src = path.join(sourceDir, file);
-  const dst = path.join(SCRIPTS_DIR, file);
+  if (file === "api-server") return; // deployed separately
+
+  const src   = path.join(sourceDir, file);
+  const dst   = path.join(SCRIPTS_DIR, file);
   const stats = fs.statSync(src);
+
   if (stats.isDirectory()) {
     fs.cpSync(src, dst, { recursive: true });
   } else if (stats.isFile()) {
@@ -43,12 +33,9 @@ fs.readdirSync(sourceDir).forEach((file) => {
 
 console.log("Scripts copied successfully.");
 
-// Install npm dependencies for self-contained subdirectories.
-// Each subdirectory with its own package.json manages its own node_modules so
-// the scripts work after deployment without the setup project being present.
+// Install npm dependencies for the update tooling.
 const npmDirs = [
   path.join(SCRIPTS_DIR, "update"),
-  path.join(SCRIPTS_DIR, "api-server"),
 ];
 
 for (const dir of npmDirs) {
