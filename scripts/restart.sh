@@ -2,7 +2,8 @@
 
 set -e
 
-source "$(dirname "$0")/common/server_control.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common/server_control.sh"
 
 echo "Starting server restart script..."
 

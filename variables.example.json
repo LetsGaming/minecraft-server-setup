@@ -1,0 +1,97 @@
+{
+  "INSTANCE_NAME": "server",
+  "TARGET_DIR_NAME": "minecraft-server",
+  "BACKUPS": {
+    "BACKUPS_PATH": "none",
+    "COMPRESSION_LEVEL": 15,
+    "MAX_STORAGE_GB": 30,
+    "DO_GENERATION_BACKUPS": true,
+    "MAX_HOURLY_BACKUPS": 3,
+    "MAX_DAILY_BACKUPS": 3,
+    "MAX_WEEKLY_BACKUPS": 2,
+    "MAX_MONTHLY_BACKUPS": 1
+  },
+  "API_SERVER": {
+    "ENABLED": false,
+    "PORT": 3030,
+    "API_KEY": "replace-with-a-long-random-secret"
+  },
+  "SERVER_CONTROL": {
+    "USE_RCON": false,
+    "RCON_PORT": 25575,
+    "RCON_PASSWORD": "replace-with-your-rcon-password",
+    "RCON_HOST": "localhost"
+  },
+  "NOTIFICATIONS": {
+    "WEBHOOK_URL": "https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN",
+    "WEBHOOK_EVENTS": [
+      "backup_complete",
+      "backup_failed",
+      "update_complete",
+      "update_failed",
+      "server_start",
+      "server_stop",
+      "storage_warning"
+    ]
+  },
+  "RESTART_SCHEDULE": {
+    "ENABLED": false,
+    "INTERVAL_HOURS": 12,
+    "SKIP_IF_EMPTY": true,
+    "WARN_SECONDS": 30
+  },
+  "JAVA": {
+    "SERVER": {
+      "VANILLA": {
+        "VERSION": "latest",
+        "SNAPSHOT": false,
+        "USE_FABRIC": false,
+        "MODS": {
+          "PERFORMANCE_MODS": true,
+          "UTILITY_MODS": true,
+          "OPTIONAL_MODS": false
+        }
+      },
+      "MAX_PLAYERS": 10,
+      "MOTD": "A Minecraft Server",
+      "SEED": "",
+      "WHITELIST": false,
+      "DIFFICULTY": "normal",
+      "PVP": false,
+      "FLIGHT_ENABLED": true,
+      "ALLOW_CRACKED": false
+    },
+    "JAVA_ARGS_CONFIG": {
+      "minMemory": "12G",
+      "maxMemory": "12G",
+      "metaspaceLimit": "512M",
+      "garbageCollector": "g1gc",
+      "enableStringDeduplication": true,
+      "g1gc": {
+        "maxPauseMillis": 100,
+        "g1NewSizePercent": 30,
+        "g1MaxNewSizePercent": 40,
+        "heapRegionSize": "16M",
+        "reservePercent": 20,
+        "heapWastePercent": 5,
+        "mixedGCCountTarget": 8,
+        "initiatingHeapOccupancyPercent": 15,
+        "survivorRatio": 32,
+        "parallelRefProcEnabled": true,
+        "disableExplicitGC": true,
+        "alwaysPreTouch": true,
+        "perfDisableSharedMem": true
+      },
+      "zgc": {
+        "uncommitDelay": "1h",
+        "uncommitDelayOnIdle": "30m",
+        "heapReservePercent": 5,
+        "concurrentGCThreads": 2,
+        "softMaxHeapSize": "12G"
+      },
+      "miscFlags": [
+        "-Dsun.rmi.dgc.server.gcInterval=9223372036854775807"
+      ]
+    }
+  }
+}

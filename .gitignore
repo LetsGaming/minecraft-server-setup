@@ -4,4 +4,13 @@ package-lock.json
 
 # OS artifacts
 .DS_Store
-Thumbs.db
+Thumbbs.db
+
+# ── Secrets / local configuration — never commit ────────────────────────────
+# variables.json contains RCON passwords, API keys, and webhook URLs.
+# Copy variables.example.json → variables.json and fill in your values locally.
+variables.json
+
+# Runtime files written by scripts
+common/variables.txt
+scripts/*/common/variables.txt

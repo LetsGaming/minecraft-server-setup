@@ -132,6 +132,38 @@ function loadVariables() {
     }
   }
 
+  // Validate configured heap against available system memory (Linux only).
+  // A maxMemory larger than MemAvailable causes the JVM to fail at startup
+  // with a cryptic native OOM error. We warn here so the operator can adjust
+  // the value before the server launch attempt.
+  if (process.platform === "linux") {
+    try {
+      const memInfoRaw = require("fs").readFileSync("/proc/meminfo", "utf-8");
+      const match = memInfoRaw.match(/^MemAvailable:\s+(\d+)\s+kB/m);
+      if (match) {
+        const availableKb  = parseInt(match[1], 10);
+        const availableMb  = Math.floor(availableKb / 1024);
+
+        // Convert configured maxMemory to MB for comparison
+        const maxMemStr    = javaArgsConfig.maxMemory.toUpperCase();
+        const maxMemVal    = parseInt(maxMemStr, 10);
+        const maxMemMb     = maxMemStr.endsWith("G") ? maxMemVal * 1024
+                          : maxMemStr.endsWith("M") ? maxMemVal
+                          : Math.floor(maxMemVal / 1024);
+
+        if (maxMemMb > availableMb) {
+          process.stderr.write(
+            `[WARN] JAVA.JAVA_ARGS_CONFIG.maxMemory (${javaArgsConfig.maxMemory}) exceeds ` +
+            `available system memory (${availableMb} MB free). ` +
+            "The JVM will likely fail to start. Lower maxMemory in variables.json.\n"
+          );
+        }
+      }
+    } catch {
+      // /proc/meminfo unavailable — skip the check silently
+    }
+  }
+
   // Validate GC choice
   const gcConfig = javaArgsConfig.garbageCollector;
   if (!VALID_GC.includes(gcConfig)) {

@@ -28,6 +28,12 @@ _event_enabled() {
 
 # Send a webhook notification
 # Args: event_type message [title] [color]
+#
+# JSON is built with jq (--arg / --argjson) rather than heredoc string
+# interpolation. Heredoc interpolation embeds shell variables directly into
+# the JSON text, so a message containing " or \ produces malformed JSON and
+# a crafted player-triggered message could inject arbitrary JSON fields.
+# jq escapes all special characters correctly before assembling the payload.
 notify() {
   local event="$1"
   local message="$2"
@@ -46,43 +52,46 @@ notify() {
 
   # Set color based on event type
   case "$event" in
-    *_failed|*_error)  color=15158332 ;; # Red
-    *_warning)         color=16776960 ;; # Yellow
-    *_complete|*_start) color=3066993 ;; # Green
+    *_failed|*_error)   color=15158332 ;; # Red
+    *_warning)          color=16776960 ;; # Yellow
+    *_complete|*_start) color=3066993  ;; # Green
   esac
 
   local timestamp
   timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+  # Require jq for safe JSON construction — abort silently if unavailable
+  if ! command -v jq &>/dev/null; then
+    echo "[webhook] jq not found — notification skipped. Install jq to enable webhooks." >&2
+    return 0
+  fi
+
+  local payload
   # Detect if it's a Discord webhook
   if [[ "$WEBHOOK_URL" == *"discord.com/api/webhooks"* || "$WEBHOOK_URL" == *"discordapp.com/api/webhooks"* ]]; then
-    # Discord embed format
-    local payload
-    payload=$(cat <<EOJSON
-{
-  "embeds": [{
-    "title": "$title",
-    "description": "$message",
-    "color": $color,
-    "timestamp": "$timestamp",
-    "footer": {"text": "$event"}
-  }]
-}
-EOJSON
-)
+    # Discord embed format — all string values escaped by jq via --arg
+    payload=$(jq -nc \
+      --arg     title  "$title"     \
+      --arg     desc   "$message"   \
+      --argjson color  "$color"     \
+      --arg     ts     "$timestamp" \
+      --arg     footer "$event"     \
+      '{embeds:[{title:$title,description:$desc,color:$color,timestamp:$ts,footer:{text:$footer}}]}')
   else
     # Generic webhook JSON
-    local payload
-    payload=$(cat <<EOJSON
-{
-  "event": "$event",
-  "instance": "$INSTANCE_NAME",
-  "title": "$title",
-  "message": "$message",
-  "timestamp": "$timestamp"
-}
-EOJSON
-)
+    payload=$(jq -nc \
+      --arg     event    "$event"         \
+      --arg     instance "$INSTANCE_NAME" \
+      --arg     title    "$title"         \
+      --arg     message  "$message"       \
+      --arg     ts       "$timestamp"     \
+      '{event:$event,instance:$instance,title:$title,message:$message,timestamp:$ts}')
+  fi
+
+  # Abort if jq produced empty output (should not happen, but be defensive)
+  if [[ -z "$payload" ]]; then
+    echo "[webhook] Failed to build JSON payload — notification skipped." >&2
+    return 0
   fi
 
   # Send async (don't block the caller)

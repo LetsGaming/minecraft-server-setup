@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-LOGS_DIR="$(dirname "$0")/../logs"
+LOGS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../logs"
 mkdir -p "$LOGS_DIR"
 
 AUTOMATION_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

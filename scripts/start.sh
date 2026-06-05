@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-source "$(dirname "$0")/common/load_variables.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/common/load_variables.sh"
 
 echo "Starting $INSTANCE_NAME server..."
 
