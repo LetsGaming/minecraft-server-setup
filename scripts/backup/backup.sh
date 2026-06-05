@@ -186,9 +186,9 @@ if ! $DRY_RUN; then
   if $ARCHIVE_MODE; then
     # Archives use the higher of configured level and 15 for long-term storage
     archive_level=$(( COMPRESSION_LEVEL > 15 ? COMPRESSION_LEVEL : 15 ))
-    ZSTD_OPTS+=(-$archive_level -o "$ARCHIVE_PATH")
+    ZSTD_OPTS+=("-$archive_level" -o "$ARCHIVE_PATH")
   else
-    ZSTD_OPTS+=(-$COMPRESSION_LEVEL -o "$ARCHIVE_PATH")
+    ZSTD_OPTS+=("-$COMPRESSION_LEVEL" -o "$ARCHIVE_PATH")
   fi
 
   tar "${TAR_OPTS[@]}" | zstd "${ZSTD_OPTS[@]}"

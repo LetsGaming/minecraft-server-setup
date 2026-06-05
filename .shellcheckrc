@@ -1,0 +1,7 @@
+# Codes that are unavoidable in this codebase and suppressed globally:
+#   SC2034 — unused variables (common in sourced files where vars are used by consumers)
+#   SC1091 — not following sourced files (paths exist only at runtime on the target server)
+#   SC1090 — non-constant source path (same reason as SC1091)
+disable=SC2034
+disable=SC1091
+disable=SC1090

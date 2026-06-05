@@ -78,7 +78,8 @@ notify_warning "rollback_start" "Server $INSTANCE_NAME is rolling back to backup
 
 # Clear server directory
 echo "[INFO] Clearing server files..."
-rm -rf "$SERVER_PATH"/*
+# SC2115: ${SERVER_PATH:?} aborts if var is empty, preventing accidental rm -rf /*
+rm -rf "${SERVER_PATH:?}"/*
 
 # Restore backup
 echo "[INFO] Restoring backup..."

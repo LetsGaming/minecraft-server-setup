@@ -5,11 +5,13 @@ on:
     branches: ["**"]
     paths:
       - "**.sh"
+      - ".shellcheckrc"
       - ".github/workflows/shellcheck.yml"
   pull_request:
     branches: ["**"]
     paths:
       - "**.sh"
+      - ".shellcheckrc"
 
 jobs:
   shellcheck:
@@ -22,8 +24,9 @@ jobs:
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
         with:
-          # SC2034: unused variables (common in sourced files)
-          # SC1091: don't follow sourced files (paths not present in CI)
-          ignore_codes: "SC2034,SC1091"
+          # Code suppressions live in .shellcheckrc so they apply locally too.
+          # Valid inputs: additional_files, ignore, ignore_paths, ignore_names,
+          #   severity, check_together, scandir, disable_matcher, format, version
           severity: warning
           scandir: "."
+          ignore_paths: "scripts/minecraft-server-manager"

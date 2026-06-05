@@ -82,7 +82,7 @@ handle_player_event() {
         fi
     elif [[ "$action" == "leave" ]]; then
         if [[ -n "${ONLINE_PLAYERS[$player]}" ]]; then
-            unset ONLINE_PLAYERS["$player"]
+            unset "ONLINE_PLAYERS[$player]"
             echo "[EVENT] $player left"
             if [[ ${#ONLINE_PLAYERS[@]} -eq 0 ]]; then
                 resume_chunk_loading

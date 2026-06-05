@@ -282,7 +282,9 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
 fi
 
 run_cmd() {
-  $DRY_RUN && echo "[DRY-RUN] $*" || eval "$@"
+  # SC2294: replaced eval "$@" with direct "$@" — preserves word boundaries
+  # and avoids shell re-parsing. run_cmd callers pass pre-split commands.
+  $DRY_RUN && echo "[DRY-RUN] $*" || "$@"
 }
 
 # ── Step 1: Compressed archive backup ──

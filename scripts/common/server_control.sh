@@ -213,6 +213,7 @@ get_player_count() {
 
 # ── Save handling ──
 
+# shellcheck disable=SC2120  # timeout arg is optional; callers use the 60s default
 wait_for_save_completion() {
   local timeout="${1:-60}"
 

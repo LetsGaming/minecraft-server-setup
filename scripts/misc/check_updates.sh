@@ -48,10 +48,12 @@ check_mod_update() {
     local api_url="https://api.curseforge.com/v1/mods/$mod_id"
     
     # Fetch the mod details using curl with the API key
-    local response=$(curl -s -H "x-api-key: $API_KEY" "$api_url")
+    local response
+    response=$(curl -s -H "x-api-key: $API_KEY" "$api_url")
     
     # Extract the mainFileId from the response
-    local latest_file_id=$(echo "$response" | grep -oP '"mainFileId": *([0-9]+)' | sed -E 's/"mainFileId": *([0-9]+)/\1/')
+    local latest_file_id
+    latest_file_id=$(echo "$response" | grep -oP '"mainFileId": *([0-9]+)' | sed -E 's/"mainFileId": *([0-9]+)/\1/')
 
     # Ensure we have a valid file ID
     if [ -z "$latest_file_id" ]; then

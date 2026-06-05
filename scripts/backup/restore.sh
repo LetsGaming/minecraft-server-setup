@@ -96,7 +96,8 @@ if [ "$(ls -A "$SERVER_PATH")" ]; then
     fi
 fi
 
-rm -rf "$SERVER_PATH"/*
+# SC2115: ${SERVER_PATH:?} aborts if var is empty, preventing accidental rm -rf /*
+rm -rf "${SERVER_PATH:?}"/*
 echo "[INFO] Restoring backup..."
 
 if [[ "$BACKUP_TO_RESTORE" == *.tar.gz ]]; then
