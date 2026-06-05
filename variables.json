@@ -24,7 +24,15 @@
   },
   "NOTIFICATIONS": {
     "WEBHOOK_URL": "",
-    "WEBHOOK_EVENTS": ["backup_complete", "backup_failed", "update_complete", "update_failed", "server_start", "server_stop", "storage_warning"]
+    "WEBHOOK_EVENTS": [
+      "backup_complete",
+      "backup_failed",
+      "update_complete",
+      "update_failed",
+      "server_start",
+      "server_stop",
+      "storage_warning"
+    ]
   },
   "RESTART_SCHEDULE": {
     "ENABLED": false,
@@ -85,5 +93,11 @@
         "-Dsun.rmi.dgc.server.gcInterval=9223372036854775807"
       ]
     }
+  },
+  "WEB_INTERFACE": {
+    "ENABLED": false,
+    "PORT": 3001,
+    "SESSION_TTL_HOURS": 24,
+    "BLOCKED_COMMANDS": []
   }
 }

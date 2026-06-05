@@ -93,5 +93,11 @@
         "-Dsun.rmi.dgc.server.gcInterval=9223372036854775807"
       ]
     }
+  },
+  "WEB_INTERFACE": {
+    "ENABLED": false,
+    "PORT": 3001,
+    "SESSION_TTL_HOURS": 24,
+    "BLOCKED_COMMANDS": []
   }
 }

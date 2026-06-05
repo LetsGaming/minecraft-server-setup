@@ -8,7 +8,7 @@ set_flags_from_defaults() {
     [[ ! "$*" =~ "--no-service" ]] && NO_SERVICE=false
     [[ ! "$*" =~ "--no-backup" ]] && NO_BACKUP=false
     [[ ! "$*" =~ "--api-server" ]] && SETUP_API_SERVER=false
-    [[ ! "$*" =~ "--interface" ]] && SETUP_INTERFACE=true
+    [[ ! "$*" =~ "--interface" ]] && SETUP_INTERFACE=false  # mirrors SETUP_API_SERVER — opt-in, not opt-out
   fi
 }
 

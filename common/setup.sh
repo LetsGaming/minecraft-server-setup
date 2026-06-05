@@ -98,9 +98,17 @@ run_optional_setup() {
 
   if [ "$SETUP_INTERFACE" = true ]; then
     log "Setting up web interface..."
-    run_or_echo "bash \"$SCRIPT_DIR/setup/interface/setup_interface.sh\""
+    run_or_echo "node \"$SCRIPT_DIR/setup/management/create_manager_service.js\""
   else
-    warn "Skipping web interface setup (--interface)."
+    # Still set up if enabled in variables.json and flag wasn't explicitly suppressed
+    local iface_enabled
+    iface_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.WEB_INTERFACE?.ENABLED || false)" 2>/dev/null)
+    if [ "$iface_enabled" = "true" ]; then
+      log "WEB_INTERFACE.ENABLED=true — setting up web interface..."
+      run_or_echo "node \"$SCRIPT_DIR/setup/management/create_manager_service.js\""
+    else
+      warn "Skipping web interface setup (use --interface or set WEB_INTERFACE.ENABLED=true)."
+    fi
   fi
 
   # Setup restart cron if enabled
@@ -296,6 +304,25 @@ run_preflight_check() {
     fi
   else
     echo "  ✓ API server disabled (set API_SERVER.ENABLED=true to enable)"
+  fi
+
+  # 10. Check web interface config
+  echo "[CHECK] Web interface config..."
+  local wi_enabled wi_port
+  wi_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.WEB_INTERFACE?.ENABLED || false)" 2>/dev/null)
+  if [ "$wi_enabled" = "true" ]; then
+    wi_port=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.WEB_INTERFACE?.PORT || 3001)" 2>/dev/null)
+    echo "  ✓ Web interface enabled (port $wi_port)"
+    # Check submodule is present
+    if [ ! -f "$SCRIPT_DIR/scripts/minecraft-server-manager/app.js" ]; then
+      echo "  ✗ scripts/minecraft-server-manager/ submodule not initialised"
+      echo "    Run: git submodule update --init"
+      errors=$((errors + 1))
+    else
+      echo "  ✓ Manager submodule present"
+    fi
+  else
+    echo "  ✓ Web interface disabled (set WEB_INTERFACE.ENABLED=true to enable)"
   fi
 
   # Summary

@@ -209,6 +209,45 @@ function loadVariables() {
     });
   }
 
+  // ── WEB_INTERFACE (optional) ────────────────────────────────────────────
+  // Mirrors the API_SERVER validation block so the same patterns apply.
+  if (data.WEB_INTERFACE !== undefined) {
+    const wi = data.WEB_INTERFACE;
+
+    if (wi.ENABLED !== undefined && typeof wi.ENABLED !== "boolean") {
+      throw new Error("WEB_INTERFACE.ENABLED must be a boolean (true/false).");
+    }
+    if (wi.PORT !== undefined) {
+      const p = Number(wi.PORT);
+      if (!Number.isInteger(p) || p < 1 || p > 65535) {
+        throw new Error("WEB_INTERFACE.PORT must be an integer between 1 and 65535.");
+      }
+      // Warn on collision with the api-server default port
+      const apiPort = Number((data.API_SERVER || {}).PORT || 3000);
+      if (p === apiPort) {
+        process.stderr.write(
+          `[WARN] WEB_INTERFACE.PORT (${p}) matches API_SERVER.PORT (${apiPort}). ` +
+          "Both services cannot listen on the same port.\n"
+        );
+      }
+    }
+    if (wi.SESSION_TTL_HOURS !== undefined) {
+      if (typeof wi.SESSION_TTL_HOURS !== "number" || wi.SESSION_TTL_HOURS <= 0) {
+        throw new Error("WEB_INTERFACE.SESSION_TTL_HOURS must be a positive number.");
+      }
+    }
+    if (wi.BLOCKED_COMMANDS !== undefined) {
+      if (!Array.isArray(wi.BLOCKED_COMMANDS)) {
+        throw new Error("WEB_INTERFACE.BLOCKED_COMMANDS must be an array of strings.");
+      }
+      wi.BLOCKED_COMMANDS.forEach((cmd, i) => {
+        if (typeof cmd !== "string") {
+          throw new Error(`WEB_INTERFACE.BLOCKED_COMMANDS[${i}] must be a string.`);
+        }
+      });
+    }
+  }
+
   return data;
 }
 
