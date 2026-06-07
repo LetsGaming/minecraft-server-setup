@@ -1,7 +1,0 @@
-{
-  "PORT": 3001,
-  "SCRIPT_DIR": "/path/to/scripts/your-instance-name",
-  "LOG_LINES": 1000,
-  "BLOCKED_COMMANDS": [],
-  "SESSION_TTL_HOURS": 24
-}

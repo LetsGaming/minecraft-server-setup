@@ -1,7 +1,0 @@
-node_modules/
-tmp/
-.DS_Store
-
-# ── Secrets — never commit ──────────────────────────────────────────────
-# users.json contains bcrypt hashes. Create it with: node register.js <user> <pass>
-src/config/users.json
