@@ -2,13 +2,13 @@
 set -e
 
 # Source modular scripts
-source "$(dirname "$0")/common/checks.sh"
-source "$(dirname "$0")/common/env.sh"
-source "$(dirname "$0")/common/logging.sh"
-source "$(dirname "$0")/common/args.sh"
-source "$(dirname "$0")/common/prompts.sh"
-source "$(dirname "$0")/common/flags.sh"
-source "$(dirname "$0")/common/setup.sh"
+source "$(dirname "$0")/src/common/checks.sh"
+source "$(dirname "$0")/src/common/env.sh"
+source "$(dirname "$0")/src/common/logging.sh"
+source "$(dirname "$0")/src/common/args.sh"
+source "$(dirname "$0")/src/common/prompts.sh"
+source "$(dirname "$0")/src/common/flags.sh"
+source "$(dirname "$0")/src/common/setup.sh"
 
 # Define available flags
 declare -A ARG_OPTS=(

@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Minecraft Server Control Panel</title>
+    <link rel="stylesheet" href="assets/css/style.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
+  </head>
+  <body>
+    <div class="align-middle main-container">
+      <header>
+        <div class="header-top">
+          <h1>Minecraft Control</h1>
+          <div class="header-actions">
+            <select id="theme-select" class="theme-select" onchange="setTheme(this.value)">
+              <option value="emerald">Emerald Night</option>
+              <option value="cyber">Midnight Cyber</option>
+              <option value="sandstone">Sandstone</option>
+            </select>
+            <button class="action-button logout-button login-required" id="logout-button" onclick="logout()">
+              Logout
+            </button>
+          </div>
+        </div>
+
+        <div class="tab-buttons">
+          <button class="tab-button active" id="login-tab-button" onclick="showTab('login')">Login</button>
+          <button class="tab-button login-required" onclick="showTab('control')">Server Control</button>
+          <button class="tab-button login-required" onclick="showTab('backup')">Backups</button>
+          <button class="tab-button" onclick="showTab('log')">Logs</button>
+          <button class="reload-button" onclick="reloadAll()" aria-label="Reload">&#x21bb;</button>
+        </div>
+
+        <div id="status">Status: Checking...</div>
+      </header>
+
+      <!-- Login -->
+      <div class="tab-content container active" id="login">
+        <h2>Administrator Login</h2>
+        <form onsubmit="login(); return false;" id="login-form">
+          <input type="text" id="username" placeholder="Username" required />
+          <input type="password" id="password" placeholder="Password" required />
+          <button type="submit" class="action-button">Login to Panel</button>
+        </form>
+      </div>
+
+      <!-- Server Control -->
+      <div id="control" class="tab-content container">
+        <h2>Server Controls</h2>
+        <div class="control-buttons-container">
+          <button id="start-button" class="action-button control-button" onclick="sendCommand('start', true)">Start Server</button>
+          <button id="restart-button" class="action-button control-button btn-warning" onclick="sendCommand('restart', true)">Restart Server</button>
+          <button id="stop-button" class="action-button control-button btn-danger" onclick="sendCommand('shutdown', true)">Shutdown Server</button>
+          <button class="action-button control-button btn-secondary" onclick="sendCommand('smart-restart', true)">Smart Restart</button>
+        </div>
+
+        <h3>Advanced</h3>
+        <div class="control-buttons-container">
+          <button class="action-button control-button btn-danger" onclick="confirmAction('rollback')">Rollback Server</button>
+        </div>
+
+        <div id="rcon-command-section" class="rcon-section">
+          <h3>Send Command</h3>
+          <form onsubmit="sendRconCommand(); return false;" class="rcon-form">
+            <input type="text" id="rcon-command" placeholder="Enter server command (e.g. list, say hello)" />
+            <button type="submit" class="action-button">Send</button>
+          </form>
+          <pre id="rcon-response" class="rcon-output"></pre>
+        </div>
+      </div>
+
+      <!-- Logs -->
+      <div id="log" class="tab-content container">
+        <h2>Live Logs</h2>
+        <div class="log-controls">
+          <div class="log-control-inputs">
+            <label for="log-length">Lines</label>
+            <input type="number" id="log-length" value="100" min="1" max="1000" class="log-length-input" />
+          </div>
+          <div class="log-control-inputs">
+            <label for="auto-scroll-checkbox">Auto Scroll</label>
+            <input type="checkbox" id="auto-scroll-checkbox" checked />
+          </div>
+          <div id="log-toggle-container" class="log-control-inputs">
+            <label for="log-toggle-button">Terminal View</label>
+            <input type="checkbox" id="log-toggle-button" />
+          </div>
+        </div>
+        <pre id="log-output">Loading logs...</pre>
+        <div id="terminal-container" class="terminal-hidden">
+          <div id="terminal"></div>
+        </div>
+      </div>
+
+      <!-- Backups -->
+      <div id="backup" class="tab-content container">
+        <h2>Backup Controls</h2>
+
+        <form id="backup-form">
+          <div class="checkbox-row">
+            <input type="checkbox" id="archive-option" />
+            <label for="archive-option">Archive Backup?</label>
+          </div>
+          <button class="action-button">Create Backup</button>
+        </form>
+
+        <form id="restore-form">
+          <label for="backup-select">Select Backup to Restore</label>
+          <select id="backup-select">
+            <option value="" disabled selected>Choose Backup</option>
+          </select>
+          <button class="action-button btn-accent" type="submit">Restore Backup</button>
+        </form>
+
+        <form id="download-form">
+          <label for="download-file">Select Backup to Download</label>
+          <select name="file" id="download-file">
+            <option value="" disabled selected>Choose Backup</option>
+          </select>
+          <button class="action-button btn-secondary" type="submit">Download Backup</button>
+        </form>
+
+        <div id="download-status" class="download-status">
+          <progress id="download-progress" value="0" max="100"></progress>
+          <div id="download-text" class="download-text"></div>
+        </div>
+      </div>
+
+      <footer>
+        <p>Minecraft is a trademark of Mojang AB. Panel v3.0</p>
+      </footer>
+    </div>
+
+    <div id="toast" class="toast">Message goes here</div>
+
+    <div id="sudo-modal" class="modal-overlay">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Sudo Authentication</h3>
+          <p>This action requires sudo privileges.</p>
+        </div>
+        <div class="modal-body">
+          <input type="password" id="sudo-password" placeholder="Enter sudo password" autocomplete="current-password" />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="action-button btn-secondary" id="cancel-sudo-button">Cancel</button>
+          <button type="button" class="action-button" id="confirm-sudo-button">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="./assets/js/main.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.min.js"></script>
+  </body>
+</html>
