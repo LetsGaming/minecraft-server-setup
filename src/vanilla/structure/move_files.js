@@ -47,4 +47,4 @@ if (!fs.existsSync(INSTANCE_DIR)) {
 
 // Move tmp -> instance
 moveContentsSync(tmpDir, INSTANCE_DIR);
-copyStartScript(path.join(process.env.SCRIPT_DIR, "vanilla"), INSTANCE_DIR);
+copyStartScript(path.join(process.env.SCRIPT_DIR, "src", "vanilla"), INSTANCE_DIR);
