@@ -39,7 +39,19 @@ fi
 
 set_flags_from_defaults "$@"
 prompt_for_flags
+
+# Arm the rollback trap now that we are about to make real changes.
+_SETUP_SUCCESS=false
+_rollback_if_needed() {
+  if [[ "$_SETUP_SUCCESS" != true && "$DRY_RUN" != true ]]; then
+    run_rollback
+  fi
+}
+trap '_rollback_if_needed' EXIT
+trap '_rollback_if_needed; exit 130' INT
+
 run_modpack_setup
 run_optional_setup
+_SETUP_SUCCESS=true
 run_modpack_cleanup
 maybe_start_server

@@ -120,6 +120,62 @@ run_optional_setup() {
   fi
 }
 
+run_rollback() {
+  warn "Setup failed — rolling back all changes..."
+
+  # Read instance config from variables.json
+  local instance_name target_dir
+  instance_name=$(node -e "try{process.stdout.write(require('$SCRIPT_DIR/variables.json').INSTANCE_NAME||'')}catch(e){}" 2>/dev/null || true)
+  target_dir=$(node -e "try{process.stdout.write(require('$SCRIPT_DIR/variables.json').TARGET_DIR_NAME||'')}catch(e){}" 2>/dev/null || true)
+
+  if [[ -z "$instance_name" || -z "$target_dir" ]]; then
+    warn "Could not read instance config from variables.json — skipping rollback."
+    warn "You may need to clean up manually."
+    return
+  fi
+
+  local base_dir="$MAIN_DIR/$target_dir"
+
+  # Guard: never remove HOME or /
+  if [[ "$base_dir" == "$MAIN_DIR" || "$base_dir" == "/" || -z "$base_dir" ]]; then
+    warn "Unsafe base_dir detected ('$base_dir') — skipping directory removal."
+  else
+    # Stop and remove all created systemd services
+    for svc in "$instance_name" "${target_dir}-api-server" "${target_dir}-manager"; do
+      if sudo systemctl list-unit-files "${svc}.service" &>/dev/null; then
+        log "Stopping service: ${svc}.service"
+        sudo systemctl stop    "${svc}.service" 2>/dev/null || true
+        sudo systemctl disable "${svc}.service" 2>/dev/null || true
+      fi
+      sudo rm -f "/etc/systemd/system/${svc}.service"
+    done
+    sudo systemctl daemon-reload 2>/dev/null || true
+
+    # Remove cron entries that reference this instance's directory
+    if crontab -l 2>/dev/null | grep -qF "$base_dir"; then
+      log "Removing cron entries for $base_dir"
+      crontab -l 2>/dev/null | grep -vF "$base_dir" | crontab - 2>/dev/null || true
+    fi
+
+    # Remove the entire instance directory tree
+    # (contains server files, scripts, api-server, manager)
+    if [[ -d "$base_dir" ]]; then
+      log "Removing $base_dir"
+      sudo rm -rf "$base_dir"
+    fi
+  fi
+
+  # Remove source-tree artifacts written during setup
+  local src_common="$SCRIPT_DIR/src/scripts/common"
+  sudo rm -f "$src_common/variables.txt"
+  sudo rm -f "$src_common/curseforge.txt"
+  sudo rm -f "$src_common/downloaded_versions.json"
+  sudo rm -rf "$SCRIPT_DIR/src/vanilla/temp"
+  sudo rm -rf "$SCRIPT_DIR/src/setup/download/temp"
+
+  warn "Rollback complete. Re-run the setup script when you are ready."
+}
+
 run_modpack_cleanup() {
   log "Cleaning up temporary files..."
   run_or_echo "sudo rm -rf \"$SCRIPT_DIR/temp\""

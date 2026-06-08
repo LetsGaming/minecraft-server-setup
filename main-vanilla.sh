@@ -38,7 +38,21 @@ fi
 set_flags_from_defaults "$@"
 prompt_for_flags
 
+# Arm the rollback trap now that we are about to make real changes.
+# It fires on any unhandled error (set -e) or SIGINT (Ctrl+C).
+# Dry-run mode makes no real changes so no rollback is needed.
+_SETUP_SUCCESS=false
+_rollback_if_needed() {
+  if [[ "$_SETUP_SUCCESS" != true && "$DRY_RUN" != true ]]; then
+    run_rollback
+  fi
+}
+trap '_rollback_if_needed' EXIT
+trap '_rollback_if_needed; exit 130' INT
+
 run_vanilla_setup
 run_optional_setup
+# Mark success before cleanup/start so those failures don't trigger rollback
+_SETUP_SUCCESS=true
 run_vanilla_cleanup
 maybe_start_server
