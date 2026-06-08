@@ -38,7 +38,7 @@ const MANAGER_DIR    = path.join(BASE_DIR, "manager");
 const MANAGER_APP    = path.join(MANAGER_DIR, "app.js");
 const MANAGER_CONFIG = path.join(MANAGER_DIR, "src", "config", "config.json");
 const USERS_FILE     = path.join(MANAGER_DIR, "src", "config", "users.json");
-const REGISTER_JS    = path.join(MANAGER_DIR, "register.js");
+const REGISTER_JS    = path.join(MANAGER_DIR, "scripts", "register.js");
 
 // Source: git submodule at scripts/minecraft-server-manager/
 const SETUP_REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -145,7 +145,7 @@ if (!fs.existsSync(USERS_FILE)) {
   console.log(`║  ${pad("Username : admin", 56)}║`);
   console.log(`║  ${pad(`Password : ${_cleared}`, 56)}║`);
   console.log(`║  ${pad("", 56)}║`);
-  console.log(`║  ${pad("To change: node register.js <user> <new_password>", 56)}║`);
+  console.log(`║  ${pad("To change: node scripts/register.js <user> <new_password>", 56)}║`);
   console.log(`╚${border}╝\n`);
 } else {
   console.log("[manager] users.json already exists — skipping user initialisation.");
