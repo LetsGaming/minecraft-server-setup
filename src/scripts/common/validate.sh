@@ -40,7 +40,7 @@ run_validate() {
   fi
 
   # 3. systemd service
-  local service="${TARGET_DIR_NAME:-minecraft}-${INSTANCE_NAME:-server}.service"
+  local service="${INSTANCE_NAME}.service"
   if systemctl list-unit-files "$service" &>/dev/null && \
      systemctl list-unit-files "$service" | grep -q "$service"; then
     local status

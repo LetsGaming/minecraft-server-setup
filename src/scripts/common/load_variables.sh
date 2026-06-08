@@ -2,12 +2,12 @@
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_LV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-VARS_FILE="$SCRIPT_DIR/variables.txt"
+VARS_FILE="$_LV_DIR/variables.txt"
 
 if [ ! -f "$VARS_FILE" ]; then
-    echo "Error: variables.txt not found in $SCRIPT_DIR"
+    echo "Error: variables.txt not found in $_LV_DIR"
     exit 1
 fi
 

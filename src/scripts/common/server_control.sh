@@ -2,12 +2,13 @@
 
 set -e
 
-# Get the absolute path of the directory where *this script* resides
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get the absolute path of the directory where *this script* resides,
+# using a private name so we don't overwrite the caller's SCRIPT_DIR.
+_SC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load variables from the common folder
-source "$SCRIPT_DIR/load_variables.sh"
-source "$SCRIPT_DIR/webhook.sh"
+source "$_SC_DIR/load_variables.sh"
+source "$_SC_DIR/webhook.sh"
 
 # Reference log file based on loaded variable
 LOG_FILE="$SERVER_PATH/logs/latest.log"
@@ -24,7 +25,7 @@ _rcon_send() {
   local cmd="$1"
   # Strip leading / for RCON (RCON doesn't use /)
   cmd="${cmd#/}"
-  node "$SCRIPT_DIR/rcon.js" "${RCON_HOST:-localhost}" "${RCON_PORT:-25575}" "$RCON_PASSWORD" "$cmd" 2>/dev/null
+  node "$_SC_DIR/rcon.js" "${RCON_HOST:-localhost}" "${RCON_PORT:-25575}" "$RCON_PASSWORD" "$cmd" 2>/dev/null
 }
 
 # ── Screen transport ──

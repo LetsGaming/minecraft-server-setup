@@ -58,13 +58,13 @@ else
 fi
 
 find_latest_backup() {
-    find "$BACKUP_DIR" -maxdepth 1 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
+    find "$BACKUP_DIR" -maxdepth 2 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
         sort -nr | head -n1 | cut -d' ' -f2-
 }
 
 find_closest_backup_by_time() {
     local target_ts="$1"
-    find "$BACKUP_DIR" -maxdepth 1 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
+    find "$BACKUP_DIR" -maxdepth 2 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
         awk -v tgt="$target_ts" '{ diff = ($1 - tgt); if (diff < 0) diff = -diff; print diff, $0; }' |
         sort -n | head -n1 | cut -d' ' -f2-
 }

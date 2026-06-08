@@ -56,6 +56,7 @@ fi
 
 # Install Node.js dependencies
 echo "Installing Node.js packages..."
+cd "$SCRIPT_DIR"
 npm install --no-package-lock --omit=dev
 
 echo "All packages installed and up to date."

@@ -45,7 +45,7 @@ const CHECK_UPDATES_SCRIPT = path.resolve(SCRIPT_DIR, "check-updates.js");
 const BACKUP_SCRIPT = path.resolve(SCRIPT_DIR, "..", "backup", "backup.sh");
 
 const MOJANG_MANIFEST_URL =
-  "https://launchermeta.mojang.com/mc/game/version_manifest.json";
+  "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
 // ── Config loading ────────────────────────────────────────────────────────
 

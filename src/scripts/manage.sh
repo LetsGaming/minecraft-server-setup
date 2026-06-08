@@ -19,8 +19,8 @@ find_instances() {
   local base_dir
   base_dir=$(dirname "$SCRIPT_DIR")
 
-  if [[ -d "$base_dir/scripts" ]]; then
-    for dir in "$base_dir"/scripts/*/; do
+  if [[ -d "$base_dir" ]]; then
+    for dir in "$base_dir"/*/; do
       local vars_file="$dir/common/variables.txt"
       if [[ -f "$vars_file" ]]; then
         basename "$dir"
@@ -33,7 +33,7 @@ get_instance_scripts_dir() {
   local instance="$1"
   local base_dir
   base_dir=$(dirname "$SCRIPT_DIR")
-  echo "$base_dir/scripts/$instance"
+  echo "$base_dir/$instance"
 }
 
 print_help() {
