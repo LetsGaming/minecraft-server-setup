@@ -297,7 +297,9 @@ while IFS= read -r f; do
 done < <(cd "$NEW_SCRIPTS_SOURCE" && find . -type f | sed 's|^\./||' | sort)
 
 # Per-instance npm subdirs (update only; api-server is root-level)
-for subdir in update; do
+# SC2043 fix: declare as array so the loop is extensible and ShellCheck-clean
+instance_npm_dirs=(update)
+for subdir in "${instance_npm_dirs[@]}"; do
   src_pkg="$NEW_SCRIPTS_SOURCE/$subdir/package.json"
   dst_dir="$TARGET_SCRIPTS_DIR/$subdir"
   dst_pkg="$dst_dir/package.json"
@@ -562,7 +564,8 @@ $DRY_RUN || cp -a "$NEW_SCRIPTS_SOURCE/." "$TARGET_SCRIPTS_DIR/"
 # (they're submodules in src/scripts/ but don't belong inside scripts/INSTANCE_NAME/)
 for src_name in "${ROOT_SRC_NAMES[@]}"; do
   [[ -d "$TARGET_SCRIPTS_DIR/$src_name" ]] && {
-    $DRY_RUN || rm -rf "$TARGET_SCRIPTS_DIR/$src_name"
+    # SC2115 fix: :? aborts if TARGET_SCRIPTS_DIR is somehow empty, preventing rm -rf /…
+    $DRY_RUN || rm -rf "${TARGET_SCRIPTS_DIR:?}/$src_name"
   }
 done
 
