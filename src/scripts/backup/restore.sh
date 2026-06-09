@@ -109,4 +109,68 @@ else
     exit 1
 fi
 
+echo "[INFO] Server data restored."
+
+# ——— restore instance metadata ———
+# Archive backups embed a .mc-meta directory containing the scripts tree,
+# systemd service files, and api-server-config.json. Restore them now so the
+# management infrastructure is fully rebuilt alongside the server data.
+META_DIR="$SERVER_PATH/.mc-meta"
+if [[ -d "$META_DIR" ]]; then
+  echo "[INFO] Restoring instance metadata..."
+
+  BASE_DIR="$(dirname "$SERVER_PATH")"
+  TARGET_DIR_NAME="$(basename "$BASE_DIR")"
+  INSTANCE_SCRIPTS_DIR="$SCRIPT_DIR/.."
+
+  # 1. Scripts tree
+  if [[ -d "$META_DIR/scripts" ]]; then
+    rsync -a "$META_DIR/scripts/" "$INSTANCE_SCRIPTS_DIR/"
+    echo "[INFO]   ✓ scripts/"
+
+    # Reinstall node_modules that were excluded from the backup
+    for dir in "$INSTANCE_SCRIPTS_DIR/update" "$INSTANCE_SCRIPTS_DIR/minecraft-server-manager"; do
+      if [[ -f "$dir/package.json" ]]; then
+        echo "[INFO]   npm install in $(basename "$dir")..."
+        npm install --omit=dev --prefix "$dir" >/dev/null \
+          && echo "[INFO]     ✓ $(basename "$dir")/node_modules" \
+          || echo "[WARN]     npm install failed in $(basename "$dir") — run manually"
+      fi
+    done
+  fi
+
+  # 2. Systemd service files
+  if [[ -d "$META_DIR/systemd" ]] && compgen -G "$META_DIR/systemd/*.service" > /dev/null 2>&1; then
+    for svc_file in "$META_DIR/systemd/"*.service; do
+      [[ -f "$svc_file" ]] || continue
+      svc_name="$(basename "$svc_file")"
+      sudo cp "$svc_file" "/etc/systemd/system/$svc_name"
+      sudo chmod 644 "/etc/systemd/system/$svc_name"
+      echo "[INFO]   ✓ /etc/systemd/system/$svc_name"
+    done
+    sudo systemctl daemon-reload
+    echo "[INFO]   ✓ systemctl daemon-reload"
+  fi
+
+  # 3. api-server-config.json
+  if [[ -f "$META_DIR/api-server-config.json" ]]; then
+    mkdir -p "$BASE_DIR/api-server"
+    cp "$META_DIR/api-server-config.json" "$BASE_DIR/api-server/api-server-config.json"
+    echo "[INFO]   ✓ api-server-config.json"
+  fi
+
+  # Clean .mc-meta out of the server root — it has no place there at runtime
+  rm -rf "$META_DIR"
+
+  echo "[INFO] Metadata restore complete."
+  echo ""
+  echo "[INFO] Services have been installed but not started."
+  echo "[INFO] Review the restored config, then start manually:"
+  echo "         sudo systemctl enable --now ${INSTANCE_NAME}.service"
+  echo "         sudo systemctl enable --now ${TARGET_DIR_NAME}-api-server.service"
+else
+  echo "[WARN] No .mc-meta found in archive — metadata not restored."
+  echo "       This is expected for hourly backups or archives created before this feature."
+fi
+
 echo "[INFO] Restore complete."

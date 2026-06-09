@@ -146,30 +146,45 @@ if $ARCHIVE_MODE && ! $DRY_RUN; then
 fi
 
 # ——— stage instance metadata (archive mode only) ———
-# variables.txt and downloaded_versions.json are not under SERVER_PATH so the
-# rsync above does not capture them. Include them in archive backups so a
-# full rebuild from scratch has everything it needs: paths, retention config,
-# RCON/webhook settings, and the installed mod/pack version baseline.
+# Everything outside SERVER_PATH that is needed to fully rebuild the management
+# infrastructure from scratch: all management scripts, systemd service files,
+# and the api-server config. node_modules are excluded and reinstalled on restore.
 if $ARCHIVE_MODE && ! $DRY_RUN; then
   log INFO "Staging instance metadata..."
 
-  COMMON_DIR="$SCRIPT_DIR/../common"
-  VERSIONS_FILE="$SCRIPT_DIR/../update/downloaded_versions.json"
+  INSTANCE_SCRIPTS_DIR="$SCRIPT_DIR/.."          # scripts/INSTANCE_NAME/
+  BASE_DIR="$(dirname "$SERVER_PATH")"            # parent of the server dir
+  TARGET_DIR_NAME="$(basename "$BASE_DIR")"       # e.g. minecraft-server
   META_DIR="$TMP_DIR/.mc-meta"
-  mkdir -p "$META_DIR"
 
-  if [[ -f "$COMMON_DIR/variables.txt" ]]; then
-    cp "$COMMON_DIR/variables.txt" "$META_DIR/variables.txt"
-    log INFO "  ✓ variables.txt"
-  else
-    log WARN "  variables.txt not found at $COMMON_DIR/variables.txt — skipping"
-  fi
+  mkdir -p "$META_DIR/scripts" "$META_DIR/systemd"
 
-  if [[ -f "$VERSIONS_FILE" ]]; then
-    cp "$VERSIONS_FILE" "$META_DIR/downloaded_versions.json"
-    log INFO "  ✓ downloaded_versions.json"
+  # 1. Entire scripts/INSTANCE_NAME tree — skip node_modules and logs
+  rsync -a \
+    --exclude='node_modules/' \
+    --exclude='logs/' \
+    --exclude='*.log' \
+    "$INSTANCE_SCRIPTS_DIR/" "$META_DIR/scripts/"
+  log INFO "  ✓ scripts/ ($(du -sh "$META_DIR/scripts" | cut -f1))"
+
+  # 2. Systemd service files
+  for svc_file in \
+    "/etc/systemd/system/${INSTANCE_NAME}.service" \
+    "/etc/systemd/system/${TARGET_DIR_NAME}-api-server.service" \
+    "/etc/systemd/system/${TARGET_DIR_NAME}-manager.service"; do
+    if [[ -f "$svc_file" ]]; then
+      cp "$svc_file" "$META_DIR/systemd/$(basename "$svc_file")"
+      log INFO "  ✓ systemd/$(basename "$svc_file")"
+    fi
+  done
+
+  # 3. api-server-config.json
+  API_CONFIG="$BASE_DIR/api-server/api-server-config.json"
+  if [[ -f "$API_CONFIG" ]]; then
+    cp "$API_CONFIG" "$META_DIR/api-server-config.json"
+    log INFO "  ✓ api-server-config.json"
   else
-    log INFO "  downloaded_versions.json not found — skipping (normal if no updates have run)"
+    log WARN "  api-server-config.json not found — skipping"
   fi
 fi
 
