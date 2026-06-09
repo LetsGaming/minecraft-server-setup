@@ -2,5 +2,8 @@ xaeros-world-map
 xaeros-minimap
 simple-voice-chat
 enhanced-groups
-rei
-ante
+jei
+too-cheap
+anti-xray
+sit!
+appleskin

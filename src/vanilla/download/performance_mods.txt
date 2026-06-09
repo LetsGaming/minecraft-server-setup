@@ -1,7 +1,6 @@
-clumps
 lithium
+clumps
 c2me-fabric
 krypton
-connectivity
 lmd
 get-it-together-drops
