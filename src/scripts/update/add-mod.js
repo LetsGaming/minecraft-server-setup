@@ -2,6 +2,7 @@
 //
 // Downloads a single mod from Modrinth, installs it into the server's mods
 // directory, and registers it in downloaded_versions.json.
+// Required dependencies are installed automatically.
 //
 // Usage:
 //   node add-mod.js <slug-or-project-id> [--mcVersion=1.21.4] [--modLoader=fabric]
@@ -156,6 +157,88 @@ async function fetchCompatibleVersion(projectId, mcVersion, modLoader) {
   );
 }
 
+// ── Core install logic ────────────────────────────────────────────────────────
+
+/**
+ * Download and register a single mod (by slug or project ID).
+ * Skips silently if already registered. Does NOT recurse into deps —
+ * the caller is responsible for iterating dependencies.
+ *
+ * @param {string}  slugOrId          Modrinth slug or project ID.
+ * @param {string}  mcVersion
+ * @param {string}  modLoader
+ * @param {string}  modsDir
+ * @param {object}  downloadedVersions  Mutated in-place; caller must persist.
+ * @param {string}  [indent=""]         Prefix for log lines (used for deps).
+ * @returns {object|null}  The Modrinth version object, or null if already registered.
+ */
+async function installMod(
+  slugOrId,
+  mcVersion,
+  modLoader,
+  modsDir,
+  downloadedVersions,
+  indent = "",
+) {
+  // Resolve canonical slug so we can key into downloadedVersions.mods
+  const project = await resolveProject(slugOrId);
+  const projectId = project.id;
+  const canonicalSlug = project.slug;
+
+  if (downloadedVersions.mods[canonicalSlug]) {
+    const existing = downloadedVersions.mods[canonicalSlug];
+    console.log(
+      `${indent}Skipping "${canonicalSlug}" — already registered (${existing.versionId}).`,
+    );
+    return null;
+  }
+
+  const version = await fetchCompatibleVersion(projectId, mcVersion, modLoader);
+  if (!version) {
+    console.error(
+      `${indent}No compatible version found for "${canonicalSlug}" (MC ${mcVersion}, ${modLoader}).`,
+    );
+    process.exit(1);
+  }
+
+  const primaryFile = version.files.find((f) => f.primary) ?? version.files[0];
+  if (!primaryFile?.url) {
+    console.error(
+      `${indent}No downloadable file found for "${canonicalSlug}" version ${version.id}.`,
+    );
+    process.exit(1);
+  }
+
+  const filename = decodeURIComponent(
+    path.basename(new URL(primaryFile.url).pathname),
+  );
+  const targetPath = path.join(modsDir, filename);
+  const tempPath = `${targetPath}.tmp`;
+
+  console.log(`${indent}Version   : ${version.name} (${version.id})`);
+  console.log(`${indent}File      : ${filename}`);
+  console.log(`${indent}Published : ${version.date_published}`);
+
+  if (fs.existsSync(targetPath)) {
+    console.log(`${indent}File already present in mods dir — skipping download.`);
+  } else {
+    process.stdout.write(indent); // align the progress line with the rest
+    await downloadFile(primaryFile.url, tempPath);
+    fs.renameSync(tempPath, targetPath);
+    console.log(`${indent}Downloaded: ${filename}`);
+  }
+
+  downloadedVersions.mods[canonicalSlug] = {
+    versionId: version.id,
+    filename,
+  };
+  writeVersionsFile(downloadedVersions);
+
+  console.log(`${indent}Registered "${canonicalSlug}" in downloaded_versions.json.`);
+
+  return version;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -194,88 +277,64 @@ async function main() {
   console.log(`  Mod loader : ${modLoader}`);
   console.log(`  Mods dir   : ${modsDir}\n`);
 
-  // ── Resolve project ─────────────────────────────────────────────────────────
-  const project = await resolveProject(slug);
-  const projectId = project.id;
-  const canonicalSlug = project.slug;
+  // ── Install the requested mod ────────────────────────────────────────────────
+  const version = await installMod(
+    slug,
+    mcVersion,
+    modLoader,
+    modsDir,
+    downloadedVersions,
+  );
 
-  if (downloadedVersions.mods[canonicalSlug]) {
-    const existing = downloadedVersions.mods[canonicalSlug];
-    console.log(
-      `Mod "${canonicalSlug}" is already registered (version ${existing.versionId}, file: ${existing.filename ?? "unknown"}).`,
-    );
+  if (!version) {
+    // Was already registered — installMod printed a message.
     console.log(
       "Remove it from downloaded_versions.json first if you want to re-add it.",
     );
     process.exit(0);
   }
 
-  // ── Find compatible version ─────────────────────────────────────────────────
-  const version = await fetchCompatibleVersion(projectId, mcVersion, modLoader);
-  if (!version) {
-    console.error(
-      `No compatible version found for "${canonicalSlug}" (MC ${mcVersion}, ${modLoader}).`,
-    );
-    process.exit(1);
-  }
+  console.log("\nDone.\n");
 
-  const primaryFile = version.files.find((f) => f.primary) ?? version.files[0];
-  if (!primaryFile?.url) {
-    console.error(
-      `No downloadable file found for "${canonicalSlug}" version ${version.id}.`,
-    );
-    process.exit(1);
-  }
-
-  const filename = decodeURIComponent(
-    path.basename(new URL(primaryFile.url).pathname),
-  );
-  const targetPath = path.join(modsDir, filename);
-  const tempPath = `${targetPath}.tmp`;
-
-  console.log(`Version   : ${version.name} (${version.id})`);
-  console.log(`File      : ${filename}`);
-  console.log(`Published : ${version.date_published}`);
-
-  // ── Download ────────────────────────────────────────────────────────────────
-  if (fs.existsSync(targetPath)) {
-    console.log(`File already present in mods dir — skipping download.`);
-  } else {
-    await downloadFile(primaryFile.url, tempPath);
-    fs.renameSync(tempPath, targetPath);
-    console.log(`Downloaded: ${filename}`);
-  }
-
-  // ── Register in downloaded_versions.json ────────────────────────────────────
-  downloadedVersions.mods[canonicalSlug] = {
-    versionId: version.id,
-    filename,
-  };
-  writeVersionsFile(downloadedVersions);
-
-  console.log(`\nRegistered "${canonicalSlug}" in downloaded_versions.json.`);
-  console.log("Done.\n");
-
-  // ── Handle required dependencies ────────────────────────────────────────────
+  // ── Auto-install required dependencies ──────────────────────────────────────
   const required = (version.dependencies ?? []).filter(
     (d) => d.dependency_type === "required" && d.project_id,
   );
 
-  if (required.length) {
-    console.log(
-      `Required dependencies (${required.length}) — run these separately if not already installed:`,
-    );
-    for (const dep of required) {
-      const already = Object.values(downloadedVersions.mods).some(
-        (_, k) => k === dep.project_id,
-      );
-      const tag = downloadedVersions.mods[dep.project_id]
-        ? " (already registered)"
-        : "";
-      console.log(`  node add-mod.js ${dep.project_id}${tag}`);
+  if (!required.length) return;
+
+  console.log(`Installing ${required.length} required dependenc${required.length === 1 ? "y" : "ies"}...\n`);
+
+  for (const dep of required) {
+    // Resolve the dep's canonical slug so we can print a human-readable name
+    // and do an accurate already-registered check (mods are keyed by slug).
+    let depSlug = dep.project_id;
+    try {
+      const depProject = await resolveProject(dep.project_id);
+      depSlug = depProject.slug;
+    } catch {
+      // resolveProject calls process.exit on error, so this is unreachable,
+      // but keep the fallback for safety.
     }
+
+    if (downloadedVersions.mods[depSlug]) {
+      console.log(`  [dep] "${depSlug}" — already registered, skipping.`);
+      continue;
+    }
+
+    console.log(`  [dep] Adding: ${depSlug}`);
+    await installMod(
+      dep.project_id,
+      mcVersion,
+      modLoader,
+      modsDir,
+      downloadedVersions,
+      "  [dep]   ",
+    );
     console.log();
   }
+
+  console.log("All dependencies installed.\n");
 }
 
 main().catch((err) => {

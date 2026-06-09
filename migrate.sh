@@ -16,7 +16,7 @@ set -euo pipefail
 # ╚══════════════════════════════════════════════════════════════╝
 
 MIGRATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NEW_SCRIPTS_SOURCE="$MIGRATE_SCRIPT_DIR/scripts"
+NEW_SCRIPTS_SOURCE="$MIGRATE_SCRIPT_DIR/src/scripts"
 
 # ── Colors ──
 if [[ -t 1 ]]; then
@@ -99,6 +99,7 @@ VARS_FILE="$TARGET_SCRIPTS_DIR/common/variables.txt"
 [[ ! -d "$NEW_SCRIPTS_SOURCE" ]] && {
   err "New scripts source not found: $NEW_SCRIPTS_SOURCE"
   info "Run this script from the minecraft-server-setup project root."
+  info "Expected source directory: src/scripts/"
   exit 1; }
 
 source "$VARS_FILE"
