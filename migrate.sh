@@ -360,7 +360,7 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
 fi
 
 run_cmd() {
-  $DRY_RUN && echo "[DRY-RUN] $*" || "$@"
+  if $DRY_RUN; then echo "[DRY-RUN] $*"; else eval "$@"; fi
 }
 
 # ── Step 1: Compressed archive backup ──
