@@ -157,6 +157,13 @@ async function fetchCompatibleVersion(projectId, mcVersion, modLoader) {
   );
 }
 
+async function fetchVersion(versionId) {
+  const res = await axios.get(
+    `https://api.modrinth.com/v2/version/${versionId}`,
+  );
+  return res.data;
+}
+
 // ── Core install logic ────────────────────────────────────────────────────────
 
 /**
@@ -170,7 +177,9 @@ async function fetchCompatibleVersion(projectId, mcVersion, modLoader) {
  * @param {string}  modsDir
  * @param {object}  downloadedVersions  Mutated in-place; caller must persist.
  * @param {string}  [indent=""]         Prefix for log lines (used for deps).
- * @returns {object|null}  The Modrinth version object, or null if already registered.
+ * @returns {object|null}  The Modrinth version object if freshly installed,
+ *                         { filenameUpdated: true } if an existing null-filename
+ *                         entry was patched, or null if already fully registered.
  */
 async function installMod(
   slugOrId,
@@ -185,12 +194,56 @@ async function installMod(
   const projectId = project.id;
   const canonicalSlug = project.slug;
 
-  if (downloadedVersions.mods[canonicalSlug]) {
-    const existing = downloadedVersions.mods[canonicalSlug];
+  // Check by canonical slug (normal case) AND by raw project ID (handles legacy
+  // entries that were registered under their project ID instead of their slug).
+  const existing =
+    downloadedVersions.mods[canonicalSlug] ??
+    downloadedVersions.mods[projectId];
+  if (existing) {
+    // Already fully registered — nothing to do.
+    if (existing.filename !== null) {
+      console.log(
+        `${indent}Skipping "${canonicalSlug}" — already registered (${existing.versionId}).`,
+      );
+      return null;
+    }
+
+    // Registered but filename is missing — fetch the known version, download
+    // the file if needed, and patch the entry in place.
     console.log(
-      `${indent}Skipping "${canonicalSlug}" — already registered (${existing.versionId}).`,
+      `${indent}Updating filename for "${canonicalSlug}" (${existing.versionId})...`,
     );
-    return null;
+    const knownVersion = await fetchVersion(existing.versionId);
+    const primaryFile =
+      knownVersion.files.find((f) => f.primary) ?? knownVersion.files[0];
+    if (!primaryFile?.url) {
+      console.error(
+        `${indent}No downloadable file found for "${canonicalSlug}" version ${existing.versionId}.`,
+      );
+      process.exit(1);
+    }
+
+    const filename = decodeURIComponent(
+      path.basename(new URL(primaryFile.url).pathname),
+    );
+    const targetPath = path.join(modsDir, filename);
+    const tempPath = `${targetPath}.tmp`;
+
+    console.log(`${indent}File      : ${filename}`);
+
+    if (fs.existsSync(targetPath)) {
+      console.log(`${indent}File already present in mods dir.`);
+    } else {
+      process.stdout.write(indent);
+      await downloadFile(primaryFile.url, tempPath);
+      fs.renameSync(tempPath, targetPath);
+      console.log(`${indent}Downloaded: ${filename}`);
+    }
+
+    existing.filename = filename;
+    writeVersionsFile(downloadedVersions);
+    console.log(`${indent}Updated filename for "${canonicalSlug}" in downloaded_versions.json.`);
+    return { filenameUpdated: true };
   }
 
   const version = await fetchCompatibleVersion(projectId, mcVersion, modLoader);
@@ -287,10 +340,16 @@ async function main() {
   );
 
   if (!version) {
-    // Was already registered — installMod printed a message.
+    // Was already registered with a filename — nothing to do.
     console.log(
       "Remove it from downloaded_versions.json first if you want to re-add it.",
     );
+    process.exit(0);
+  }
+
+  if (version.filenameUpdated) {
+    // Filename was missing and has now been patched — nothing else to do.
+    console.log("\nDone.\n");
     process.exit(0);
   }
 
@@ -317,7 +376,12 @@ async function main() {
       // but keep the fallback for safety.
     }
 
-    if (downloadedVersions.mods[depSlug]) {
+    // Skip only if already registered AND the file is known. If filename is
+    // null, fall through to installMod so it can patch the entry.
+    const depEntry =
+      downloadedVersions.mods[depSlug] ??
+      downloadedVersions.mods[dep.project_id];
+    if (depEntry?.filename !== null && depEntry !== undefined) {
       console.log(`  [dep] "${depSlug}" — already registered, skipping.`);
       continue;
     }
