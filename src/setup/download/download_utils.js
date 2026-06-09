@@ -111,7 +111,7 @@ function writeVersionsFile(data) {
   fs.renameSync(tmpPath, VERSIONS_FILE_PATH);
 }
 
-function saveDownloadedVersion(type, modId, fileId, modLoader = null, gameVersion = null) {
+function saveDownloadedVersion(type, modId, fileId, modLoader = null, gameVersion = null, filename = null) {
   const existing = readVersionsFile();
 
   if (modLoader) existing.modLoader = modLoader;
@@ -125,7 +125,15 @@ function saveDownloadedVersion(type, modId, fileId, modLoader = null, gameVersio
     return;
   }
 
-  existing[type][modId] = fileId;
+  // Write the new {versionId, filename} format so update-mods.js / check-updates.js
+  // can consume the file directly without needing --migrate on fresh installs.
+  if (type === "mods") {
+    existing.mods[modId] = { versionId: fileId, filename: filename ?? null };
+  } else {
+    // modpack entries stay as a plain versionId string (update scripts don't inspect them)
+    existing[type][modId] = fileId;
+  }
+
   writeVersionsFile(existing);
 }
 
@@ -144,7 +152,10 @@ function saveModLoader(modLoader) {
 function isAlreadyDownloaded(type, modID, fileID) {
   const downloadedVersions = getDownloadedVersions();
   if (!downloadedVersions) return false;
-  return downloadedVersions?.[type]?.[modID] === fileID;
+  const entry = downloadedVersions?.[type]?.[modID];
+  if (!entry) return false;
+  // Handle both old flat-string format (pre-migration) and new {versionId, filename} format
+  return typeof entry === "string" ? entry === fileID : entry.versionId === fileID;
 }
 
 // ===== Mojang Version Manifest =====

@@ -141,7 +141,7 @@ async function downloadModrinthProject(projectId, mcVersion, loader, downloadDir
     const outputPath = path.join(downloadDir, fileName);
     console.log(`Downloading ${fileName} to ${downloadDir}...`);
     await downloadFile(file.url, outputPath, file.size || null);
-    saveDownloadedVersion("mods", projectId, versionId);
+    saveDownloadedVersion("mods", projectId, versionId, null, null, fileName);
 
     // Handle dependencies
     const dependencies = compatibleVersion.dependencies || [];
