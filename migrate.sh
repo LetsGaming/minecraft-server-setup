@@ -11,12 +11,22 @@ set -euo pipefail
 # ║    - Your variables.txt values (only adds new fields)       ║
 # ║    - downloaded_versions.json                               ║
 # ║    - interface/  (web interface — preserved and restored)   ║
-# ║    - update/node_modules/, api-server/node_modules/         ║
+# ║    - update/node_modules/                                   ║
+# ║      (preserved; reinstalled only when package.json changes)║
+# ║    - <install-root>/api-server/node_modules/                ║
+# ║    - <install-root>/manager/node_modules/                   ║
 # ║      (preserved; reinstalled only when package.json changes)║
 # ╚══════════════════════════════════════════════════════════════╝
 
 MIGRATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Per-instance scripts source (excludes api-server/ and minecraft-server-manager/,
+# which are root-level and handled separately below).
 NEW_SCRIPTS_SOURCE="$MIGRATE_SCRIPT_DIR/src/scripts"
+
+# Root-level component sources → deployed as <install-root>/api-server/ and <install-root>/manager/
+NEW_API_SERVER_SOURCE="$NEW_SCRIPTS_SOURCE/api-server"
+NEW_MANAGER_SOURCE="$NEW_SCRIPTS_SOURCE/minecraft-server-manager"
 
 # ── Colors ──
 if [[ -t 1 ]]; then
@@ -43,9 +53,12 @@ Usage: $0 <path-to-scripts-dir> [options]
 Migrates an existing Minecraft server's runtime scripts to the latest version.
 
 Arguments:
-  <path-to-scripts-dir>   Path to the deployed scripts directory.
-                          Typically: <target>/scripts/<instance>
+  <path-to-scripts-dir>   Path to the deployed per-instance scripts directory.
+                          Typically: <install-root>/scripts/<instance>
                           Example:   /home/mc/minecraft-server/scripts/survival
+
+  The install root (<install-root>) is derived as two levels above this path.
+  api-server/ and manager/ are updated there, not inside the instance dir.
 
 Options:
   --y          Skip all confirmation prompts
@@ -54,7 +67,9 @@ Options:
   --help       Show this help
 
 What gets replaced:
-  - All .sh and .js files (start, shutdown, backup, update, api-server, etc.)
+  - All .sh and .js files in the instance scripts dir
+  - <install-root>/api-server/   (all files, node_modules preserved)
+  - <install-root>/manager/      (all files, node_modules preserved)
 
 What is NEVER touched:
   - common/variables.txt          (only new variables are appended)
@@ -62,6 +77,7 @@ What is NEVER touched:
   - interface/                    (web interface — preserved and restored)
   - update/node_modules/          (preserved; reinstalled if package.json changed)
   - api-server/node_modules/      (preserved; reinstalled if package.json changed)
+  - manager/node_modules/         (preserved; reinstalled if package.json changed)
   - backup/logs/, logs/
   - World data, mods, server.jar, server.properties
   - Systemd services, cron jobs
@@ -89,17 +105,25 @@ done
 TARGET_SCRIPTS_DIR="$(cd "$TARGET_SCRIPTS_DIR" 2>/dev/null && pwd)" || {
   err "Directory does not exist: $TARGET_SCRIPTS_DIR"; exit 1; }
 
+# Derive install root: <install-root>/scripts/<instance> → two levels up
+INSTALL_ROOT="$(dirname "$(dirname "$TARGET_SCRIPTS_DIR")")"
+
 VARS_FILE="$TARGET_SCRIPTS_DIR/common/variables.txt"
 [[ ! -f "$VARS_FILE" ]] && {
   err "Not a valid scripts directory: common/variables.txt not found."
   info "Expected: $VARS_FILE"
-  info "Point to the deployed instance dir, e.g.: /home/mc/minecraft-server/scripts/survival"
+  info "Point to the per-instance scripts dir, e.g.: /home/mc/minecraft-server/scripts/survival"
+  exit 1; }
+
+[[ ! -d "$INSTALL_ROOT/scripts" ]] && {
+  err "Cannot determine install root: expected scripts/ dir at $INSTALL_ROOT"
+  info "Ensure the path follows the <install-root>/scripts/<instance> layout."
   exit 1; }
 
 [[ ! -d "$NEW_SCRIPTS_SOURCE" ]] && {
   err "New scripts source not found: $NEW_SCRIPTS_SOURCE"
   info "Run this script from the minecraft-server-setup project root."
-  info "Expected source directory: src/scripts/"
+  info "Expected: src/scripts/"
   exit 1; }
 
 source "$VARS_FILE"
@@ -110,6 +134,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo
 info "Instance:     ${INSTANCE_NAME:-unknown}"
 info "Server path:  ${SERVER_PATH:-unknown}"
+info "Install root: $INSTALL_ROOT"
 info "Scripts dir:  $TARGET_SCRIPTS_DIR"
 info "Source (new): $NEW_SCRIPTS_SOURCE"
 echo
@@ -132,6 +157,8 @@ REQUIRED_NEW_FILES=(
   "update/package.json"
   "api-server/index.js"
   "api-server/package.json"
+  "minecraft-server-manager/app.js"
+  "minecraft-server-manager/package.json"
 )
 check_ok=true
 for f in "${REQUIRED_NEW_FILES[@]}"; do
@@ -173,12 +200,16 @@ echo
 
 echo -e "${BOLD}Changes to be applied${NC}"
 
+# ── Per-instance scripts (excludes api-server/ and minecraft-server-manager/) ──
 REPLACED=0; ADDED=0
 while IFS= read -r f; do
-  # Skip files we always preserve
   case "$f" in
+    # Always preserved
     common/variables.txt|common/downloaded_versions.json) continue ;;
-    update/node_modules/*|api-server/node_modules/*)       continue ;;
+    # Root-level components — handled separately below
+    api-server/*|minecraft-server-manager/*) continue ;;
+    # node_modules — never touched
+    update/node_modules/*) continue ;;
   esac
   target="$TARGET_SCRIPTS_DIR/$f"
   if [[ -f "$target" ]]; then
@@ -188,20 +219,17 @@ while IFS= read -r f; do
   fi
 done < <(cd "$NEW_SCRIPTS_SOURCE" && find . -type f | sed 's|^\./||' | sort)
 
-# Detect stateful dirs and which npm dirs need reinstall
-HAS_INTERFACE=false
-# Array of subdirs that have package.json and need node_modules preserved/reinstalled
-# Format: "subdir:has_modules:needs_install"
+# ── Per-instance npm subdir (update/) ──
 declare -a NPM_SUBDIRS=()
 NEEDS_ANY_NPM_INSTALL=false
 
-for subdir in update api-server; do
+for subdir in update; do
   src_pkg="$NEW_SCRIPTS_SOURCE/$subdir/package.json"
   dst_dir="$TARGET_SCRIPTS_DIR/$subdir"
   dst_pkg="$dst_dir/package.json"
   dst_modules="$dst_dir/node_modules"
 
-  [[ ! -f "$src_pkg" ]] && continue   # subdir has no package.json in new source
+  [[ ! -f "$src_pkg" ]] && continue
 
   has_modules=false
   needs_install=false
@@ -212,13 +240,11 @@ for subdir in update api-server; do
   fi
 
   if [[ ! -d "$dst_dir" ]]; then
-    # Subdir is new — always need install
     needs_install=true
     info "ADD     ${subdir}/  (new — npm install will run)"
   elif ! diff -q "$src_pkg" "$dst_pkg" &>/dev/null 2>&1; then
-    # package.json changed — reinstall regardless of whether we preserved modules
     needs_install=true
-    has_modules=false   # Don't restore stale modules; get fresh ones
+    has_modules=false
     info "        (${subdir}/package.json changed — fresh npm install will run)"
   fi
 
@@ -226,9 +252,57 @@ for subdir in update api-server; do
   NPM_SUBDIRS+=("${subdir}:${has_modules}:${needs_install}")
 done
 
+# ── Root-level components (api-server, manager) ──
+# Format: "src_subdir:dst_name:has_modules:needs_install"
+declare -a ROOT_NPM_SUBDIRS=()
+
+for entry in "api-server:api-server" "minecraft-server-manager:manager"; do
+  src_subdir="${entry%%:*}"; dst_name="${entry##*:}"
+  src_dir="$NEW_SCRIPTS_SOURCE/$src_subdir"
+  dst_dir="$INSTALL_ROOT/$dst_name"
+  src_pkg="$src_dir/package.json"
+
+  [[ ! -f "$src_pkg" ]] && continue
+
+  has_modules=false
+  needs_install=false
+
+  # Show per-file diff for this root component
+  root_replaced=0; root_added=0
+  while IFS= read -r f; do
+    case "$f" in node_modules/*) continue ;; esac
+    target="$dst_dir/$f"
+    if [[ -f "$target" ]]; then
+      diff -q "$src_dir/$f" "$target" &>/dev/null || { info "UPDATE  ${dst_name}/$f"; root_replaced=$((root_replaced+1)); }
+    else
+      info "ADD     ${dst_name}/$f"; root_added=$((root_added+1))
+    fi
+  done < <(cd "$src_dir" && find . -type f | sed 's|^\./||' | sort)
+  REPLACED=$((REPLACED+root_replaced)); ADDED=$((ADDED+root_added))
+
+  if [[ -d "$dst_dir/node_modules" ]]; then
+    has_modules=true
+    info "KEEP    ${dst_name}/node_modules/  (preserved)"
+  fi
+
+  if [[ ! -d "$dst_dir" ]]; then
+    needs_install=true
+    info "ADD     ${dst_name}/  (new — npm install will run)"
+  elif ! diff -q "$src_pkg" "$dst_dir/package.json" &>/dev/null 2>&1; then
+    needs_install=true
+    has_modules=false
+    info "        (${dst_name}/package.json changed — fresh npm install will run)"
+  fi
+
+  $needs_install && NEEDS_ANY_NPM_INSTALL=true
+  ROOT_NPM_SUBDIRS+=("${src_subdir}:${dst_name}:${has_modules}:${needs_install}")
+done
+
 if [[ -d "$TARGET_SCRIPTS_DIR/interface" ]]; then
   HAS_INTERFACE=true
   info "KEEP    interface/  (web interface — preserved)"
+else
+  HAS_INTERFACE=false
 fi
 
 # New variables
@@ -268,14 +342,17 @@ echo
 
 if [[ "$SKIP_CONFIRM" != true ]]; then
   echo -e "${BOLD}This will:${NC}"
-  echo "  1. Create a compressed archive backup"
+  echo "  1. Create a compressed archive backup of the scripts dir"
   $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  2. Stop the server"
-  echo "  3. Replace script files"
+  echo "  3. Replace per-instance script files"
   echo "     Preserving: variables.txt, downloaded_versions.json, interface/,"
-  echo "                 update/node_modules/, api-server/node_modules/, logs/"
-  echo "  4. Add ${#NEW_VARS[@]} new variable(s) to variables.txt"
-  $NEEDS_ANY_NPM_INSTALL && echo "  5. Run npm install in changed script subdirs"
-  $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  6. Restart the server"
+  echo "                 update/node_modules/, logs/"
+  echo "  4. Replace root-level components:"
+  echo "     $INSTALL_ROOT/api-server/  and  $INSTALL_ROOT/manager/"
+  echo "     Preserving: node_modules/ in each"
+  echo "  5. Add ${#NEW_VARS[@]} new variable(s) to variables.txt"
+  $NEEDS_ANY_NPM_INSTALL && echo "  6. Run npm install in changed subdirs"
+  $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  7. Restart the server"
   echo
   read -rp "Proceed? (y/N): " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
@@ -283,8 +360,6 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
 fi
 
 run_cmd() {
-  # SC2294: replaced eval "$@" with direct "$@" — preserves word boundaries
-  # and avoids shell re-parsing. run_cmd callers pass pre-split commands.
   $DRY_RUN && echo "[DRY-RUN] $*" || "$@"
 }
 
@@ -327,15 +402,14 @@ else
   $SERVER_RUNNING && warn "Server running but --no-stop specified. Scripts replaced live."
 fi
 
-# ── Step 3: Replace scripts ──
+# ── Step 3: Replace per-instance scripts ──
 
-echo; echo -e "${BOLD}Step 3: Replace scripts${NC}"
+echo; echo -e "${BOLD}Step 3: Replace per-instance scripts${NC}"
 
 PRESERVE_DIR=$(mktemp -d)
 
 # ── Save everything that must survive the wipe ──
 
-# Named files
 for pf in "common/variables.txt" "common/downloaded_versions.json"; do
   [[ -f "$TARGET_SCRIPTS_DIR/$pf" ]] && {
     run_cmd "mkdir -p '$PRESERVE_DIR/$(dirname "$pf")'"
@@ -343,7 +417,6 @@ for pf in "common/variables.txt" "common/downloaded_versions.json"; do
   }
 done
 
-# Log dirs
 for logdir in "backup/logs" "logs"; do
   [[ -d "$TARGET_SCRIPTS_DIR/$logdir" ]] && {
     run_cmd "mkdir -p '$PRESERVE_DIR/$logdir'"
@@ -351,18 +424,15 @@ for logdir in "backup/logs" "logs"; do
   }
 done
 
-# Web interface
 if $HAS_INTERFACE; then
   run_cmd "mkdir -p '$PRESERVE_DIR/interface'"
   run_cmd "cp -a '$TARGET_SCRIPTS_DIR/interface/.' '$PRESERVE_DIR/interface/'"
   info "Saved: interface/"
 fi
 
-# node_modules for each npm subdir (only when we're keeping them)
 for entry in "${NPM_SUBDIRS[@]}"; do
   subdir="${entry%%:*}"; rest="${entry#*:}"
   has_modules="${rest%%:*}"; needs_install="${rest##*:}"
-  # Preserve only if we have modules AND package.json didn't change
   if [[ "$has_modules" == true && "$needs_install" == false ]]; then
     run_cmd "mkdir -p '$PRESERVE_DIR/$subdir'"
     run_cmd "cp -a '$TARGET_SCRIPTS_DIR/$subdir/node_modules' '$PRESERVE_DIR/$subdir/node_modules'"
@@ -370,12 +440,16 @@ for entry in "${NPM_SUBDIRS[@]}"; do
   fi
 done
 
-# ── Wipe + replace ──
+# ── Wipe + replace (per-instance only; skip root-level source subdirs) ──
 log "Removing old scripts..."
 $DRY_RUN || find "$TARGET_SCRIPTS_DIR" -mindepth 1 -delete
 
-log "Copying new scripts..."
-$DRY_RUN || cp -a "$NEW_SCRIPTS_SOURCE/." "$TARGET_SCRIPTS_DIR/"
+log "Copying new scripts (excluding api-server/ and minecraft-server-manager/)..."
+if ! $DRY_RUN; then
+  find "$NEW_SCRIPTS_SOURCE" -mindepth 1 -maxdepth 1 \
+    ! -name 'api-server' ! -name 'minecraft-server-manager' \
+    -exec cp -a {} "$TARGET_SCRIPTS_DIR/" \;
+fi
 
 # ── Restore ──
 log "Restoring preserved files..."
@@ -409,11 +483,50 @@ for entry in "${NPM_SUBDIRS[@]}"; do
 done
 
 rm -rf "$PRESERVE_DIR"
-log "Scripts replaced"
+log "Per-instance scripts replaced"
 
-# ── Step 4: Merge new variables ──
+# ── Step 4: Replace root-level components (api-server, manager) ──
 
-echo; echo -e "${BOLD}Step 4: Update variables.txt${NC}"
+echo; echo -e "${BOLD}Step 4: Replace root-level components${NC}"
+
+for entry in "${ROOT_NPM_SUBDIRS[@]}"; do
+  src_subdir="${entry%%:*}"; rest="${entry#*:}"
+  dst_name="${rest%%:*}";    rest="${rest#*:}"
+  has_modules="${rest%%:*}"; needs_install="${rest##*:}"
+
+  src_dir="$NEW_SCRIPTS_SOURCE/$src_subdir"
+  dst_dir="$INSTALL_ROOT/$dst_name"
+
+  # Preserve node_modules if keeping them
+  root_preserve=""
+  if [[ "$has_modules" == true && "$needs_install" == false ]]; then
+    root_preserve=$(mktemp -d)
+    if ! $DRY_RUN; then
+      cp -a "$dst_dir/node_modules" "$root_preserve/node_modules"
+    fi
+    info "Saved: ${dst_name}/node_modules/"
+  fi
+
+  log "Replacing $dst_name/..."
+  if ! $DRY_RUN; then
+    rm -rf "$dst_dir"
+    cp -a "$src_dir" "$dst_dir"
+  fi
+
+  if [[ -n "$root_preserve" ]]; then
+    if ! $DRY_RUN; then
+      cp -a "$root_preserve/node_modules" "$dst_dir/node_modules"
+      rm -rf "$root_preserve"
+    fi
+    info "Restored: ${dst_name}/node_modules/"
+  fi
+
+  log "$dst_name/ updated"
+done
+
+# ── Step 5: Merge new variables ──
+
+echo; echo -e "${BOLD}Step 5: Update variables.txt${NC}"
 
 if [[ ${#NEW_VARS[@]} -gt 0 ]]; then
   if ! $DRY_RUN; then
@@ -427,41 +540,63 @@ else
   log "variables.txt already has all required variables"
 fi
 
-# ── Step 5: npm install in changed subdirs ──
+# ── Step 6: npm install in changed subdirs ──
 
 if $NEEDS_ANY_NPM_INSTALL; then
-  echo; echo -e "${BOLD}Step 5: Install npm dependencies${NC}"
+  echo; echo -e "${BOLD}Step 6: Install npm dependencies${NC}"
   if command -v npm &>/dev/null; then
+    # Per-instance subdirs (update/)
     for entry in "${NPM_SUBDIRS[@]}"; do
       subdir="${entry%%:*}"; needs_install="${entry##*:}"
       [[ "$needs_install" != true ]] && continue
       dir="$TARGET_SCRIPTS_DIR/$subdir"
       [[ -f "$dir/package.json" ]] || continue
-      log "npm install --omit=dev in ${subdir}/"
+      log "npm install --omit=dev in scripts/${subdir}/"
+      run_cmd "npm install --omit=dev --prefix '$dir'"
+    done
+    # Root-level components (api-server/, manager/)
+    for entry in "${ROOT_NPM_SUBDIRS[@]}"; do
+      src_subdir="${entry%%:*}"; rest="${entry#*:}"
+      dst_name="${rest%%:*}";    needs_install="${rest##*:}"
+      [[ "$needs_install" != true ]] && continue
+      dir="$INSTALL_ROOT/$dst_name"
+      [[ -f "$dir/package.json" ]] || continue
+      log "npm install --omit=dev in ${dst_name}/"
       run_cmd "npm install --omit=dev --prefix '$dir'"
     done
     log "Dependencies installed"
   else
-    warn "npm not found — run manually for each changed subdir:"
+    warn "npm not found — run manually:"
     for entry in "${NPM_SUBDIRS[@]}"; do
       subdir="${entry%%:*}"; needs_install="${entry##*:}"
       [[ "$needs_install" == true ]] && info "  npm install --omit=dev --prefix '$TARGET_SCRIPTS_DIR/$subdir'"
     done
+    for entry in "${ROOT_NPM_SUBDIRS[@]}"; do
+      src_subdir="${entry%%:*}"; rest="${entry#*:}"
+      dst_name="${rest%%:*}";    needs_install="${rest##*:}"
+      [[ "$needs_install" == true ]] && info "  npm install --omit=dev --prefix '$INSTALL_ROOT/$dst_name'"
+    done
   fi
 fi
 
-# ── Step 6: Verify ──
+# ── Step 7: Verify ──
 
-echo; echo -e "${BOLD}Step 6: Verify${NC}"
+echo; echo -e "${BOLD}Step 7: Verify${NC}"
 
 verify_ok=true
 
+# Per-instance files
 for f in "common/server_control.sh" "common/load_variables.sh" "common/variables.txt" \
          "backup/backup.sh" "start.sh" \
          "common/rcon.js" "common/webhook.sh" "rollback.sh" "smart_restart.sh" "manage.sh" \
-         "update/update-server.js" "update/update-mods.js" "update/check-updates.js" "update/package.json" \
-         "api-server/index.js" "api-server/package.json"; do
+         "update/update-server.js" "update/update-mods.js" "update/check-updates.js" "update/package.json"; do
   [[ -f "$TARGET_SCRIPTS_DIR/$f" ]] && info "✓ $f" || { err "Missing: $f"; verify_ok=false; }
+done
+
+# Root-level components
+for f in "api-server/index.js" "api-server/package.json" \
+         "manager/app.js"      "manager/package.json"; do
+  [[ -f "$INSTALL_ROOT/$f" ]] && info "✓ $f  (install root)" || { err "Missing: $INSTALL_ROOT/$f"; verify_ok=false; }
 done
 
 $HAS_INTERFACE && {
@@ -487,10 +622,10 @@ if ! $verify_ok; then
 fi
 log "Verification passed"
 
-# ── Step 7: Restart server ──
+# ── Step 8: Restart server ──
 
 if $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]]; then
-  echo; echo -e "${BOLD}Step 7: Restart server${NC}"
+  echo; echo -e "${BOLD}Step 8: Restart server${NC}"
   log "Starting '$INSTANCE_NAME'..."
   run_cmd "sudo systemctl start '${INSTANCE_NAME}.service'"
   if ! $DRY_RUN; then
@@ -523,5 +658,6 @@ info "  • rollback.sh               — Roll back to pre-update backup"
 info "  • smart_restart.sh          — Player-aware restart"
 info "  • manage.sh                 — Multi-instance management"
 info "  • update/update-server.js   — Update server + mods"
-info "  • api-server/index.js       — minecraft-bot HTTP API wrapper"
+info "  • $INSTALL_ROOT/api-server/ — minecraft-bot HTTP API wrapper"
+info "  • $INSTALL_ROOT/manager/    — Web-based server manager"
 echo
