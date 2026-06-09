@@ -11,10 +11,14 @@ set -euo pipefail
 # ║    - Your variables.txt values (only adds new fields)       ║
 # ║    - downloaded_versions.json                               ║
 # ║    - interface/  (web interface — preserved and restored)   ║
-# ║    - update/node_modules/, api-server/node_modules/         ║
+# ║    - update/node_modules/   (preserved; reinstalled only    ║
+# ║      when package.json changes)                             ║
+# ║    - api-server/node_modules/, manager/node_modules/        ║
 # ║      (preserved; reinstalled only when package.json changes)║
 # ║    - JSON config files (e.g. manager/src/config/config.json)║
-# ║      (existing values preserved; new keys merged in)        ║
+# ║      (existing values kept; new keys merged in)             ║
+# ║    - manager/src/config/users.json  (credentials, untouched)║
+# ║    - api-server/api-server-config.json  (untouched)         ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 MIGRATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,16 +59,22 @@ Options:
   --dry-run    Show what would be done without making changes
   --help       Show this help
 
-What gets replaced:
-  - All .sh and .js files (start, shutdown, backup, update, api-server, etc.)
+What gets replaced (per-instance scripts):
+  - All .sh and .js files (start, shutdown, backup, restore, update, etc.)
+
+What gets updated (root-level shared components):
+  - api-server/    at <install-root>/api-server/
+  - manager/       at <install-root>/manager/
 
 What is NEVER touched:
   - common/variables.txt          (only new variables are appended)
   - common/downloaded_versions.json
   - interface/                    (web interface — preserved and restored)
   - update/node_modules/          (preserved; reinstalled if package.json changed)
-  - api-server/node_modules/      (preserved; reinstalled if package.json changed)
-  - */config/config.json          (existing values kept; new keys merged in)
+  - api-server/node_modules/, manager/node_modules/  (same)
+  - api-server/api-server-config.json   (user config — fully preserved)
+  - manager/src/config/config.json      (merged: existing values kept, new keys added)
+  - manager/src/config/users.json       (credentials — fully preserved)
   - backup/logs/, logs/
   - World data, mods, server.jar, server.properties
   - Systemd services, cron jobs
@@ -106,13 +116,22 @@ VARS_FILE="$TARGET_SCRIPTS_DIR/common/variables.txt"
 
 source "$VARS_FILE"
 
+# BASE_DIR is the install root — one level above the instance server dir
+# SERVER_PATH = <install-root>/<instance>, so dirname gives us <install-root>
+BASE_DIR="$(dirname "${SERVER_PATH:?SERVER_PATH not set in variables.txt}")"
+
+# Root-level shared components: source name → deployed name at $BASE_DIR/<dst>/
+# Parallel arrays (bash 3 compatible)
+ROOT_SRC_NAMES=("api-server"          "minecraft-server-manager")
+ROOT_DST_NAMES=("api-server"          "manager")
+
 echo
 echo -e "${BOLD}Minecraft Server Setup — Migration${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo
 info "Instance:     ${INSTANCE_NAME:-unknown}"
 info "Server path:  ${SERVER_PATH:-unknown}"
-info "Install root: $(dirname "${SERVER_PATH:-/unknown}")"
+info "Install root: $BASE_DIR"
 info "Scripts dir:  $TARGET_SCRIPTS_DIR"
 info "Source (new): $NEW_SCRIPTS_SOURCE"
 echo
@@ -173,10 +192,6 @@ NEEDED_MB=$(( SCRIPTS_SIZE_MB / 2 + 10 ))
 echo
 
 # ── JSON config merge helpers ──
-#
-# config.json files (e.g. manager/src/config/config.json) contain user-set
-# values (ports, credentials, paths). They must never be overwritten wholesale.
-# Instead: keep all existing values, add any new keys from the updated default.
 
 _count_new_json_keys() {
   local existing="$1" new_file="$2"
@@ -201,8 +216,6 @@ _count_new_json_keys() {
 
 _merge_json_config() {
   local existing="$1" new_file="$2"
-  # Existing values always win. New keys from new_file are added with their
-  # default values. The result is written back to new_file in place.
   node -e "
     const fs = require('fs');
     const ex = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
@@ -226,22 +239,38 @@ _merge_json_config() {
 
 echo -e "${BOLD}Changes to be applied${NC}"
 
+# Per-instance counters
 REPLACED=0; ADDED=0
-# JSON_CONFIGS entries: "relpath:new_key_count"
-JSON_CONFIGS=()
+JSON_CONFIGS=()      # "relpath:new_key_count" — per-instance config.json files
 JSON_CONFIG_ADDED=0
 
+# Root-level component counters
+ROOT_REPLACED=0; ROOT_ADDED=0; ROOT_JSON_ADDED=0
+NEEDS_ROOT_UPDATE=false
+
+# Per-instance npm subdirs (api-server excluded — it's root-level)
+HAS_INTERFACE=false
+declare -a NPM_SUBDIRS=()
+NEEDS_ANY_NPM_INSTALL=false
+
+# ── Per-instance file diff ──
+
 while IFS= read -r f; do
-  # Skip files we always preserve
   case "$f" in
+    # Always-preserved files
     common/variables.txt|common/downloaded_versions.json) continue ;;
-    update/node_modules/*|api-server/node_modules/*)       continue ;;
+    # Per-instance npm artifacts
+    update/node_modules/*) continue ;;
+    # Root-level components — handled in their own section below
+    api-server/*|minecraft-server-manager/*) continue ;;
+    # Git submodule ref files
+    */.git|.git) continue ;;
   esac
 
   target="$TARGET_SCRIPTS_DIR/$f"
   src="$NEW_SCRIPTS_SOURCE/$f"
 
-  # JSON config files are merged, never replaced wholesale
+  # Per-instance JSON config files: merge, don't replace
   if [[ "$f" == */config/config.json ]]; then
     if [[ -f "$target" ]]; then
       nk=$(_count_new_json_keys "$target" "$src")
@@ -255,8 +284,7 @@ while IFS= read -r f; do
         JSON_CONFIGS+=("$f:0")
       fi
     else
-      info "ADD     $f"
-      ADDED=$(( ADDED + 1 ))
+      info "ADD     $f"; ADDED=$(( ADDED + 1 ))
     fi
     continue
   fi
@@ -268,12 +296,8 @@ while IFS= read -r f; do
   fi
 done < <(cd "$NEW_SCRIPTS_SOURCE" && find . -type f | sed 's|^\./||' | sort)
 
-# Detect stateful dirs and which npm dirs need reinstall
-HAS_INTERFACE=false
-declare -a NPM_SUBDIRS=()
-NEEDS_ANY_NPM_INSTALL=false
-
-for subdir in update api-server; do
+# Per-instance npm subdirs (update only; api-server is root-level)
+for subdir in update; do
   src_pkg="$NEW_SCRIPTS_SOURCE/$subdir/package.json"
   dst_dir="$TARGET_SCRIPTS_DIR/$subdir"
   dst_pkg="$dst_dir/package.json"
@@ -281,20 +305,17 @@ for subdir in update api-server; do
 
   [[ ! -f "$src_pkg" ]] && continue
 
-  has_modules=false
-  needs_install=false
+  has_modules=false; needs_install=false
 
   if [[ -d "$dst_modules" ]]; then
-    has_modules=true
-    info "KEEP    ${subdir}/node_modules/  (preserved)"
+    has_modules=true; info "KEEP    ${subdir}/node_modules/  (preserved)"
   fi
 
   if [[ ! -d "$dst_dir" ]]; then
     needs_install=true
     info "ADD     ${subdir}/  (new — npm install will run)"
   elif ! diff -q "$src_pkg" "$dst_pkg" &>/dev/null 2>&1; then
-    needs_install=true
-    has_modules=false
+    needs_install=true; has_modules=false
     info "        (${subdir}/package.json changed — fresh npm install will run)"
   fi
 
@@ -307,7 +328,65 @@ if [[ -d "$TARGET_SCRIPTS_DIR/interface" ]]; then
   info "KEEP    interface/  (web interface — preserved)"
 fi
 
-# New variables
+# ── Root-level component diff ──
+
+for i in "${!ROOT_SRC_NAMES[@]}"; do
+  src_name="${ROOT_SRC_NAMES[$i]}"
+  dst_name="${ROOT_DST_NAMES[$i]}"
+  src_dir="$NEW_SCRIPTS_SOURCE/$src_name"
+  dst_dir="$BASE_DIR/$dst_name"
+
+  # Skip if source component doesn't exist or component isn't installed yet
+  [[ ! -d "$src_dir" ]] && continue
+  [[ ! -d "$dst_dir" ]] && continue
+
+  while IFS= read -r f; do
+    case "$f" in
+      node_modules/*|.git) continue ;;
+    esac
+
+    src_file="$src_dir/$f"
+    dst_file="$dst_dir/$f"
+    display="$dst_name/$f"
+
+    # config.json: merge
+    if [[ "$f" == */config/config.json ]]; then
+      if [[ -f "$dst_file" ]]; then
+        nk=$(_count_new_json_keys "$dst_file" "$src_file")
+        if [[ "$nk" -gt 0 ]]; then
+          info "MERGE   $display ($nk new key(s))"
+          ROOT_JSON_ADDED=$(( ROOT_JSON_ADDED + nk ))
+          ROOT_REPLACED=$(( ROOT_REPLACED + 1 ))
+          NEEDS_ROOT_UPDATE=true
+        else
+          info "KEEP    $display (no new keys)"
+        fi
+      else
+        info "ADD     $display"; ROOT_ADDED=$(( ROOT_ADDED + 1 ))
+        NEEDS_ROOT_UPDATE=true
+      fi
+      continue
+    fi
+
+    if [[ -f "$dst_file" ]]; then
+      diff -q "$src_file" "$dst_file" &>/dev/null || {
+        info "UPDATE  $display"
+        ROOT_REPLACED=$(( ROOT_REPLACED + 1 ))
+        NEEDS_ROOT_UPDATE=true
+      }
+    else
+      info "ADD     $display"
+      ROOT_ADDED=$(( ROOT_ADDED + 1 ))
+      NEEDS_ROOT_UPDATE=true
+    fi
+  done < <(cd "$src_dir" && find . -type f | sed 's|^\./||' | sort)
+
+  # Node modules
+  [[ -d "$dst_dir/node_modules" ]] && info "KEEP    ${dst_name}/node_modules/  (preserved)"
+done
+
+# ── New variables ──
+
 NEW_VARS=()
 NEW_VAR_DEFAULTS=(
   'USE_RCON="false"'
@@ -331,14 +410,18 @@ for entry in "${NEW_VAR_DEFAULTS[@]}"; do
   fi
 done
 
-if [[ $REPLACED -eq 0 && $ADDED -eq 0 && ${#NEW_VARS[@]} -eq 0 && "$NEEDS_ANY_NPM_INSTALL" != true && $JSON_CONFIG_ADDED -eq 0 ]]; then
+TOTAL_CHANGES=$(( REPLACED + ADDED + ROOT_REPLACED + ROOT_ADDED ))
+if [[ $TOTAL_CHANGES -eq 0 && ${#NEW_VARS[@]} -eq 0 && "$NEEDS_ANY_NPM_INSTALL" != true ]]; then
   log "Everything is already up to date. Nothing to do."
   exit 0
 fi
 
 echo
 SUMMARY="$REPLACED file(s) to update, $ADDED file(s) to add, ${#NEW_VARS[@]} variable(s) to add"
-[[ $JSON_CONFIG_ADDED -gt 0 ]] && SUMMARY="$SUMMARY, $JSON_CONFIG_ADDED config key(s) to merge"
+[[ $(( ROOT_REPLACED + ROOT_ADDED )) -gt 0 ]] && \
+  SUMMARY="$SUMMARY, $ROOT_REPLACED root-level file(s) to update"
+[[ $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) -gt 0 ]] && \
+  SUMMARY="$SUMMARY, $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) config key(s) to merge"
 info "$SUMMARY"
 echo
 
@@ -350,21 +433,28 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  2. Stop the server"
   echo "  3. Replace per-instance script files"
   echo "     Preserving: variables.txt, downloaded_versions.json, interface/,"
-  echo "                 update/node_modules/, api-server/node_modules/, logs/"
+  echo "                 update/node_modules/, logs/"
   if [[ ${#JSON_CONFIGS[@]} -gt 0 ]]; then
-    echo "     Merging (not replacing):"
     for entry in "${JSON_CONFIGS[@]}"; do
       f="${entry%%:*}"; nk="${entry##*:}"
-      if [[ "$nk" -gt 0 ]]; then
-        echo "       $f  ($nk new key(s) will be added)"
-      else
-        echo "       $f  (no new keys — keeping as-is)"
-      fi
+      [[ "$nk" -gt 0 ]] \
+        && echo "     Merging (not replacing): $f  ($nk new key(s))" \
+        || echo "     Keeping unchanged: $f"
     done
   fi
-  echo "  4. Add ${#NEW_VARS[@]} new variable(s) to variables.txt"
-  $NEEDS_ANY_NPM_INSTALL && echo "  5. Run npm install in changed script subdirs"
-  $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  6. Restart the server"
+  if $NEEDS_ROOT_UPDATE; then
+    echo "  4. Update root-level components:"
+    for i in "${!ROOT_DST_NAMES[@]}"; do
+      dst_dir="$BASE_DIR/${ROOT_DST_NAMES[$i]}"
+      [[ -d "$dst_dir" ]] && echo "       $dst_dir"
+    done
+    echo "     Preserving: node_modules/, api-server-config.json,"
+    echo "                 manager/src/config/users.json"
+    echo "     Merging (not replacing): manager/src/config/config.json"
+  fi
+  echo "  5. Add ${#NEW_VARS[@]} new variable(s) to variables.txt"
+  $NEEDS_ANY_NPM_INSTALL && echo "  6. Run npm install in changed per-instance subdirs"
+  $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  7. Restart the server"
   echo
   read -rp "Proceed? (y/N): " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
@@ -414,15 +504,13 @@ else
   $SERVER_RUNNING && warn "Server running but --no-stop specified. Scripts replaced live."
 fi
 
-# ── Step 3: Replace scripts ──
+# ── Step 3: Replace per-instance scripts ──
 
-echo; echo -e "${BOLD}Step 3: Replace scripts${NC}"
+echo; echo -e "${BOLD}Step 3: Replace per-instance scripts${NC}"
 
 PRESERVE_DIR=$(mktemp -d)
 
-# ── Save everything that must survive the wipe ──
-
-# Named files
+# Save files that must survive the wipe
 for pf in "common/variables.txt" "common/downloaded_versions.json"; do
   [[ -f "$TARGET_SCRIPTS_DIR/$pf" ]] && {
     run_cmd mkdir -p "$PRESERVE_DIR/$(dirname "$pf")"
@@ -430,7 +518,6 @@ for pf in "common/variables.txt" "common/downloaded_versions.json"; do
   }
 done
 
-# Log dirs
 for logdir in "backup/logs" "logs"; do
   [[ -d "$TARGET_SCRIPTS_DIR/$logdir" ]] && {
     run_cmd mkdir -p "$PRESERVE_DIR/$logdir"
@@ -438,14 +525,12 @@ for logdir in "backup/logs" "logs"; do
   }
 done
 
-# Web interface
 if $HAS_INTERFACE; then
   run_cmd mkdir -p "$PRESERVE_DIR/interface"
   run_cmd cp -a "$TARGET_SCRIPTS_DIR/interface/." "$PRESERVE_DIR/interface/"
   info "Saved: interface/"
 fi
 
-# node_modules for each npm subdir (only when keeping them)
 for entry in "${NPM_SUBDIRS[@]}"; do
   subdir="${entry%%:*}"; rest="${entry#*:}"
   has_modules="${rest%%:*}"; needs_install="${rest##*:}"
@@ -456,7 +541,7 @@ for entry in "${NPM_SUBDIRS[@]}"; do
   fi
 done
 
-# JSON config files — save existing so we can merge after the copy
+# Per-instance JSON config files
 for entry in "${JSON_CONFIGS[@]:-}"; do
   [[ -z "$entry" ]] && continue
   f="${entry%%:*}"
@@ -467,14 +552,21 @@ for entry in "${JSON_CONFIGS[@]:-}"; do
   }
 done
 
-# ── Wipe + replace ──
-log "Removing old scripts..."
+# Wipe and replace
+log "Removing old per-instance scripts..."
 $DRY_RUN || find "$TARGET_SCRIPTS_DIR" -mindepth 1 -delete
-
-log "Copying new scripts..."
+log "Copying new per-instance scripts..."
 $DRY_RUN || cp -a "$NEW_SCRIPTS_SOURCE/." "$TARGET_SCRIPTS_DIR/"
 
-# ── Restore ──
+# Remove root-level component source trees that got copied into the scripts dir
+# (they're submodules in src/scripts/ but don't belong inside scripts/INSTANCE_NAME/)
+for src_name in "${ROOT_SRC_NAMES[@]}"; do
+  [[ -d "$TARGET_SCRIPTS_DIR/$src_name" ]] && {
+    $DRY_RUN || rm -rf "$TARGET_SCRIPTS_DIR/$src_name"
+  }
+done
+
+# Restore preserved files
 log "Restoring preserved files..."
 
 for pf in "common/variables.txt" "common/downloaded_versions.json"; do
@@ -505,42 +597,145 @@ for entry in "${NPM_SUBDIRS[@]}"; do
   fi
 done
 
-# JSON config files — merge existing values into new defaults
 for entry in "${JSON_CONFIGS[@]:-}"; do
   [[ -z "$entry" ]] && continue
   f="${entry%%:*}"; nk="${entry##*:}"
   preserved="$PRESERVE_DIR/$f"
   deployed="$TARGET_SCRIPTS_DIR/$f"
-
-  [[ ! -f "$preserved" ]] && continue   # was never there — new file, keep new default
-
+  [[ ! -f "$preserved" ]] && continue
   if [[ "$nk" -gt 0 ]]; then
-    # New keys exist — merge: existing values win, new keys added with defaults
     if command -v node &>/dev/null; then
-      if ! $DRY_RUN; then
-        _merge_json_config "$preserved" "$deployed"
-        info "Merged: $f ($nk new key(s) added with defaults)"
-      else
-        info "[DRY-RUN] Would merge: $f ($nk new key(s))"
-      fi
+      $DRY_RUN || _merge_json_config "$preserved" "$deployed"
+      info "Merged: $f ($nk new key(s))"
     else
-      # node unavailable — preserve existing file rather than silently overwriting it
       $DRY_RUN || cp -a "$preserved" "$deployed"
-      warn "node not found — kept existing $f unchanged (new defaults could not be merged)"
+      warn "node not found — kept existing $f (new keys not merged)"
     fi
   else
-    # No new keys — just restore the existing file verbatim
     $DRY_RUN || cp -a "$preserved" "$deployed"
     info "Restored: $f (no new keys)"
   fi
 done
 
 rm -rf "$PRESERVE_DIR"
-log "Scripts replaced"
+log "Per-instance scripts replaced"
 
-# ── Step 4: Merge new variables ──
+# ── Step 4: Update root-level components ──
 
-echo; echo -e "${BOLD}Step 4: Update variables.txt${NC}"
+if $NEEDS_ROOT_UPDATE; then
+  echo; echo -e "${BOLD}Step 4: Update root-level components${NC}"
+
+  for i in "${!ROOT_SRC_NAMES[@]}"; do
+    src_name="${ROOT_SRC_NAMES[$i]}"
+    dst_name="${ROOT_DST_NAMES[$i]}"
+    src_dir="$NEW_SCRIPTS_SOURCE/$src_name"
+    dst_dir="$BASE_DIR/$dst_name"
+
+    [[ ! -d "$src_dir" || ! -d "$dst_dir" ]] && continue
+
+    log "Updating $dst_name/ ($dst_dir)"
+
+    ROOT_PRESERVE=$(mktemp -d)
+
+    # node_modules
+    if [[ -d "$dst_dir/node_modules" ]]; then
+      $DRY_RUN || cp -a "$dst_dir/node_modules" "$ROOT_PRESERVE/node_modules"
+      info "  Saved: node_modules/"
+    fi
+
+    # api-server-config.json (api-server only — user-generated, never in source)
+    if [[ -f "$dst_dir/api-server-config.json" ]]; then
+      $DRY_RUN || cp -a "$dst_dir/api-server-config.json" "$ROOT_PRESERVE/api-server-config.json"
+      info "  Saved: api-server-config.json"
+    fi
+
+    # config.json (for merge)
+    if [[ -f "$dst_dir/src/config/config.json" ]]; then
+      $DRY_RUN || { mkdir -p "$ROOT_PRESERVE/src/config"; cp -a "$dst_dir/src/config/config.json" "$ROOT_PRESERVE/src/config/config.json"; }
+    fi
+
+    # users.json (credentials — preserve entirely, never overwrite)
+    if [[ -f "$dst_dir/src/config/users.json" ]]; then
+      $DRY_RUN || { mkdir -p "$ROOT_PRESERVE/src/config"; cp -a "$dst_dir/src/config/users.json" "$ROOT_PRESERVE/src/config/users.json"; }
+      info "  Saved: src/config/users.json"
+    fi
+
+    # logs
+    if [[ -d "$dst_dir/logs" ]]; then
+      $DRY_RUN || { mkdir -p "$ROOT_PRESERVE/logs"; cp -a "$dst_dir/logs/." "$ROOT_PRESERVE/logs/"; }
+    fi
+
+    # Wipe and replace
+    $DRY_RUN || find "$dst_dir" -mindepth 1 -delete
+    $DRY_RUN || cp -a "$src_dir/." "$dst_dir/"
+
+    # Restore node_modules
+    if [[ -d "$ROOT_PRESERVE/node_modules" ]]; then
+      $DRY_RUN || cp -a "$ROOT_PRESERVE/node_modules" "$dst_dir/node_modules"
+      info "  Restored: node_modules/"
+    fi
+
+    # Restore api-server-config.json
+    if [[ -f "$ROOT_PRESERVE/api-server-config.json" ]]; then
+      $DRY_RUN || cp -a "$ROOT_PRESERVE/api-server-config.json" "$dst_dir/api-server-config.json"
+      info "  Restored: api-server-config.json"
+    fi
+
+    # Merge or restore config.json
+    if [[ -f "$ROOT_PRESERVE/src/config/config.json" && -f "$dst_dir/src/config/config.json" ]]; then
+      if command -v node &>/dev/null; then
+        nk=$(_count_new_json_keys "$ROOT_PRESERVE/src/config/config.json" "$dst_dir/src/config/config.json")
+        if [[ "$nk" -gt 0 ]]; then
+          $DRY_RUN || _merge_json_config "$ROOT_PRESERVE/src/config/config.json" "$dst_dir/src/config/config.json"
+          info "  Merged: src/config/config.json ($nk new key(s))"
+        else
+          $DRY_RUN || cp -a "$ROOT_PRESERVE/src/config/config.json" "$dst_dir/src/config/config.json"
+          info "  Restored: src/config/config.json (no new keys)"
+        fi
+      else
+        $DRY_RUN || cp -a "$ROOT_PRESERVE/src/config/config.json" "$dst_dir/src/config/config.json"
+        warn "  node not found — kept existing src/config/config.json"
+      fi
+    fi
+
+    # Restore users.json (never merge — always preserve as-is)
+    if [[ -f "$ROOT_PRESERVE/src/config/users.json" ]]; then
+      $DRY_RUN || { mkdir -p "$dst_dir/src/config"; cp -a "$ROOT_PRESERVE/src/config/users.json" "$dst_dir/src/config/users.json"; }
+      info "  Restored: src/config/users.json"
+    fi
+
+    # Restore logs
+    if [[ -d "$ROOT_PRESERVE/logs" ]]; then
+      $DRY_RUN || { mkdir -p "$dst_dir/logs"; cp -a "$ROOT_PRESERVE/logs/." "$dst_dir/logs/"; }
+    fi
+
+    rm -rf "$ROOT_PRESERVE"
+
+    # npm install if package.json changed or node_modules missing
+    if [[ -f "$src_dir/package.json" ]]; then
+      needs_npm=false
+      if ! diff -q "$src_dir/package.json" "$dst_dir/package.json" &>/dev/null 2>&1; then
+        needs_npm=true
+      elif [[ ! -d "$dst_dir/node_modules" ]]; then
+        needs_npm=true
+      fi
+      if $needs_npm; then
+        if command -v npm &>/dev/null; then
+          log "  npm install --omit=dev in $dst_name/"
+          run_cmd npm install --omit=dev --prefix "$dst_dir"
+        else
+          warn "  npm not found — run: npm install --omit=dev --prefix '$dst_dir'"
+        fi
+      fi
+    fi
+
+    log "  $dst_name/ updated"
+  done
+fi
+
+# ── Step 5: Merge new variables ──
+
+echo; echo -e "${BOLD}Step 5: Update variables.txt${NC}"
 
 if [[ ${#NEW_VARS[@]} -gt 0 ]]; then
   if ! $DRY_RUN; then
@@ -554,10 +749,10 @@ else
   log "variables.txt already has all required variables"
 fi
 
-# ── Step 5: npm install in changed subdirs ──
+# ── Step 6: npm install in changed per-instance subdirs ──
 
 if $NEEDS_ANY_NPM_INSTALL; then
-  echo; echo -e "${BOLD}Step 5: Install npm dependencies${NC}"
+  echo; echo -e "${BOLD}Step 6: Install npm dependencies${NC}"
   if command -v npm &>/dev/null; then
     for entry in "${NPM_SUBDIRS[@]}"; do
       subdir="${entry%%:*}"; needs_install="${entry##*:}"
@@ -569,7 +764,7 @@ if $NEEDS_ANY_NPM_INSTALL; then
     done
     log "Dependencies installed"
   else
-    warn "npm not found — run manually for each changed subdir:"
+    warn "npm not found — run manually:"
     for entry in "${NPM_SUBDIRS[@]}"; do
       subdir="${entry%%:*}"; needs_install="${entry##*:}"
       [[ "$needs_install" == true ]] && info "  npm install --omit=dev --prefix '$TARGET_SCRIPTS_DIR/$subdir'"
@@ -577,39 +772,32 @@ if $NEEDS_ANY_NPM_INSTALL; then
   fi
 fi
 
-# ── Step 6: Verify ──
+# ── Step 7: Verify ──
 
-echo; echo -e "${BOLD}Step 6: Verify${NC}"
+echo; echo -e "${BOLD}Step 7: Verify${NC}"
 
 verify_ok=true
 
 for f in "common/server_control.sh" "common/load_variables.sh" "common/variables.txt" \
          "backup/backup.sh" "start.sh" \
          "common/rcon.js" "common/webhook.sh" "rollback.sh" "smart_restart.sh" "manage.sh" \
-         "update/update-server.js" "update/update-mods.js" "update/check-updates.js" "update/package.json" \
-         "api-server/index.js" "api-server/package.json"; do
+         "update/update-server.js" "update/update-mods.js" "update/check-updates.js" "update/package.json"; do
   [[ -f "$TARGET_SCRIPTS_DIR/$f" ]] && info "✓ $f" || { err "Missing: $f"; verify_ok=false; }
 done
 
 $HAS_INTERFACE && {
   [[ -d "$TARGET_SCRIPTS_DIR/interface" ]] \
     && info "✓ interface/ (preserved)" \
-    || { err "interface/ was not restored — web interface will be broken"; verify_ok=false; }
+    || { err "interface/ was not restored"; verify_ok=false; }
 }
 
-# Verify config.json files are valid JSON and still contain required keys
 for entry in "${JSON_CONFIGS[@]:-}"; do
   [[ -z "$entry" ]] && continue
-  f="${entry%%:*}"
-  cfg="$TARGET_SCRIPTS_DIR/$f"
-  if [[ -f "$cfg" ]]; then
-    if node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$cfg" 2>/dev/null; then
-      info "✓ $f (valid JSON)"
-    else
-      err "$f is not valid JSON after merge"
-      verify_ok=false
-    fi
-  fi
+  f="${entry%%:*}"; cfg="$TARGET_SCRIPTS_DIR/$f"
+  [[ -f "$cfg" ]] && \
+    node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$cfg" 2>/dev/null \
+    && info "✓ $f (valid JSON)" \
+    || { err "$f is not valid JSON"; verify_ok=false; }
 done
 
 bash -c "source '$VARS_FILE'" 2>/dev/null \
@@ -629,10 +817,10 @@ if ! $verify_ok; then
 fi
 log "Verification passed"
 
-# ── Step 7: Restart server ──
+# ── Step 8: Restart server ──
 
 if $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]]; then
-  echo; echo -e "${BOLD}Step 7: Restart server${NC}"
+  echo; echo -e "${BOLD}Step 8: Restart server${NC}"
   log "Starting '$INSTANCE_NAME'..."
   run_cmd sudo systemctl start "${INSTANCE_NAME}.service"
   if ! $DRY_RUN; then
@@ -652,6 +840,18 @@ echo
 info "Backup archive: $BACKUP_ARCHIVE"
 info "Remove once verified: rm -f '$BACKUP_ARCHIVE'"
 echo
+if $NEEDS_ROOT_UPDATE; then
+  warn "api-server and manager services were updated but not restarted."
+  info "Restart them to pick up the new code:"
+  for i in "${!ROOT_DST_NAMES[@]}"; do
+    dst_dir="$BASE_DIR/${ROOT_DST_NAMES[$i]}"
+    [[ -d "$dst_dir" ]] && {
+      svc_pattern="$(basename "$BASE_DIR")-${ROOT_DST_NAMES[$i]}.service"
+      info "  sudo systemctl restart $svc_pattern"
+    }
+  done
+  echo
+fi
 if [[ ${#NEW_VARS[@]} -gt 0 ]]; then
   info "New features available — edit variables.txt to enable:"
   [[ " ${NEW_VARS[*]} " == *"USE_RCON"* ]]           && info "  • RCON:               USE_RCON=\"true\", RCON_PASSWORD"
