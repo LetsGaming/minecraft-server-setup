@@ -13,12 +13,13 @@ set -euo pipefail
 # ║    - interface/  (web interface — preserved and restored)   ║
 # ║    - update/node_modules/   (preserved; reinstalled only    ║
 # ║      when package.json changes)                             ║
-# ║    - api-server/node_modules/, manager/node_modules/        ║
+# ║    - services/api-server/node_modules/,                     ║
+# ║      services/manager/node_modules/                         ║
 # ║      (preserved; reinstalled only when package.json changes)║
-# ║    - JSON config files (e.g. manager/src/config/config.json)║
-# ║      (existing values kept; new keys merged in)             ║
-# ║    - manager/src/config/users.json  (credentials, untouched)║
-# ║    - api-server/api-server-config.json  (untouched)         ║
+# ║    - JSON config files (e.g. services/manager/src/config/   ║
+# ║      config.json) (existing values kept; new keys merged)   ║
+# ║    - services/manager/src/config/users.json  (untouched)    ║
+# ║    - services/api-server/api-server-config.json  (untouched)║
 # ╚══════════════════════════════════════════════════════════════╝
 
 MIGRATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,19 +63,25 @@ Options:
 What gets replaced (per-instance scripts):
   - All .sh and .js files (start, shutdown, backup, restore, update, etc.)
 
-What gets updated (root-level shared components):
-  - api-server/    at <install-root>/api-server/
-  - manager/       at <install-root>/manager/
+What gets updated (shared services):
+  - services/api-server/   at <install-root>/services/api-server/
+  - services/manager/      at <install-root>/services/manager/
+
+Structural migration (run once, automatically detected):
+  - <install-root>/<instance>/            → <install-root>/instances/<instance>/
+  - <install-root>/api-server/            → <install-root>/services/api-server/
+  - <install-root>/manager/               → <install-root>/services/manager/
+  Updates SERVER_PATH in variables.txt and patches systemd unit files.
 
 What is NEVER touched:
   - common/variables.txt          (only new variables are appended)
   - common/downloaded_versions.json
   - interface/                    (web interface — preserved and restored)
   - update/node_modules/          (preserved; reinstalled if package.json changed)
-  - api-server/node_modules/, manager/node_modules/  (same)
-  - api-server/api-server-config.json   (user config — fully preserved)
-  - manager/src/config/config.json      (merged: existing values kept, new keys added)
-  - manager/src/config/users.json       (credentials — fully preserved)
+  - services/api-server/node_modules/, services/manager/node_modules/  (same)
+  - services/api-server/api-server-config.json   (user config — fully preserved)
+  - services/manager/src/config/config.json      (merged: existing values kept, new keys added)
+  - services/manager/src/config/users.json       (credentials — fully preserved)
   - backup/logs/, logs/
   - World data, mods, server.jar, server.properties
   - Systemd services, cron jobs
@@ -116,14 +123,25 @@ VARS_FILE="$TARGET_SCRIPTS_DIR/common/variables.txt"
 
 source "$VARS_FILE"
 
-# BASE_DIR is the install root — one level above the instance server dir
-# SERVER_PATH = <install-root>/<instance>, so dirname gives us <install-root>
-BASE_DIR="$(dirname "${SERVER_PATH:?SERVER_PATH not set in variables.txt}")"
+# BASE_DIR is the install root — derived from the scripts directory path so it
+# works correctly for both old (<target>/<instance>/) and new
+# (<target>/instances/<instance>/) directory structures.
+# TARGET_SCRIPTS_DIR = <install-root>/scripts/<instance>
+BASE_DIR="$(dirname "$(dirname "$TARGET_SCRIPTS_DIR")")"
 
-# Root-level shared components: source name → deployed name at $BASE_DIR/<dst>/
+# Validate SERVER_PATH is present (used later for structure-detection)
+[[ -z "${SERVER_PATH:-}" ]] && {
+  err "SERVER_PATH not set in variables.txt"
+  exit 1
+}
+
+# Root-level shared services: source name → deployed subpath under $BASE_DIR/
 # Parallel arrays (bash 3 compatible)
-ROOT_SRC_NAMES=("api-server"          "minecraft-server-manager")
-ROOT_DST_NAMES=("api-server"          "manager")
+ROOT_SRC_NAMES=("api-server"              "minecraft-server-manager")
+ROOT_DST_NAMES=("services/api-server"     "services/manager")
+# Systemd service-name suffix (separate from path because 'services/' is not
+# part of the service identifier)
+ROOT_SVC_NAMES=("api-server"              "manager")
 
 echo
 echo -e "${BOLD}Minecraft Server Setup — Migration${NC}"
@@ -338,9 +356,15 @@ for i in "${!ROOT_SRC_NAMES[@]}"; do
   src_dir="$NEW_SCRIPTS_SOURCE/$src_name"
   dst_dir="$BASE_DIR/$dst_name"
 
-  # Skip if source component doesn't exist or component isn't installed yet
+  # Skip if source component doesn't exist or component isn't installed yet.
+  # Also check the old location (pre-structure-migration) so we still report
+  # what will change even before the directories have been moved.
   [[ ! -d "$src_dir" ]] && continue
-  [[ ! -d "$dst_dir" ]] && continue
+  if [[ ! -d "$dst_dir" ]]; then
+    # Fall back to old location: services/api-server → api-server, services/manager → manager
+    _old_dst="$BASE_DIR/$(basename "$dst_name")"
+    [[ -d "$_old_dst" ]] && dst_dir="$_old_dst" || continue
+  fi
 
   while IFS= read -r f; do
     case "$f" in
@@ -413,7 +437,40 @@ for entry in "${NEW_VAR_DEFAULTS[@]}"; do
 done
 
 TOTAL_CHANGES=$(( REPLACED + ADDED + ROOT_REPLACED + ROOT_ADDED ))
-if [[ $TOTAL_CHANGES -eq 0 && ${#NEW_VARS[@]} -eq 0 && "$NEEDS_ANY_NPM_INSTALL" != true ]]; then
+
+# ── Structural migration detection ──
+# Detect whether the install uses the old flat layout and needs directories moved.
+
+_old_instance_dir="$BASE_DIR/$INSTANCE_NAME"
+_new_instance_dir="$BASE_DIR/instances/$INSTANCE_NAME"
+_old_api_dir="$BASE_DIR/api-server"
+_new_api_dir="$BASE_DIR/services/api-server"
+_old_manager_dir="$BASE_DIR/manager"
+_new_manager_dir="$BASE_DIR/services/manager"
+
+NEEDS_INSTANCE_MOVE=false
+NEEDS_API_MOVE=false
+NEEDS_MANAGER_MOVE=false
+
+# Instance move: SERVER_PATH still points at the old location and that dir exists
+if [[ "${SERVER_PATH:-}" == "$_old_instance_dir" && -d "$_old_instance_dir" && ! -d "$_new_instance_dir" ]]; then
+  NEEDS_INSTANCE_MOVE=true
+  info "MOVE    instances/$INSTANCE_NAME/  (${_old_instance_dir} → ${_new_instance_dir})"
+fi
+# Services moves: old dir exists and new dir does not
+if [[ -d "$_old_api_dir" && ! -d "$_new_api_dir" ]]; then
+  NEEDS_API_MOVE=true
+  info "MOVE    services/api-server/  (${_old_api_dir} → ${_new_api_dir})"
+fi
+if [[ -d "$_old_manager_dir" && ! -d "$_new_manager_dir" ]]; then
+  NEEDS_MANAGER_MOVE=true
+  info "MOVE    services/manager/  (${_old_manager_dir} → ${_new_manager_dir})"
+fi
+NEEDS_STRUCT_MIGRATION=false
+{ $NEEDS_INSTANCE_MOVE || $NEEDS_API_MOVE || $NEEDS_MANAGER_MOVE; } && NEEDS_STRUCT_MIGRATION=true
+
+if [[ $TOTAL_CHANGES -eq 0 && ${#NEW_VARS[@]} -eq 0 && "$NEEDS_ANY_NPM_INSTALL" != true \
+   && "$NEEDS_STRUCT_MIGRATION" != true ]]; then
   log "Everything is already up to date. Nothing to do."
   exit 0
 fi
@@ -421,9 +478,10 @@ fi
 echo
 SUMMARY="$REPLACED file(s) to update, $ADDED file(s) to add, ${#NEW_VARS[@]} variable(s) to add"
 [[ $(( ROOT_REPLACED + ROOT_ADDED )) -gt 0 ]] && \
-  SUMMARY="$SUMMARY, $ROOT_REPLACED root-level file(s) to update"
+  SUMMARY="$SUMMARY, $ROOT_REPLACED service file(s) to update"
 [[ $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) -gt 0 ]] && \
   SUMMARY="$SUMMARY, $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) config key(s) to merge"
+"$NEEDS_INSTANCE_MOVE" && SUMMARY="$SUMMARY, instance dir to relocate" || true
 info "$SUMMARY"
 echo
 
@@ -433,7 +491,14 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   echo -e "${BOLD}This will:${NC}"
   echo "  1. Create a compressed archive backup of the scripts dir"
   $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  2. Stop the server"
-  echo "  3. Replace per-instance script files"
+  if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
+    echo "  3. Structural directory migration:"
+    $NEEDS_INSTANCE_MOVE && echo "       mv  $BASE_DIR/$INSTANCE_NAME  →  $BASE_DIR/instances/$INSTANCE_NAME"
+    $NEEDS_API_MOVE      && echo "       mv  $BASE_DIR/api-server  →  $BASE_DIR/services/api-server"
+    $NEEDS_MANAGER_MOVE  && echo "       mv  $BASE_DIR/manager  →  $BASE_DIR/services/manager"
+    $NEEDS_INSTANCE_MOVE && echo "     Updates SERVER_PATH in variables.txt and patches systemd unit files"
+  fi
+  echo "  4. Replace per-instance script files"
   echo "     Preserving: variables.txt, downloaded_versions.json, interface/,"
   echo "                 update/node_modules/, logs/"
   if [[ ${#JSON_CONFIGS[@]} -gt 0 ]]; then
@@ -445,18 +510,19 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
     done
   fi
   if $NEEDS_ROOT_UPDATE; then
-    echo "  4. Update root-level components:"
+    echo "  5. Update shared services:"
     for i in "${!ROOT_DST_NAMES[@]}"; do
       dst_dir="$BASE_DIR/${ROOT_DST_NAMES[$i]}"
-      [[ -d "$dst_dir" ]] && echo "       $dst_dir"
+      # Show the destination path (new or old, whichever will exist after migration)
+      echo "       $dst_dir"
     done
     echo "     Preserving: node_modules/, api-server-config.json,"
-    echo "                 manager/src/config/users.json"
-    echo "     Merging (not replacing): manager/src/config/config.json"
+    echo "                 services/manager/src/config/users.json"
+    echo "     Merging (not replacing): services/manager/src/config/config.json"
   fi
-  echo "  5. Add ${#NEW_VARS[@]} new variable(s) to variables.txt"
-  $NEEDS_ANY_NPM_INSTALL && echo "  6. Run npm install in changed per-instance subdirs"
-  $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  7. Restart the server"
+  echo "  6. Add ${#NEW_VARS[@]} new variable(s) to variables.txt"
+  $NEEDS_ANY_NPM_INSTALL && echo "  7. Run npm install in changed per-instance subdirs"
+  $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && echo "  8. Restart the server"
   echo
   read -rp "Proceed? (y/N): " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
@@ -506,9 +572,119 @@ else
   $SERVER_RUNNING && warn "Server running but --no-stop specified. Scripts replaced live."
 fi
 
-# ── Step 3: Replace per-instance scripts ──
+# ── Step 3: Structural directory migration ──
+# Moves directories to the new layout if this is an old-format install.
+# Safe to skip (idempotent) when the new structure is already in place.
 
-echo; echo -e "${BOLD}Step 3: Replace per-instance scripts${NC}"
+if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
+  echo; echo -e "${BOLD}Step 3: Structural directory migration${NC}"
+
+  # ── 3a: Instance dir: BASE_DIR/<instance>  →  BASE_DIR/instances/<instance>
+  if $NEEDS_INSTANCE_MOVE; then
+    log "Moving instance dir to instances/$INSTANCE_NAME/"
+    run_cmd mkdir -p "$BASE_DIR/instances"
+    run_cmd mv "$_old_instance_dir" "$_new_instance_dir"
+    info "Moved: $_old_instance_dir → $_new_instance_dir"
+
+    # Update SERVER_PATH in variables.txt
+    if ! $DRY_RUN; then
+      sed -i "s|SERVER_PATH=\"${_old_instance_dir}\"|SERVER_PATH=\"${_new_instance_dir}\"|" "$VARS_FILE"
+    else
+      echo "[DRY-RUN] sed -i SERVER_PATH in $VARS_FILE"
+    fi
+    info "Updated SERVER_PATH in variables.txt"
+
+    # Patch the MC instance systemd service file (WorkingDirectory + ExecStart)
+    _svc_file="/etc/systemd/system/${INSTANCE_NAME}.service"
+    if [[ -f "$_svc_file" ]]; then
+      if ! $DRY_RUN; then
+        sudo sed -i "s|${_old_instance_dir}|${_new_instance_dir}|g" "$_svc_file"
+        sudo systemctl daemon-reload
+      else
+        echo "[DRY-RUN] sudo sed -i paths in $_svc_file + daemon-reload"
+      fi
+      info "Patched: $_svc_file"
+    fi
+
+    # Patch api-server-config.json serverPath entries if present
+    # (scriptsDir lives in BASE_DIR/scripts/ and does not change)
+    for _cfg_dir in "$_new_api_dir" "$_old_api_dir"; do
+      _api_cfg="$_cfg_dir/api-server-config.json"
+      if [[ -f "$_api_cfg" ]]; then
+        if ! $DRY_RUN; then
+          # Use node to do a clean JSON edit — avoids broken JSON from sed on paths
+          node -e "
+            const fs = require('fs');
+            const cfg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+            const oldP = process.argv[2], newP = process.argv[3];
+            for (const inst of Object.values(cfg.instances || {})) {
+              if (inst.serverPath === oldP) inst.serverPath = newP;
+            }
+            fs.writeFileSync(process.argv[1], JSON.stringify(cfg, null, 2) + '\n');
+          " "$_api_cfg" "$_old_instance_dir" "$_new_instance_dir" 2>/dev/null || \
+            warn "Could not auto-update serverPath in $_api_cfg — update manually"
+        else
+          echo "[DRY-RUN] node: update serverPath in $_api_cfg"
+        fi
+        info "Updated serverPath in $(basename "$_cfg_dir")/api-server-config.json"
+        break
+      fi
+    done
+  fi
+
+  # ── 3b: api-server: BASE_DIR/api-server  →  BASE_DIR/services/api-server
+  if $NEEDS_API_MOVE; then
+    log "Moving api-server to services/api-server/"
+    run_cmd mkdir -p "$BASE_DIR/services"
+    run_cmd mv "$_old_api_dir" "$_new_api_dir"
+    info "Moved: $_old_api_dir → $_new_api_dir"
+
+    # Patch api-server systemd service file
+    _api_svc_name="$(basename "$BASE_DIR")-api-server.service"
+    _api_svc_file="/etc/systemd/system/$_api_svc_name"
+    if [[ -f "$_api_svc_file" ]]; then
+      if ! $DRY_RUN; then
+        sudo sed -i "s|${_old_api_dir}|${_new_api_dir}|g" "$_api_svc_file"
+        sudo systemctl daemon-reload
+      else
+        echo "[DRY-RUN] sudo sed -i paths in $_api_svc_file + daemon-reload"
+      fi
+      info "Patched: $_api_svc_file"
+    fi
+  fi
+
+  # ── 3c: manager: BASE_DIR/manager  →  BASE_DIR/services/manager
+  if $NEEDS_MANAGER_MOVE; then
+    log "Moving manager to services/manager/"
+    run_cmd mkdir -p "$BASE_DIR/services"
+    run_cmd mv "$_old_manager_dir" "$_new_manager_dir"
+    info "Moved: $_old_manager_dir → $_new_manager_dir"
+
+    # Patch manager systemd service file
+    _mgr_svc_name="$(basename "$BASE_DIR")-manager.service"
+    _mgr_svc_file="/etc/systemd/system/$_mgr_svc_name"
+    if [[ -f "$_mgr_svc_file" ]]; then
+      if ! $DRY_RUN; then
+        sudo sed -i "s|${_old_manager_dir}|${_new_manager_dir}|g" "$_mgr_svc_file"
+        sudo systemctl daemon-reload
+      else
+        echo "[DRY-RUN] sudo sed -i paths in $_mgr_svc_file + daemon-reload"
+      fi
+      info "Patched: $_mgr_svc_file"
+    fi
+  fi
+
+  # Re-source variables.txt so the rest of the script sees the updated SERVER_PATH
+  $DRY_RUN || source "$VARS_FILE"
+  log "Structural migration complete"
+else
+  echo; echo -e "${BOLD}Step 3: Structural directory migration${NC}"
+  log "Already using new directory layout — nothing to move"
+fi
+
+# ── Step 4: Replace per-instance scripts ──
+
+echo; echo -e "${BOLD}Step 4: Replace per-instance scripts${NC}"
 
 PRESERVE_DIR=$(mktemp -d)
 
@@ -623,10 +799,10 @@ done
 rm -rf "$PRESERVE_DIR"
 log "Per-instance scripts replaced"
 
-# ── Step 4: Update root-level components ──
+# ── Step 5: Update shared services ──
 
 if $NEEDS_ROOT_UPDATE; then
-  echo; echo -e "${BOLD}Step 4: Update root-level components${NC}"
+  echo; echo -e "${BOLD}Step 5: Update shared services${NC}"
 
   for i in "${!ROOT_SRC_NAMES[@]}"; do
     src_name="${ROOT_SRC_NAMES[$i]}"
@@ -634,7 +810,13 @@ if $NEEDS_ROOT_UPDATE; then
     src_dir="$NEW_SCRIPTS_SOURCE/$src_name"
     dst_dir="$BASE_DIR/$dst_name"
 
-    [[ ! -d "$src_dir" || ! -d "$dst_dir" ]] && continue
+    [[ ! -d "$src_dir" ]] && continue
+    # After structural migration the new path should exist; but if it doesn't,
+    # fall back to the old location one final time.
+    if [[ ! -d "$dst_dir" ]]; then
+      _fallback="$BASE_DIR/$(basename "$dst_name")"
+      [[ -d "$_fallback" ]] && dst_dir="$_fallback" || continue
+    fi
 
     log "Updating $dst_name/ ($dst_dir)"
 
@@ -736,9 +918,9 @@ if $NEEDS_ROOT_UPDATE; then
   done
 fi
 
-# ── Step 5: Merge new variables ──
+# ── Step 6: Merge new variables ──
 
-echo; echo -e "${BOLD}Step 5: Update variables.txt${NC}"
+echo; echo -e "${BOLD}Step 6: Update variables.txt${NC}"
 
 if [[ ${#NEW_VARS[@]} -gt 0 ]]; then
   if ! $DRY_RUN; then
@@ -752,10 +934,10 @@ else
   log "variables.txt already has all required variables"
 fi
 
-# ── Step 6: npm install in changed per-instance subdirs ──
+# ── Step 7: npm install in changed per-instance subdirs ──
 
 if $NEEDS_ANY_NPM_INSTALL; then
-  echo; echo -e "${BOLD}Step 6: Install npm dependencies${NC}"
+  echo; echo -e "${BOLD}Step 7: Install npm dependencies${NC}"
   if command -v npm &>/dev/null; then
     for entry in "${NPM_SUBDIRS[@]}"; do
       subdir="${entry%%:*}"; needs_install="${entry##*:}"
@@ -775,9 +957,9 @@ if $NEEDS_ANY_NPM_INSTALL; then
   fi
 fi
 
-# ── Step 7: Verify ──
+# ── Step 8: Verify ──
 
-echo; echo -e "${BOLD}Step 7: Verify${NC}"
+echo; echo -e "${BOLD}Step 8: Verify${NC}"
 
 verify_ok=true
 
@@ -820,10 +1002,10 @@ if ! $verify_ok; then
 fi
 log "Verification passed"
 
-# ── Step 8: Restart server ──
+# ── Step 9: Restart server ──
 
 if $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]]; then
-  echo; echo -e "${BOLD}Step 8: Restart server${NC}"
+  echo; echo -e "${BOLD}Step 9: Restart server${NC}"
   log "Starting '$INSTANCE_NAME'..."
   run_cmd sudo systemctl start "${INSTANCE_NAME}.service"
   if ! $DRY_RUN; then
@@ -844,12 +1026,13 @@ info "Backup archive: $BACKUP_ARCHIVE"
 info "Remove once verified: rm -f '$BACKUP_ARCHIVE'"
 echo
 if $NEEDS_ROOT_UPDATE; then
-  warn "api-server and manager services were updated but not restarted."
+  warn "Shared services were updated but not restarted."
   info "Restart them to pick up the new code:"
   for i in "${!ROOT_DST_NAMES[@]}"; do
     dst_dir="$BASE_DIR/${ROOT_DST_NAMES[$i]}"
     [[ -d "$dst_dir" ]] && {
-      svc_pattern="$(basename "$BASE_DIR")-${ROOT_DST_NAMES[$i]}.service"
+      # Service name uses the plain suffix (api-server, manager) without services/
+      svc_pattern="$(basename "$BASE_DIR")-${ROOT_SVC_NAMES[$i]}.service"
       info "  sudo systemctl restart $svc_pattern"
     }
   done
@@ -868,5 +1051,5 @@ info "  • rollback.sh               — Roll back to pre-update backup"
 info "  • smart_restart.sh          — Player-aware restart"
 info "  • manage.sh                 — Multi-instance management"
 info "  • update/update-server.js   — Update server + mods"
-info "  • api-server/index.js       — minecraft-bot HTTP API wrapper"
+info "  • services/api-server/      — minecraft-bot HTTP API wrapper"
 echo

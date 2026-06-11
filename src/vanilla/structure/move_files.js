@@ -6,7 +6,7 @@ const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
 const tmpDir = path.join(process.env.SCRIPT_DIR, "src", "vanilla", "temp");
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
-const INSTANCE_DIR = path.join(BASE_DIR, INSTANCE_NAME);
+const INSTANCE_DIR = path.join(BASE_DIR, "instances", INSTANCE_NAME);
 
 function moveContentsSync(srcDir, destDir) {
   const entries = fs.readdirSync(srcDir, { withFileTypes: true });
@@ -47,4 +47,7 @@ if (!fs.existsSync(INSTANCE_DIR)) {
 
 // Move tmp -> instance
 moveContentsSync(tmpDir, INSTANCE_DIR);
-copyStartScript(path.join(process.env.SCRIPT_DIR, "src", "vanilla"), INSTANCE_DIR);
+copyStartScript(
+  path.join(process.env.SCRIPT_DIR, "src", "vanilla"),
+  INSTANCE_DIR,
+);

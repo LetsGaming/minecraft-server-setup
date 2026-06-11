@@ -13,9 +13,14 @@ const apiServer = vars.API_SERVER || {};
 
 // Construct paths
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
-const serverPath = path.join(BASE_DIR, INSTANCE_NAME);
+const serverPath = path.join(BASE_DIR, "instances", INSTANCE_NAME);
 const variablesFilePath = path.resolve(
-  __dirname, "..", "..", "scripts", "common", "variables.txt"
+  __dirname,
+  "..",
+  "..",
+  "scripts",
+  "common",
+  "variables.txt",
 );
 
 let backupsPath = BACKUPS.BACKUPS_PATH;
@@ -54,7 +59,7 @@ const lines = [
   // API server (Discord bot integration)
   `API_SERVER_ENABLED="${apiServer.ENABLED || false}"`,
   `API_SERVER_PORT="${apiServer.PORT || 3000}"`,
-  `API_SERVER_KEY="${apiServer.API_KEY || ''}"`,
+  `API_SERVER_KEY="${apiServer.API_KEY || ""}"`,
 ];
 
 const variablesContent = lines.join("\n");

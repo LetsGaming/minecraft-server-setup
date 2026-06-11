@@ -1,14 +1,14 @@
-const path = require('path');
-const fs = require('fs');
-const { execSync } = require('child_process');
-const loadVariables = require('../common/loadVariables');
+const path = require("path");
+const fs = require("fs");
+const { execSync } = require("child_process");
+const loadVariables = require("../common/loadVariables");
 
 const { TARGET_DIR_NAME, INSTANCE_NAME } = loadVariables();
 
 const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
-const MODPACK_DIR = path.join(BASE_DIR, INSTANCE_NAME);
+const MODPACK_DIR = path.join(BASE_DIR, "instances", INSTANCE_NAME);
 
-const startScript = path.join(MODPACK_DIR, 'start.sh');
+const startScript = path.join(MODPACK_DIR, "start.sh");
 const serviceName = `${INSTANCE_NAME}.service`;
 const serviceFilePath = `/etc/systemd/system/${serviceName}`;
 
@@ -34,12 +34,14 @@ WantedBy=multi-user.target
 try {
   // Write to a temp file first, then use sudo mv to place it safely
   // This avoids shell injection through exec() with interpolated strings
-  const tmpFile = path.join('/tmp', `mc-service-${Date.now()}.tmp`);
-  fs.writeFileSync(tmpFile, serviceContent, 'utf-8');
+  const tmpFile = path.join("/tmp", `mc-service-${Date.now()}.tmp`);
+  fs.writeFileSync(tmpFile, serviceContent, "utf-8");
   execSync(`sudo mv "${tmpFile}" "${serviceFilePath}"`);
   execSync(`sudo chmod 644 "${serviceFilePath}"`);
-  console.log(`Systemd service file created successfully at ${serviceFilePath}`);
+  console.log(
+    `Systemd service file created successfully at ${serviceFilePath}`,
+  );
 } catch (err) {
-  console.error('Error creating the service file:', err.message);
+  console.error("Error creating the service file:", err.message);
   process.exit(1);
 }

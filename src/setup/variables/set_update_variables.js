@@ -11,13 +11,11 @@ const variablesFilePath = path.resolve(
   "..",
   "scripts",
   "common",
-  "curseforge.txt"
+  "curseforge.txt",
 );
 
 // Prepare content
-const variablesContent = [
-  `API_KEY='${api_key}'`,
-].join("\n");
+const variablesContent = [`API_KEY='${api_key}'`].join("\n");
 
 // Write to file
 fs.writeFileSync(variablesFilePath, variablesContent);

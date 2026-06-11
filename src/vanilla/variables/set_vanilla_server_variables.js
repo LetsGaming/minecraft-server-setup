@@ -3,15 +3,16 @@ const fs = require("fs");
 const os = require("os");
 const loadVariables = require("../../setup/common/loadVariables");
 
-const {
-  TARGET_DIR_NAME,
-  INSTANCE_NAME,
-  JAVA
-} = loadVariables();
+const { TARGET_DIR_NAME, INSTANCE_NAME, JAVA } = loadVariables();
 
 const VANILLA = JAVA.SERVER.VANILLA.USE_FABRIC ? "true" : "false";
 
-const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, INSTANCE_NAME);
+const MODPACK_DIR = path.join(
+  process.env.MAIN_DIR,
+  TARGET_DIR_NAME,
+  "instances",
+  INSTANCE_NAME,
+);
 const variablesTxtPath = path.join(MODPACK_DIR, "variables.txt");
 
 // Read existing content line by line
@@ -27,16 +28,12 @@ const keysToReplace = new Set([
   "USE_FABRIC",
   "WAIT_FOR_USER_INPUT",
   "ADDITIONAL_ARGS",
-  "RESTART"
+  "RESTART",
 ]);
 
 for (const line of lines) {
   const trimmed = line.trim();
-  if (
-    !trimmed ||
-    trimmed.startsWith("#") ||
-    !trimmed.includes("=")
-  ) {
+  if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) {
     preservedLines.push(line);
     continue;
   }
@@ -52,7 +49,7 @@ const updates = {
   USE_FABRIC: VANILLA,
   WAIT_FOR_USER_INPUT: "true",
   ADDITIONAL_ARGS: "-Dlog4j2.formatMsgNoLookups=true",
-  RESTART: "true"
+  RESTART: "true",
 };
 
 for (const [key, value] of Object.entries(updates)) {

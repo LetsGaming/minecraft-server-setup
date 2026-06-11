@@ -19,7 +19,8 @@ const mods_source = path.join(TEMP_DIR, "mods");
 const MODPACK_DIR = path.join(
   process.env.MAIN_DIR,
   TARGET_DIR_NAME,
-  INSTANCE_NAME
+  "instances",
+  INSTANCE_NAME,
 );
 const MODS_DIR = path.join(MODPACK_DIR, "mods");
 

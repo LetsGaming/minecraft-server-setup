@@ -1,6 +1,9 @@
 const { execSync } = require("child_process");
 const { JAVA } = require("../../../variables.json");
-const { getJavaVersionFor, getVersionInfo } = require("../../setup/download/download_utils.js");
+const {
+  getJavaVersionFor,
+  getVersionInfo,
+} = require("../../setup/download/download_utils.js");
 
 const fs = require("fs");
 const path = require("path");
@@ -12,7 +15,7 @@ function getLatestJabbaCandidate(javaVersion) {
   try {
     const listOutput = execSync(
       `bash -c '. ~/.jabba/jabba.sh && jabba ls-remote'`,
-      { encoding: "utf8" }
+      { encoding: "utf8" },
     );
     const versions = listOutput
       .split("\n")
@@ -20,7 +23,7 @@ function getLatestJabbaCandidate(javaVersion) {
       .filter(
         (line) =>
           line.startsWith(`adopt@${javaVersion}.`) ||
-          line.startsWith(`temurin@${javaVersion}.`)
+          line.startsWith(`temurin@${javaVersion}.`),
       );
     if (versions.length === 0)
       throw new Error(`No Jabba candidates found for Java ${javaVersion}`);
@@ -36,7 +39,7 @@ function installJava(candidate) {
     console.log(`Installing Java version: ${candidate}`);
     execSync(
       `bash -c '. ~/.jabba/jabba.sh && jabba install ${candidate} && jabba use ${candidate}'`,
-      { stdio: "inherit" }
+      { stdio: "inherit" },
     );
     console.log(`Java ${candidate} installed and activated.`);
     setServerVariable(candidate);
@@ -50,7 +53,12 @@ function setServerVariable(candidate) {
   const javaPath = `${process.env.HOME}/.jabba/jdk/${candidate}`;
   const javaBin = `${javaPath}/bin/java`;
 
-  const MODPACK_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME, INSTANCE_NAME);
+  const MODPACK_DIR = path.join(
+    process.env.MAIN_DIR,
+    TARGET_DIR_NAME,
+    "instances",
+    INSTANCE_NAME,
+  );
   const variablesTxtPath = path.join(MODPACK_DIR, "variables.txt");
 
   const javaVariableLine = `JAVA=${javaBin}\n`;
@@ -75,14 +83,19 @@ function setServerVariable(candidate) {
 (async () => {
   let mcVersion = JAVA.SERVER.VANILLA.VERSION;
   if (!mcVersion) {
-    console.error("Minecraft version not specified in JAVA.SERVER.VANILLA.VERSION");
+    console.error(
+      "Minecraft version not specified in JAVA.SERVER.VANILLA.VERSION",
+    );
     process.exit(1);
   }
 
   try {
     // Resolve "latest" to an actual version first
     if (mcVersion === "latest") {
-      const { versionId } = await getVersionInfo("latest", JAVA.SERVER.VANILLA.SNAPSHOT);
+      const { versionId } = await getVersionInfo(
+        "latest",
+        JAVA.SERVER.VANILLA.SNAPSHOT,
+      );
       mcVersion = versionId;
       console.log(`Resolved "latest" to version ${mcVersion}`);
     }

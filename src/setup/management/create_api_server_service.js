@@ -15,34 +15,39 @@
  *   git submodule update --init   (populates scripts/api-server/)
  */
 
-const path     = require("path");
-const fs       = require("fs");
+const path = require("path");
+const fs = require("fs");
 const { execSync } = require("child_process");
 const loadVariables = require("../common/loadVariables");
 
 // ── Paths ─────────────────────────────────────────────────────────────────
 
-const vars         = loadVariables();
+const vars = loadVariables();
 const { TARGET_DIR_NAME, INSTANCE_NAME } = vars;
-const apiServer    = vars.API_SERVER || {};
-const serverCtrl   = vars.SERVER_CONTROL || {};
+const apiServer = vars.API_SERVER || {};
+const serverCtrl = vars.SERVER_CONTROL || {};
 
-const BASE_DIR     = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
-const SCRIPTS_DIR  = path.join(BASE_DIR, "scripts", INSTANCE_NAME);
-const VARS_FILE    = path.join(SCRIPTS_DIR, "common", "variables.txt");
+const BASE_DIR = path.join(process.env.MAIN_DIR, TARGET_DIR_NAME);
+const SCRIPTS_DIR = path.join(BASE_DIR, "scripts", INSTANCE_NAME);
+const VARS_FILE = path.join(SCRIPTS_DIR, "common", "variables.txt");
 
-// The api-server is shared across all instances — lives at <target>/api-server/
-const API_SERVER_DIR    = path.join(BASE_DIR, "api-server");
+// The api-server is shared across all instances — lives at <target>/services/api-server/
+const API_SERVER_DIR = path.join(BASE_DIR, "services", "api-server");
 const API_SERVER_CONFIG = path.join(API_SERVER_DIR, "api-server-config.json");
-const API_SERVER_ENTRY  = path.join(API_SERVER_DIR, "index.js");
+const API_SERVER_ENTRY = path.join(API_SERVER_DIR, "index.js");
 
 // Source: the submodule in this setup repo (scripts/api-server/)
-const SETUP_REPO_ROOT  = path.resolve(__dirname, "..", "..", "..");
-const API_SERVER_SRC   = path.join(SETUP_REPO_ROOT, "src", "scripts", "api-server");
+const SETUP_REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const API_SERVER_SRC = path.join(
+  SETUP_REPO_ROOT,
+  "src",
+  "scripts",
+  "api-server",
+);
 
-const currentUser   = process.env.USER;
-const serviceName   = `${TARGET_DIR_NAME}-api-server.service`;
-const serviceFile   = `/etc/systemd/system/${serviceName}`;
+const currentUser = process.env.USER;
+const serviceName = `${TARGET_DIR_NAME}-api-server.service`;
+const serviceFile = `/etc/systemd/system/${serviceName}`;
 
 // ── Guard: submodule must be populated ───────────────────────────────────
 
@@ -59,13 +64,17 @@ if (!fs.existsSync(path.join(API_SERVER_SRC, "index.js"))) {
 
 if (!fs.existsSync(API_SERVER_ENTRY)) {
   console.log("[api-server] Deploying api-server to", API_SERVER_DIR);
+  fs.mkdirSync(path.dirname(API_SERVER_DIR), { recursive: true });
   fs.cpSync(API_SERVER_SRC, API_SERVER_DIR, { recursive: true });
 }
 
 if (!fs.existsSync(path.join(API_SERVER_DIR, "node_modules", "express"))) {
   console.log("[api-server] Installing dependencies...");
   try {
-    execSync("npm install --omit=dev", { cwd: API_SERVER_DIR, stdio: "inherit" });
+    execSync("npm install --omit=dev", {
+      cwd: API_SERVER_DIR,
+      stdio: "inherit",
+    });
   } catch (err) {
     console.error(`[api-server] npm install failed: ${err.message}`);
     process.exit(1);
@@ -86,13 +95,15 @@ function parseVarsFile(filePath) {
 
 if (!fs.existsSync(VARS_FILE)) {
   console.error(`[api-server] variables.txt not found at ${VARS_FILE}`);
-  console.error("  Run the full setup first so that variables.txt is generated.");
+  console.error(
+    "  Run the full setup first so that variables.txt is generated.",
+  );
   process.exit(1);
 }
 
 const deployedVars = parseVarsFile(VARS_FILE);
-const serverPath   = deployedVars["SERVER_PATH"] || "";
-const linuxUser    = deployedVars["USER"] || "minecraft";
+const serverPath = deployedVars["SERVER_PATH"] || "";
+const linuxUser = deployedVars["USER"] || "minecraft";
 
 if (!serverPath) {
   console.error("[api-server] SERVER_PATH is not set in variables.txt");
@@ -102,8 +113,8 @@ if (!serverPath) {
 // ── Create or update api-server-config.json ───────────────────────────────
 
 let config = {
-  port:      apiServer.PORT    || 3000,
-  apiKey:    apiServer.API_KEY || "",
+  port: apiServer.PORT || 3000,
+  apiKey: apiServer.API_KEY || "",
   instances: {},
 };
 
@@ -114,24 +125,28 @@ if (fs.existsSync(API_SERVER_CONFIG)) {
     // overwritten when a second instance is added.
     config = { ...existing, instances: existing.instances || {} };
   } catch (err) {
-    console.warn(`[api-server] Could not parse existing config — overwriting: ${err.message}`);
+    console.warn(
+      `[api-server] Could not parse existing config — overwriting: ${err.message}`,
+    );
   }
 }
 
 config.instances[INSTANCE_NAME] = {
   serverPath,
-  scriptsDir:   SCRIPTS_DIR,
+  scriptsDir: SCRIPTS_DIR,
   linuxUser,
-  useRcon:      serverCtrl.USE_RCON  === true,
-  rconHost:     serverCtrl.RCON_HOST || "localhost",
-  rconPort:     serverCtrl.RCON_PORT || 25575,
+  useRcon: serverCtrl.USE_RCON === true,
+  rconHost: serverCtrl.RCON_HOST || "localhost",
+  rconPort: serverCtrl.RCON_PORT || 25575,
   rconPassword: serverCtrl.RCON_PASSWORD || deployedVars["RCON_PASSWORD"] || "",
-  backupsPath:  deployedVars["BACKUPS_PATH"] || "",
+  backupsPath: deployedVars["BACKUPS_PATH"] || "",
 };
 
 fs.writeFileSync(API_SERVER_CONFIG, JSON.stringify(config, null, 2));
 console.log(`[api-server] Config updated: ${API_SERVER_CONFIG}`);
-console.log(`[api-server] Instances: [${Object.keys(config.instances).join(", ")}]`);
+console.log(
+  `[api-server] Instances: [${Object.keys(config.instances).join(", ")}]`,
+);
 
 // ── Create or reload the systemd service ─────────────────────────────────
 
