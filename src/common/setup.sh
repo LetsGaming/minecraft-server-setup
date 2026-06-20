@@ -46,7 +46,7 @@ run_modpack_setup() {
   run_setup_steps
 
   log "Unpacking modpack..."
-  run_or_echo "node \"$SCRIPT_DIR/src/setup/structure/unpack_modpack.js\""
+  run_or_echo "bash \"$SCRIPT_DIR/src/setup/structure/unpack_modpack.sh\""
 }
 
 run_vanilla_setup() {
@@ -97,14 +97,14 @@ run_setup_steps() {
 run_optional_setup() {
   if [ "$NO_SERVICE" = false ]; then
     log "Creating systemd service..."
-    run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_service.js\""
+    run_or_echo "bash \"$SCRIPT_DIR/src/setup/management/create_service.sh\""
   else
     warn "Skipping systemd service creation (--no-service)."
   fi
 
   if [ "$NO_BACKUP" = false ]; then
     log "Creating backup job..."
-    run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_backup_job.js\""
+    run_or_echo "bash \"$SCRIPT_DIR/src/setup/management/create_backup_job.sh\""
   else
     warn "Skipping backup job creation (--no-backup)."
   fi
@@ -151,7 +151,7 @@ run_optional_setup() {
   restart_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.RESTART_SCHEDULE?.ENABLED || false)" 2>/dev/null)
   if [ "$restart_enabled" = "true" ]; then
     log "Setting up scheduled restart cron..."
-    run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_restart_job.js\""
+    run_or_echo "bash \"$SCRIPT_DIR/src/setup/management/create_restart_job.sh\""
   fi
 }
 
