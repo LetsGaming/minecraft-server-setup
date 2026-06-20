@@ -45,6 +45,10 @@ function rconCommand(host, port, password, command, timeoutMs = 5000) {
     let authenticated = false;
     let timer = null;
 
+    const COMMAND_ID = 2;
+    const SENTINEL_ID = 3; // distinct id used to detect the end of a multi-packet reply
+    let collected = ""; // accumulates the body of all COMMAND_ID response packets
+
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       client.destroy();
@@ -75,14 +79,22 @@ function rconCommand(host, port, password, command, timeoutMs = 5000) {
           }
           if (packet.id === 1 && packet.type === PACKET_TYPE.AUTH_RESPONSE) {
             authenticated = true;
-            client.write(encodePacket(2, PACKET_TYPE.COMMAND, command));
+            // Send the real command, immediately followed by an empty sentinel
+            // command. The server processes packets in order, so once we see the
+            // sentinel's echo we know every fragment of the real command's
+            // (possibly multi-packet) response has arrived. This is the standard
+            // way to read long replies like /list or /whitelist list without
+            // truncation.
+            client.write(encodePacket(COMMAND_ID, PACKET_TYPE.COMMAND, command));
+            client.write(encodePacket(SENTINEL_ID, PACKET_TYPE.COMMAND, ""));
           }
-        } else {
-          if (packet.id === 2) {
-            cleanup();
-            resolve(packet.body);
-            return;
-          }
+        } else if (packet.id === COMMAND_ID) {
+          collected += packet.body;
+        } else if (packet.id === SENTINEL_ID) {
+          // Reached the end marker — the full response has been collected.
+          cleanup();
+          resolve(collected);
+          return;
         }
       }
     });
@@ -99,12 +111,28 @@ function rconCommand(host, port, password, command, timeoutMs = 5000) {
 }
 
 // CLI usage
+//   Preferred:  RCON_PASSWORD=secret node rcon.js <host> <port> <command...>
+//   Legacy:     node rcon.js <host> <port> <password> <command...>
+// Passing the password via the environment keeps it out of the process
+// argument list, which is world-readable via `ps` / /proc/<pid>/cmdline.
 if (require.main === module) {
-  const [host, port, password, ...cmdParts] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  const envPassword = process.env.RCON_PASSWORD;
+
+  let host, port, password, cmdParts;
+  if (envPassword !== undefined && envPassword !== "") {
+    [host, port, ...cmdParts] = argv;
+    password = envPassword;
+  } else {
+    [host, port, password, ...cmdParts] = argv;
+  }
   const command = cmdParts.join(" ");
 
   if (!host || !port || !password || !command) {
-    console.error("Usage: node rcon.js <host> <port> <password> <command>");
+    console.error(
+      "Usage: RCON_PASSWORD=secret node rcon.js <host> <port> <command>\n" +
+        "   or: node rcon.js <host> <port> <password> <command>",
+    );
     process.exit(1);
   }
 

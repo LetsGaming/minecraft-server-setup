@@ -142,7 +142,11 @@ config.instances[INSTANCE_NAME] = {
   backupsPath: deployedVars["BACKUPS_PATH"] || "",
 };
 
-fs.writeFileSync(API_SERVER_CONFIG, JSON.stringify(config, null, 2));
+fs.writeFileSync(API_SERVER_CONFIG, JSON.stringify(config, null, 2), {
+  mode: 0o600,
+});
+// Re-assert mode in case the file pre-existed with looser permissions.
+fs.chmodSync(API_SERVER_CONFIG, 0o600);
 console.log(`[api-server] Config updated: ${API_SERVER_CONFIG}`);
 console.log(
   `[api-server] Instances: [${Object.keys(config.instances).join(", ")}]`,

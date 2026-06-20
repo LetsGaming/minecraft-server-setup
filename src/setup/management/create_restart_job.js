@@ -37,10 +37,12 @@ try {
 
   if (!existingCrontab.includes(restartScript)) {
     const newCrontab = `${existingCrontab.trim()}\n${cronCmd}\n`;
-    const tmpFile = "/tmp/cronjob-restart.tmp";
-    fs.writeFileSync(tmpFile, newCrontab);
-    execSync(`crontab ${tmpFile}`);
-    fs.unlinkSync(tmpFile);
+    const os = require("os");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-cron-"));
+    const tmpFile = path.join(tmpDir, "crontab");
+    fs.writeFileSync(tmpFile, newCrontab, { mode: 0o600 });
+    execSync(`crontab "${tmpFile}"`);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
     console.log(`Added scheduled restart cronjob (every ${intervalHours}h).`);
   } else {
     console.log("Scheduled restart cronjob already exists. Skipping.");

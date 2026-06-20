@@ -5,7 +5,12 @@ ONJOIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ONJOIN_DIR/common/server_control.sh"
 source "$ONJOIN_DIR/common/utils.sh"
 
-LOCK_FILE="/tmp/minecraft_onjoin_message.lock"
+# Per-instance lock. A single global /tmp lock let only one instance run the
+# join-welcomer at a time (the rest exited) and was a predictable shared path
+# any local user could squat. Scope it by instance and prefer the per-user
+# runtime dir when available.
+_ONJOIN_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+LOCK_FILE="$_ONJOIN_RUNTIME_DIR/minecraft_onjoin_${INSTANCE_NAME}.lock"
 if [ -e "$LOCK_FILE" ]; then
     echo "Script already running (lock file $LOCK_FILE exists). Exiting."
     exit 1
@@ -84,7 +89,7 @@ handle_player_welcome() {
         fi
     done
 
-    if grep -iq "^$pl_lower\$" "$MESSAGE_FILE"; then
+    if grep -ixqF "$pl_lower" "$MESSAGE_FILE"; then
         log "DEBUG" "Already welcomed $player"; return
     fi
 

@@ -1,6 +1,39 @@
 #!/bin/bash
 set -e
 
+# Validate variables.json once, up front, and export the two fields the setup
+# steps need (INSTANCE_NAME, TARGET_DIR_NAME). Previously the first call to
+# loadVariables() happened implicitly inside create_directories.js; now that the
+# early steps are bash, we resolve + validate here instead. loadVariables()
+# throws on an invalid config, so a bad variables.json fails fast here rather
+# than after downloading a whole modpack.
+resolve_instance_vars() {
+  # Already resolved (e.g. both setup flows share run_setup_startup)
+  if [[ -n "$INSTANCE_NAME" && -n "$TARGET_DIR_NAME" ]]; then
+    return 0
+  fi
+
+  local out
+  if ! out=$(node -e '
+      const v = require(process.env.SCRIPT_DIR + "/src/setup/common/loadVariables")();
+      process.stdout.write((v.INSTANCE_NAME || "") + "\n" + (v.TARGET_DIR_NAME || ""));
+    ' 2>/dev/null); then
+    error "variables.json is missing or invalid."
+    error "Run 'bash main.sh --check' to see the exact problem."
+    exit 1
+  fi
+
+  INSTANCE_NAME="$(printf '%s\n' "$out" | sed -n '1p')"
+  TARGET_DIR_NAME="$(printf '%s\n' "$out" | sed -n '2p')"
+
+  if [[ -z "$INSTANCE_NAME" || -z "$TARGET_DIR_NAME" ]]; then
+    error "Could not read INSTANCE_NAME / TARGET_DIR_NAME from variables.json."
+    exit 1
+  fi
+
+  export INSTANCE_NAME TARGET_DIR_NAME
+}
+
 run_modpack_setup() {
   run_setup_startup
   
@@ -34,16 +67,18 @@ run_vanilla_setup() {
   run_or_echo "node \"$SCRIPT_DIR/src/vanilla/variables/set_vanilla_server_variables.js\""
 
   log "Moving server files..."
-  run_or_echo "node \"$SCRIPT_DIR/src/vanilla/structure/move_files.js\""
+  run_or_echo "bash \"$SCRIPT_DIR/src/vanilla/structure/move_files.sh\""
 }
 
 run_setup_startup() {
+  resolve_instance_vars
+
   log "Downloading required packages..."
   run_or_echo "bash \"$SCRIPT_DIR/src/setup/download/download_packages.sh\""
 
 
   log "Creating server directory structure..."
-  run_or_echo "node \"$SCRIPT_DIR/src/setup/structure/create_directories.js\""
+  run_or_echo "bash \"$SCRIPT_DIR/src/setup/structure/create_directories.sh\""
 }
 
 run_setup_steps() {
@@ -56,7 +91,7 @@ run_setup_steps() {
   run_or_echo "node \"$SCRIPT_DIR/src/setup/variables/set_server_properties.js\""
 
   log "Copying startup scripts..."
-  run_or_echo "node \"$SCRIPT_DIR/src/setup/structure/copy_scripts.js\""
+  run_or_echo "bash \"$SCRIPT_DIR/src/setup/structure/copy_scripts.sh\""
 }
 
 run_optional_setup() {
@@ -76,7 +111,7 @@ run_optional_setup() {
 
   if [ "$EULA" = true ]; then
     log "EULA accepted. Applying configuration..."
-    run_or_echo "node \"$SCRIPT_DIR/src/setup/management/agree_eula.js\""
+    run_or_echo "bash \"$SCRIPT_DIR/src/setup/management/agree_eula.sh\""
   else
     warn "EULA not accepted. Please do so before launching the server."
   fi
@@ -191,6 +226,12 @@ run_vanilla_cleanup() {
 }
 
 run_cleanup() {
+  # These files are written into the source tree during setup and contain
+  # secrets (RCON password, API key, CurseForge key). They have already been
+  # copied into the deployed instance dir, so remove the source-tree copies on
+  # the success path too — previously only run_rollback removed variables.txt,
+  # leaving secrets in the working tree after a successful run.
+  run_or_echo "sudo rm -f \"$SCRIPT_DIR/src/scripts/common/variables.txt\""
   run_or_echo "sudo rm -rf \"$SCRIPT_DIR/src/scripts/common/downloaded_versions.json\""
   run_or_echo "sudo rm -rf \"$SCRIPT_DIR/src/scripts/common/curseforge.txt\""
 }
@@ -204,7 +245,7 @@ maybe_start_server() {
   if [ "$NO_START" = false ]; then
     if sudo -v &>/dev/null; then
       log "Starting the server..."
-      run_or_echo "node \"$SCRIPT_DIR/src/setup/management/start_server.js\""
+      run_or_echo "bash \"$SCRIPT_DIR/src/setup/management/start_server.sh\""
       if [ "$EULA" = false ]; then
         echo
         warn "Server started but EULA not yet accepted."

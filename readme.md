@@ -78,8 +78,13 @@ Edit [`variables.json`](./variables.json) — all settings are in one file:
 ```
 
 For modpack setup, also configure:
-- [`curseforge_variables.json`](./setup/download/json/curseforge_variables.json) — API key and pack ID
-- [`modrinth_variables.json`](./setup/download/json/modrinth_variables.json) — mod slugs
+- [`curseforge_variables.json`](./setup/download/json/curseforge_variables.json) — API key and pack ID. This file is git-ignored (it holds your API key). Copy the template first:
+  ```bash
+  cp src/setup/download/json/curseforge_variables.example.json \
+     src/setup/download/json/curseforge_variables.json
+  ```
+  Setup also falls back to the `.example.json` automatically if the live file is missing, so it will run and tell you to set your key rather than crashing.
+- [`modrinth_variables.json`](./setup/download/json/modrinth_variables.json) — mod slugs (no API key, kept in version control)
 
 ## Usage
 

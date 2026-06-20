@@ -27,7 +27,17 @@ function getLatestJabbaCandidate(javaVersion) {
       );
     if (versions.length === 0)
       throw new Error(`No Jabba candidates found for Java ${javaVersion}`);
-    return versions.sort().reverse()[0];
+
+    // Sort by the actual version after '@', newest first. A lexicographic
+    // sort is wrong here: "17.0.9" sorts AFTER "17.0.10" as strings, so the
+    // old `.sort().reverse()[0]` silently picked an older patch release.
+    const semver = require("semver");
+    const verOf = (candidate) => {
+      const raw = candidate.split("@")[1] || "";
+      return semver.coerce(raw) || semver.coerce("0.0.0");
+    };
+    versions.sort((a, b) => semver.rcompare(verOf(a), verOf(b)));
+    return versions[0];
   } catch (err) {
     console.error(`Failed to fetch remote Jabba versions: ${err.message}`);
     process.exit(1);
@@ -61,13 +71,13 @@ function setServerVariable(candidate) {
   );
   const variablesTxtPath = path.join(MODPACK_DIR, "variables.txt");
 
-  const javaVariableLine = `JAVA=${javaBin}\n`;
+  const javaVariableLine = `JAVA="${javaBin}"\n`;
 
   if (fs.existsSync(variablesTxtPath)) {
     // Replace existing JAVA= line or append
     let content = fs.readFileSync(variablesTxtPath, "utf-8");
     if (/^JAVA=.*$/m.test(content)) {
-      content = content.replace(/^JAVA=.*$/m, `JAVA=${javaBin}`);
+      content = content.replace(/^JAVA=.*$/m, `JAVA="${javaBin}"`);
       fs.writeFileSync(variablesTxtPath, content);
     } else {
       fs.appendFileSync(variablesTxtPath, javaVariableLine);

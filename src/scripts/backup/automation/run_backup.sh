@@ -9,7 +9,15 @@ BACKUP_SCRIPT="$AUTOMATION_SCRIPT_DIR/../backup.sh"
 
 source "$AUTOMATION_SCRIPT_DIR/../../common/load_variables.sh"
 BACKUP_BASE="$BACKUPS_PATH"
-STATE_DIR="/tmp/backup_flags"
+
+# Per-instance, non-world-shared state dir. The flags were previously in a
+# single shared /tmp/backup_flags keyed only by date, which (a) let any local
+# user pre-create a flag to suppress backups and (b) meant the first instance
+# to run each day claimed the daily/weekly/monthly slot, so every OTHER
+# instance silently fell through to "hourly only". Keying the dir under this
+# instance's BACKUPS_PATH fixes both: it is owned by the instance user and is
+# already unique per instance.
+STATE_DIR="$BACKUP_BASE/.backup_flags"
 
 mkdir -p "$STATE_DIR"
 

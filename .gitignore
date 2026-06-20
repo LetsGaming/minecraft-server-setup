@@ -1,16 +1,29 @@
 node_modules/
 temp/
-package-lock.json
 
 # OS artifacts
 .DS_Store
-Thumbbs.db
+Thumbs.db
 
 # ── Secrets / local configuration — never commit ────────────────────────────
 # variables.json contains RCON passwords, API keys, and webhook URLs.
 # Copy variables.example.json → variables.json and fill in your values locally.
 variables.json
 
-# Runtime files written by scripts
-common/variables.txt
-scripts/*/common/variables.txt
+# Per-instance secret config. curseforge_variables.json holds a CurseForge API
+# key, so commit only its *.example.json template, never the filled-in copy.
+# (modrinth_variables.json is plain config — no API key — so it stays tracked.)
+src/setup/download/json/curseforge_variables.json
+
+# Runtime files written by setup into the source tree. These hold the RCON
+# password / API key / webhook URL and the CurseForge API key. The previous
+# patterns were root-anchored and did NOT match these real paths, so they
+# could be committed by accident — match them explicitly here, anywhere.
+**/common/variables.txt
+**/common/curseforge.txt
+**/common/downloaded_versions.json
+src/scripts/common/variables.txt
+src/scripts/common/curseforge.txt
+src/scripts/common/downloaded_versions.json
+
+# NOTE: package-lock.json is intentionally committed for reproducible installs.

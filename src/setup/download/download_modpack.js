@@ -1,6 +1,7 @@
 const axios = require("axios");
 const path = require("path");
-const { pack_id, api_key } = require("./json/curseforge_variables.json");
+const { loadVariablesJson } = require("./json/load");
+const { pack_id, api_key } = loadVariablesJson("curseforge_variables");
 const {
   createDownloadDir,
   formatBytes,
@@ -61,8 +62,18 @@ function fetchModPackInfo() {
       }
       const fileData = response.data.data;
       const gameVersions = fileData.gameVersions || [];
-      const modLoader = gameVersions[0] || "none";
-      const gameVersion = gameVersions[1] || "none";
+
+      // CurseForge does not guarantee the order of gameVersions, so the old
+      // gameVersions[0]/[1] positional read was brittle. Detect the loader by
+      // matching known loader names and pick the MC version by pattern
+      // (legacy "1.x.y" or the new "YY.D[.H]" form).
+      const KNOWN_LOADERS = ["forge", "fabric", "quilt", "neoforge"];
+      const modLoader =
+        gameVersions.find((v) =>
+          KNOWN_LOADERS.includes(String(v).toLowerCase()),
+        ) || "none";
+      const gameVersion =
+        gameVersions.find((v) => /^\d+(\.\d+){1,3}$/.test(String(v))) || "none";
 
       console.log(
         `Downloading server pack (${formatBytes(fileData.fileLength)})...`

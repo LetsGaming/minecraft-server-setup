@@ -1,0 +1,6 @@
+# Normalise line endings: keep all text files LF in the repo (the codebase was
+# mixed LF/CRLF — download_utils.js and download_mods.js were CRLF).
+* text=auto eol=lf
+
+# Shell scripts must be LF or they break under bash.
+*.sh text eol=lf

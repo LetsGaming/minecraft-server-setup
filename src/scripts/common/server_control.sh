@@ -25,7 +25,10 @@ _rcon_send() {
   local cmd="$1"
   # Strip leading / for RCON (RCON doesn't use /)
   cmd="${cmd#/}"
-  node "$_SC_DIR/rcon.js" "${RCON_HOST:-localhost}" "${RCON_PORT:-25575}" "$RCON_PASSWORD" "$cmd" 2>/dev/null
+  # Pass the password via the environment, not as an argv element — argv is
+  # world-readable through `ps` / /proc/<pid>/cmdline.
+  RCON_PASSWORD="$RCON_PASSWORD" \
+    node "$_SC_DIR/rcon.js" "${RCON_HOST:-localhost}" "${RCON_PORT:-25575}" "$cmd" 2>/dev/null
 }
 
 # ── Screen transport ──

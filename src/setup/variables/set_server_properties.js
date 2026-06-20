@@ -62,7 +62,11 @@ function updateServerProperties() {
 
   const updates = {
     "max-players": MAX_PLAYERS,
-    motd: MOTD.replace(/\n/g, "").replace(/"/g, '\\"'),
+    // server.properties is a Java .properties file: the value runs to the end
+    // of the line and quotes are literal, so escaping " as \" (as before) would
+    // show a literal backslash in-game. Just strip newlines/CR, which would
+    // otherwise truncate or corrupt the line.
+    motd: String(MOTD).replace(/\r?\n/g, ""),
     "level-seed": SEED,
     "white-list": WHITELIST,
     difficulty: DIFFICULTY,

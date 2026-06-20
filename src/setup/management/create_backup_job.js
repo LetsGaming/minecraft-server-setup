@@ -40,11 +40,13 @@ try {
   // Add hourly backup if not present
   if (!existingCrontab.includes(runBackupPath)) {
     const newCrontab = `${existingCrontab.trim()}\n${hourlyBackupCmd}\n`;
-    const tmpFile = "/tmp/cronjob.tmp";
+    const os = require("os");
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-cron-"));
+    const tmpFile = path.join(tmpDir, "crontab");
 
-    fs.writeFileSync(tmpFile, newCrontab);
-    execSync(`crontab ${tmpFile}`);
-    fs.unlinkSync(tmpFile);
+    fs.writeFileSync(tmpFile, newCrontab, { mode: 0o600 });
+    execSync(`crontab "${tmpFile}"`);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
     console.log("Added hourly backup cronjob.");
   } else {
     console.log("Hourly backup cronjob already exists. Skipping.");
