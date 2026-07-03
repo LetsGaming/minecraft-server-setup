@@ -107,4 +107,5 @@ handle_player_welcome() {
 }
 
 log "INFO" "Watching for joins to send /title"
+# shellcheck disable=SC2153  # LOG_FILE is exported by the sourced common/server_control.sh, not a typo for LOCK_FILE
 on_player_join "$LOG_FILE" handle_player_welcome

@@ -28,6 +28,11 @@ function encodePacket(id, type, body) {
 function decodePacket(buf) {
   if (buf.length < 14) return null;
   const length = buf.readInt32LE(0);
+  // BUG-02: reject negative/oversized lengths. Without this a corrupt or
+  // hostile packet with a negative length passes `buf.length < 4 + length`
+  // (e.g. 4 + -1 = 3) and yields a silent empty/garbage body. A valid RCON
+  // packet is >= 10 bytes and in practice never exceeds 4 KB.
+  if (length < 10 || length > 4096) return null;
   if (buf.length < 4 + length) return null;
   return {
     length,

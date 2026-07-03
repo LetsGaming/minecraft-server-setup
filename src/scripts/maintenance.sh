@@ -115,6 +115,7 @@ handle_join_during_maintenance() {
 
 start_kick_monitor() {
     log "INFO" "Monitoring player joins to kick unauthorized users..."
+    # shellcheck disable=SC2153  # LOG_FILE is exported by the sourced common/server_control.sh, not a typo for LOCK_FILE
     on_player_join "$LOG_FILE" handle_join_during_maintenance
 }
 

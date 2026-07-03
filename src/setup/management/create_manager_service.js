@@ -21,7 +21,8 @@
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
+const { writeRootFile } = require("../common/writeRootFile");
 const loadVariables = require("../common/loadVariables");
 
 // ── Paths ─────────────────────────────────────────────────────────────────
@@ -184,9 +185,13 @@ if (!fs.existsSync(USERS_FILE)) {
   const displayPw = initialPassword; // kept in scope for the banner only
 
   try {
-    execSync(`node "${REGISTER_JS}" admin "${initialPassword}"`, {
+    // SEC-06: pass the generated password via the environment, not as an argv
+    // element — argv is world-readable through `ps` / /proc/<pid>/cmdline.
+    // execFileSync (no shell) also removes any interpolation risk.
+    execFileSync("node", [REGISTER_JS, "admin"], {
       cwd: MANAGER_DIR,
       stdio: "inherit",
+      env: { ...process.env, REGISTER_PASSWORD: initialPassword },
     });
   } catch (err) {
     console.error(`[manager] Failed to create admin user: ${err.message}`);
@@ -248,12 +253,11 @@ if (!serviceExists) {
   ].join("\n");
 
   try {
-    // Write via temp file + sudo mv — avoids the shell-injection risk of
-    // piping serviceContent through `echo "..." | sudo tee`.
-    const tmpFile = path.join("/tmp", `mc-manager-service-${Date.now()}.tmp`);
-    fs.writeFileSync(tmpFile, serviceContent, "utf-8");
-    execSync(`sudo mv "${tmpFile}" "${serviceFile}"`);
-    execSync(`sudo chmod 644 "${serviceFile}"`);
+    // SEC-03: write the unit file directly as root from stdin via spawnSync
+    // (no shell → no injection risk; serviceContent never touches argv), and
+    // no world-writable /tmp staging file. This removes the need for a
+    // `mv /tmp/...` sudoers grant on the application user.
+    writeRootFile(serviceFile, serviceContent);
     execSync("sudo systemctl daemon-reload");
     execSync(`sudo systemctl enable ${serviceName}`);
     execSync(`sudo systemctl start  ${serviceName}`);

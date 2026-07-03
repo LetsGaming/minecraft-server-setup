@@ -18,6 +18,7 @@
 const path = require("path");
 const fs = require("fs");
 const { execSync } = require("child_process");
+const { writeRootFile } = require("../common/writeRootFile");
 const loadVariables = require("../common/loadVariables");
 
 // ── Paths ─────────────────────────────────────────────────────────────────
@@ -179,10 +180,9 @@ WantedBy=multi-user.target
 `;
 
   try {
-    const tmpFile = path.join("/tmp", `mc-api-service-${Date.now()}.tmp`);
-    fs.writeFileSync(tmpFile, serviceContent, "utf-8");
-    execSync(`sudo mv "${tmpFile}" "${serviceFile}"`);
-    execSync(`sudo chmod 644 "${serviceFile}"`);
+    // SEC-03: write the unit directly as root from stdin (no /tmp staging,
+    // no shell). See src/setup/common/writeRootFile.js and docs/sudoers-setup.md.
+    writeRootFile(serviceFile, serviceContent);
     execSync("sudo systemctl daemon-reload");
     execSync(`sudo systemctl enable ${serviceName}`);
     execSync(`sudo systemctl start ${serviceName}`);

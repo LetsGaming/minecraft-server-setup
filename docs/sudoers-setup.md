@@ -10,43 +10,52 @@ Create `/etc/sudoers.d/minecraft-management` with the following content.
 ```
 # ── Command aliases ────────────────────────────────────────────────────────────
 
+# The RUNTIME actions the app actually issues: start / stop / restart / status.
+# enable/disable/daemon-reload and service *creation* are one-time setup steps
+# (run by an admin with their own sudo) — the network-facing app user does not
+# need them at runtime, so they are deliberately NOT granted here. (SEC-03)
+
 # Game server instance(s) — add a line per instance if you have more than one
 Cmnd_Alias MC_GAME_SERVER = \
     /usr/bin/systemctl start server.service, \
     /usr/bin/systemctl stop server.service, \
     /usr/bin/systemctl restart server.service, \
-    /usr/bin/systemctl status server.service, \
-    /usr/bin/systemctl enable server.service, \
-    /usr/bin/systemctl disable server.service
+    /usr/bin/systemctl status server.service
 
 # Support services (api-server, manager) — matched by prefix wildcard
 Cmnd_Alias MC_SUPPORT_SERVICES = \
     /usr/bin/systemctl start minecraft-server-*.service, \
     /usr/bin/systemctl stop minecraft-server-*.service, \
     /usr/bin/systemctl restart minecraft-server-*.service, \
-    /usr/bin/systemctl status minecraft-server-*.service, \
-    /usr/bin/systemctl enable minecraft-server-*.service, \
-    /usr/bin/systemctl disable minecraft-server-*.service
-
-# Shared systemd and deployment commands
-Cmnd_Alias MC_SYSTEMD = /usr/bin/systemctl daemon-reload
-Cmnd_Alias MC_DEPLOY  = \
-    /usr/bin/mv /tmp/minecraft-*.service /etc/systemd/system/, \
-    /usr/bin/chmod 644 /etc/systemd/system/minecraft-*.service
+    /usr/bin/systemctl status minecraft-server-*.service
 
 # ── User grants ────────────────────────────────────────────────────────────────
 
 # Allow the minecraft user to manage its own services
-minecraft ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES, MC_SYSTEMD
+minecraft ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES
 
-# Allow the application user to run management scripts as the minecraft user
+# Allow the application user to run management scripts as the minecraft user.
+# IMPORTANT (SEC-03): the directories this glob matches MUST be owned by
+# `minecraft` and MUST NOT be writable by `mcbot`. If mcbot can write into a
+# matched scripts/ directory it can run arbitrary code as minecraft. Prefer
+# pinning this to the exact deployed instance directory rather than a wildcard,
+# e.g.:
+#   mcbot ALL=(minecraft) NOPASSWD: /usr/bin/bash /home/minecraft/mc/instances/survival/scripts/
 mcbot ALL=(minecraft) NOPASSWD: /usr/bin/bash /home/minecraft/*/scripts/*/*
 
 # Allow the application user to manage all Minecraft services
-mcbot ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES, MC_SYSTEMD, MC_DEPLOY
+mcbot ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES
 ```
 
 Replace `mcbot` and `minecraft` with your actual application and server users, and adjust service names if your instance is named differently.
+
+> **Removed in v3.x (SEC-03):** the old `MC_DEPLOY` alias granted
+> `mv /tmp/minecraft-*.service /etc/systemd/system/` to the app user. Because
+> `/tmp` is world-writable and that filename was attacker-choosable, it allowed
+> the app user to install an arbitrary root systemd unit. Service files are now
+> written directly to their final path with `sudo tee` during setup (see
+> `src/setup/common/writeRootFile.js`), so this grant is no longer needed or
+> recommended. If you previously added it, delete it.
 
 ## Default service names
 
@@ -77,7 +86,8 @@ If either command asks for a password, the sudoers entry is not applied correctl
 
 ## Principle of least privilege
 
-- Each entry grants exactly one command on one service — no wildcards on service names.
-- The `*/scripts/*/*` pattern restricts script execution to files inside any instance's `scripts/` directory.
+- Only the four runtime actions (`start`/`stop`/`restart`/`status`) are granted. `enable`, `disable`, `daemon-reload`, and unit-file creation are **setup-time** operations performed by an admin's own sudo — they are intentionally not granted to the app user (SEC-03).
+- The `*/scripts/*/*` pattern restricts script execution to files inside an instance's `scripts/` directory. **Those directories must be owned by `minecraft` and not writable by `mcbot`** — otherwise the app user could drop a script there and run it as `minecraft`. Pin the path to the exact instance directory where you can.
 - Never grant `ALL=(minecraft) NOPASSWD: ALL` — that gives unlimited shell access as the MC user.
+- Never grant a `mv`/`cp`/`tee` from a world-writable location (e.g. `/tmp`) into `/etc/systemd/system/` — that is an arbitrary-root-unit install. Write unit files straight to their final path (the setup scripts now do this).
 - `visudo` validates syntax before writing; a malformed sudoers file can lock you out of `sudo` entirely, so always use it instead of editing the file directly.

@@ -216,6 +216,53 @@ function backupServer() {
 
 // ── Java auto-install ─────────────────────────────────────────────────────
 
+// SEC-02: install Jabba without `curl | bash`. Download the installer, verify
+// its SHA-256 against a pinned value (overridable via JABBA_INSTALL_SHA256),
+// then run it. Uses the maintained Jabba-Team fork, not the abandoned shyiko
+// repo. Keep the pinned hash in sync with src/vanilla/download/install_jabba.sh.
+function installJabbaVerified() {
+  const os = require("os");
+  const crypto = require("crypto");
+  const installUrl =
+    process.env.JABBA_INSTALL_URL ||
+    "https://raw.githubusercontent.com/Jabba-Team/jabba/main/install.sh";
+  const expectedSha =
+    process.env.JABBA_INSTALL_SHA256 ||
+    "7298872bae6a19bf22b36c302cb260e6fa88cc09ee21d50cdd0755b4270a9e5e";
+
+  const tmp = path.join(
+    os.tmpdir(),
+    `jabba-install-${process.pid}-${Date.now()}.sh`,
+  );
+  try {
+    // -f: fail on HTTP error, --proto =https / --tlsv1.2: refuse downgrades.
+    execSync(
+      `curl -fsSL --proto '=https' --tlsv1.2 ${JSON.stringify(installUrl)} -o ${JSON.stringify(tmp)}`,
+      { stdio: "inherit" },
+    );
+    const actualSha = crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(tmp))
+      .digest("hex");
+    if (actualSha !== expectedSha) {
+      throw new Error(
+        `Jabba installer checksum mismatch — refusing to run.\n` +
+          `  expected: ${expectedSha}\n  actual:   ${actualSha}\n` +
+          `  If you bumped the installer, update the pinned hash ` +
+          `(or set JABBA_INSTALL_SHA256).`,
+      );
+    }
+    console.log("[update-server] Jabba installer checksum OK — running.");
+    execSync(`bash ${JSON.stringify(tmp)}`, { stdio: "inherit" });
+  } finally {
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
+}
+
 async function ensureJavaVersion(mcVersion) {
   const requiredJava = await getJavaVersionFor(mcVersion);
   console.log(`Minecraft ${mcVersion} requires Java ${requiredJava}`);
@@ -223,10 +270,7 @@ async function ensureJavaVersion(mcVersion) {
   const jabbaDir = path.join(process.env.HOME, ".jabba", "jdk");
   if (!fs.existsSync(jabbaDir)) {
     console.log("Jabba not found. Installing via Jabba...");
-    execSync(
-      'bash -c "curl -sL https://github.com/shyiko/jabba/raw/master/install.sh | bash"',
-      { stdio: "inherit" },
-    );
+    installJabbaVerified();
   }
 
   const installed = fs.existsSync(jabbaDir)

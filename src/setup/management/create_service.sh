@@ -1,10 +1,12 @@
 #!/bin/bash
 set -e
 
-# Replaces create_service.js — writes the per-instance systemd unit. The unit is
-# built in a temp file and moved into place with sudo (so no interpolated string
-# is ever passed to a shell), using mktemp instead of a predictable
-# /tmp/mc-service-<timestamp> name.
+# Replaces create_service.js — writes the per-instance systemd unit.
+#
+# SEC-03: the unit is streamed directly to `sudo tee <dest>` on stdin. No
+# interpolated string is ever passed to a shell (no injection), and there is
+# no world-writable /tmp staging file to race or symlink. This also removes
+# the need for a broad `mv /tmp/...service /etc/systemd/system/` sudoers grant.
 
 : "${MAIN_DIR:?MAIN_DIR not set}"
 : "${TARGET_DIR_NAME:?TARGET_DIR_NAME not set}"
@@ -15,11 +17,7 @@ INSTANCE_DIR="$MAIN_DIR/$TARGET_DIR_NAME/instances/$INSTANCE_NAME"
 START_SCRIPT="$INSTANCE_DIR/start.sh"
 SERVICE_FILE="/etc/systemd/system/$INSTANCE_NAME.service"
 
-TMP_FILE="$(mktemp /tmp/mc-service-XXXXXX)"
-trap 'rm -f "$TMP_FILE"' EXIT
-
-cat > "$TMP_FILE" <<EOF
-[Unit]
+SERVICE_CONTENT="[Unit]
 Description=$INSTANCE_NAME Server
 After=network.target
 
@@ -34,8 +32,8 @@ LimitNOFILE=4096
 
 [Install]
 WantedBy=multi-user.target
-EOF
+"
 
-sudo mv "$TMP_FILE" "$SERVICE_FILE"
+printf '%s' "$SERVICE_CONTENT" | sudo tee "$SERVICE_FILE" > /dev/null
 sudo chmod 644 "$SERVICE_FILE"
 echo "Systemd service file created successfully at $SERVICE_FILE"
