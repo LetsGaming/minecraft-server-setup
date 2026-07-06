@@ -5,7 +5,11 @@ set -euo pipefail
 # ║  Minecraft Server Setup — Migration Script                  ║
 # ║                                                             ║
 # ║  Upgrades the runtime scripts of an existing server         ║
-# ║  installation to the latest version. Does NOT touch:        ║
+# ║  installation to the latest version. Files that are no      ║
+# ║  longer part of the suite (removed or renamed upstream,     ║
+# ║  e.g. after a component rewrite) are detected and deleted   ║
+# ║  — a copy of everything removed stays in the pre-migration  ║
+# ║  backup archive. Does NOT touch:                            ║
 # ║    - World data, mods, server.jar, server.properties        ║
 # ║    - Systemd services, cron jobs                            ║
 # ║    - Your variables.txt values (only adds new fields)       ║
@@ -62,10 +66,16 @@ Options:
 
 What gets replaced (per-instance scripts):
   - All .sh and .js files (start, shutdown, backup, restore, update, etc.)
+  - Files no longer present in the new scripts are REMOVED (shown in the
+    preview as REMOVE; a copy stays in the pre-migration backup archive)
 
 What gets updated (shared services):
   - services/api-server/   at <install-root>/services/api-server/
   - services/manager/      at <install-root>/services/manager/
+  Both are fully replaced: files removed upstream (e.g. the old .js
+  sources after the api-server's TypeScript rewrite) are deleted, and a
+  changed package.json triggers a fresh npm install instead of restoring
+  the old node_modules/
 
 Structural migration (run once, automatically detected):
   - <install-root>/<instance>/            → <install-root>/instances/<instance>/
@@ -258,12 +268,12 @@ _merge_json_config() {
 echo -e "${BOLD}Changes to be applied${NC}"
 
 # Per-instance counters
-REPLACED=0; ADDED=0
+REPLACED=0; ADDED=0; STALE=0
 JSON_CONFIGS=()      # "relpath:new_key_count" — per-instance config.json files
 JSON_CONFIG_ADDED=0
 
 # Root-level component counters
-ROOT_REPLACED=0; ROOT_ADDED=0; ROOT_JSON_ADDED=0
+ROOT_REPLACED=0; ROOT_ADDED=0; ROOT_JSON_ADDED=0; ROOT_STALE=0
 NEEDS_ROOT_UPDATE=false
 
 # Per-instance npm subdirs (api-server excluded — it's root-level)
@@ -313,6 +323,41 @@ while IFS= read -r f; do
     info "ADD     $f"; ADDED=$(( ADDED + 1 ))
   fi
 done < <(cd "$NEW_SCRIPTS_SOURCE" && find . -type f | sed 's|^\./||' | sort)
+
+# ── Per-instance stale files ──
+# The loop above walks the NEW source tree, so it can only ever see adds and
+# updates. Files that exist in the DEPLOYMENT but were removed or renamed in
+# the source (e.g. a component rewritten from .js to .ts) are invisible to it
+# — walk the deployed tree too, so removals are detected, reported, and
+# counted as changes. The wipe in Step 4 performs the actual deletion; the
+# pre-migration backup archive keeps a copy of everything removed.
+while IFS= read -r f; do
+  case "$f" in
+    # Deployment-only files that are preserved across the wipe
+    common/variables.txt|common/downloaded_versions.json) continue ;;
+    interface/*) continue ;;
+    update/node_modules/*) continue ;;
+    logs/*|backup/logs/*) continue ;;
+    */config/config.json) continue ;;
+    # Legacy root-level components inside the instance dir — reported as a
+    # single REMOVE per component below, not per file
+    api-server/*|minecraft-server-manager/*) continue ;;
+    */.git|.git|.git/*) continue ;;
+  esac
+  [[ -f "$NEW_SCRIPTS_SOURCE/$f" ]] && continue
+  info "REMOVE  $f  (no longer part of the suite)"
+  STALE=$(( STALE + 1 ))
+done < <(cd "$TARGET_SCRIPTS_DIR" && find . -type f | sed 's|^\./||' | sort)
+
+# Legacy per-instance copies of the root-level components (pre-services/
+# layout). Step 4 removes them; user configs inside are rescued first.
+for _legacy in api-server minecraft-server-manager; do
+  if [[ -d "$TARGET_SCRIPTS_DIR/$_legacy" ]]; then
+    _legacy_files=$(find "$TARGET_SCRIPTS_DIR/$_legacy" -type f ! -path "*/node_modules/*" | wc -l)
+    info "REMOVE  ${_legacy}/  (legacy per-instance copy, ${_legacy_files} file(s) — now root-level under services/)"
+    STALE=$(( STALE + 1 ))
+  fi
+done
 
 # Per-instance npm subdirs (update only; api-server is root-level)
 # SC2043 fix: declare as array so the loop is extensible and ShellCheck-clean
@@ -407,8 +452,34 @@ for i in "${!ROOT_SRC_NAMES[@]}"; do
     fi
   done < <(cd "$src_dir" && find . -type f | sed 's|^\./||' | sort)
 
-  # Node modules
-  [[ -d "$dst_dir/node_modules" ]] && info "KEEP    ${dst_name}/node_modules/  (preserved)"
+  # Stale files: present in the deployed service, gone from the source
+  # (e.g. the api-server's .js sources after the TypeScript rewrite).
+  # Step 5's wipe-and-replace performs the deletion — but only when it
+  # runs, so removals must set NEEDS_ROOT_UPDATE like any other change.
+  while IFS= read -r f; do
+    case "$f" in
+      node_modules/*) continue ;;
+      # User-generated files preserved across the wipe
+      api-server-config.json) continue ;;
+      src/config/users.json|src/config/config.json) continue ;;
+      logs/*) continue ;;
+      */.git|.git|.git/*) continue ;;
+    esac
+    [[ -f "$src_dir/$f" ]] && continue
+    info "REMOVE  $dst_name/$f  (no longer part of the suite)"
+    ROOT_STALE=$(( ROOT_STALE + 1 ))
+    NEEDS_ROOT_UPDATE=true
+  done < <(cd "$dst_dir" && find . -type f | sed 's|^\./||' | sort)
+
+  # Node modules: preserved only while the dependency set is unchanged —
+  # Step 5 drops them for a fresh npm install when package.json differs.
+  if [[ -d "$dst_dir/node_modules" ]]; then
+    if [[ -f "$dst_dir/package.json" ]] && diff -q "$src_dir/package.json" "$dst_dir/package.json" &>/dev/null; then
+      info "KEEP    ${dst_name}/node_modules/  (preserved)"
+    else
+      info "DROP    ${dst_name}/node_modules/  (package.json changed — fresh npm install will run)"
+    fi
+  fi
 done
 
 # ── New variables ──
@@ -436,7 +507,7 @@ for entry in "${NEW_VAR_DEFAULTS[@]}"; do
   fi
 done
 
-TOTAL_CHANGES=$(( REPLACED + ADDED + ROOT_REPLACED + ROOT_ADDED ))
+TOTAL_CHANGES=$(( REPLACED + ADDED + STALE + ROOT_REPLACED + ROOT_ADDED + ROOT_STALE ))
 
 # ── Structural migration detection ──
 # Detect whether the install uses the old flat layout and needs directories moved.
@@ -477,6 +548,8 @@ fi
 
 echo
 SUMMARY="$REPLACED file(s) to update, $ADDED file(s) to add, ${#NEW_VARS[@]} variable(s) to add"
+[[ $(( STALE + ROOT_STALE )) -gt 0 ]] && \
+  SUMMARY="$SUMMARY, $(( STALE + ROOT_STALE )) stale file(s) to remove"
 [[ $(( ROOT_REPLACED + ROOT_ADDED )) -gt 0 ]] && \
   SUMMARY="$SUMMARY, $ROOT_REPLACED service file(s) to update"
 [[ $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) -gt 0 ]] && \
@@ -501,6 +574,10 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   echo "  4. Replace per-instance script files"
   echo "     Preserving: variables.txt, downloaded_versions.json, interface/,"
   echo "                 update/node_modules/, logs/"
+  [[ $(( STALE + ROOT_STALE )) -gt 0 ]] && \
+    echo "     Removing $(( STALE + ROOT_STALE )) stale file(s)/component(s) no longer part of the suite"
+  [[ $(( STALE + ROOT_STALE )) -gt 0 ]] && \
+    echo "     (all removed files remain available in the backup archive)"
   if [[ ${#JSON_CONFIGS[@]} -gt 0 ]]; then
     for entry in "${JSON_CONFIGS[@]}"; do
       f="${entry%%:*}"; nk="${entry##*:}"
@@ -730,6 +807,34 @@ for entry in "${JSON_CONFIGS[@]:-}"; do
   }
 done
 
+# Legacy per-instance components: before the wipe destroys them, rescue any
+# user-generated config into the root-level service location (if it exists
+# and has none yet). The backup archive keeps the full legacy tree either way.
+_legacy_api="$TARGET_SCRIPTS_DIR/api-server"
+if [[ -f "$_legacy_api/api-server-config.json" ]]; then
+  _root_api="$BASE_DIR/services/api-server"
+  [[ ! -d "$_root_api" && -d "$BASE_DIR/api-server" ]] && _root_api="$BASE_DIR/api-server"
+  if [[ -d "$_root_api" && ! -f "$_root_api/api-server-config.json" ]]; then
+    run_cmd cp -a "$_legacy_api/api-server-config.json" "$_root_api/api-server-config.json"
+    log "Rescued legacy api-server-config.json → $_root_api/"
+  else
+    warn "Legacy per-instance api-server/ has a config — it will be removed."
+    info "A copy remains in the backup archive; the root-level service keeps its own config."
+  fi
+fi
+_legacy_mgr="$TARGET_SCRIPTS_DIR/minecraft-server-manager"
+if [[ -d "$_legacy_mgr/src/config" ]]; then
+  _root_mgr="$BASE_DIR/services/manager"
+  [[ ! -d "$_root_mgr" && -d "$BASE_DIR/manager" ]] && _root_mgr="$BASE_DIR/manager"
+  for _cfg in users.json config.json; do
+    if [[ -f "$_legacy_mgr/src/config/$_cfg" && -d "$_root_mgr" && ! -f "$_root_mgr/src/config/$_cfg" ]]; then
+      run_cmd mkdir -p "$_root_mgr/src/config"
+      run_cmd cp -a "$_legacy_mgr/src/config/$_cfg" "$_root_mgr/src/config/$_cfg"
+      log "Rescued legacy manager $_cfg → $_root_mgr/src/config/"
+    fi
+  done
+fi
+
 # Wipe and replace
 log "Removing old per-instance scripts..."
 $DRY_RUN || find "$TARGET_SCRIPTS_DIR" -mindepth 1 -delete
@@ -822,10 +927,25 @@ if $NEEDS_ROOT_UPDATE; then
 
     ROOT_PRESERVE=$(mktemp -d)
 
-    # node_modules
+    # Decide the npm question NOW, against the DEPLOYED package.json —
+    # after the wipe-and-copy below, dst always equals src, so a
+    # post-copy diff can never detect a change. (This is exactly how the
+    # old JS-era node_modules survived the TypeScript rewrite: the stale
+    # tree was restored and npm install never ran.)
+    pkg_changed=true
+    [[ -f "$dst_dir/package.json" ]] && \
+      diff -q "$src_dir/package.json" "$dst_dir/package.json" &>/dev/null && pkg_changed=false
+
+    # node_modules: only worth preserving when the dependency set is
+    # unchanged — a changed package.json gets a fresh install instead of
+    # a stale restore.
     if [[ -d "$dst_dir/node_modules" ]]; then
-      $DRY_RUN || cp -a "$dst_dir/node_modules" "$ROOT_PRESERVE/node_modules"
-      info "  Saved: node_modules/"
+      if $pkg_changed; then
+        info "  Dropping node_modules/ (package.json changed — fresh npm install will run)"
+      else
+        $DRY_RUN || cp -a "$dst_dir/node_modules" "$ROOT_PRESERVE/node_modules"
+        info "  Saved: node_modules/"
+      fi
     fi
 
     # api-server-config.json (api-server only — user-generated, never in source)
@@ -896,14 +1016,12 @@ if $NEEDS_ROOT_UPDATE; then
 
     rm -rf "$ROOT_PRESERVE"
 
-    # npm install if package.json changed or node_modules missing
+    # npm install if package.json changed (decided pre-wipe above) or
+    # node_modules is missing
     if [[ -f "$src_dir/package.json" ]]; then
       needs_npm=false
-      if ! diff -q "$src_dir/package.json" "$dst_dir/package.json" &>/dev/null 2>&1; then
-        needs_npm=true
-      elif [[ ! -d "$dst_dir/node_modules" ]]; then
-        needs_npm=true
-      fi
+      $pkg_changed && needs_npm=true
+      [[ ! -d "$dst_dir/node_modules" ]] && needs_npm=true
       if $needs_npm; then
         if command -v npm &>/dev/null; then
           log "  npm install --omit=dev in $dst_name/"
