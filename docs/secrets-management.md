@@ -21,12 +21,10 @@ By default, credentials (RCON passwords, API keys, webhook URLs) are stored in `
 | `RCON_PASSWORD` | RCON password for all servers |
 | `RCON_PASSWORD_<ID>` | RCON password for a specific server |
 
-### minecraft-server-manager
-
-| Variable | Purpose |
-|---|---|
-| `JWT_SECRET` | Signs session tokens — **required for session persistence across restarts** |
-| `PORT` | HTTP listen port |
+> The retired web interface used `JWT_SECRET` and `PORT`. If those are still in
+> your environment or `.env`, remove them — see
+> [retiring-web-interface.md](retiring-web-interface.md). A live `JWT_SECRET`
+> for a service that no longer runs is a credential nobody is watching.
 
 ## Docker Compose example
 

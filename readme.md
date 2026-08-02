@@ -15,7 +15,8 @@ Automated Minecraft server setup and management with backup rotation, mod update
 - **Scheduled Restarts:** Configurable automatic restart cron with player-count awareness.
 - **Mod Conflict Detection:** Update checker warns about incompatible mods before applying changes.
 - **Preflight Check:** `--check` flag validates config, tools, disk space, and API keys without running setup.
-- **Multi-Instance Manager:** Status overview, start/stop/restart/backup across multiple server instances.
+- **Multi-Instance CLI (`manage.sh`):** Status overview, start/stop/restart/backup across multiple server instances from the shell.
+- **Remote control via the API wrapper:** Optional HTTP service (`API_SERVER`) that exposes these scripts to the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot and its web dashboard — console, backups, rollback, and live logs, without a second panel on this host.
 - **Maintenance Mode:** MOTD swap, non-admin kick monitoring, automatic cleanup on exit.
 
 ## Prerequisites
@@ -33,7 +34,7 @@ cd minecraft-server-setup
 npm install
 ```
 
-> **Submodules:** The API server (`scripts/api-server/`) is a git submodule pointing to the [mc-api-server](https://github.com/your-org/mc-api-server) repo. `--recurse-submodules` pulls it automatically. If you already cloned without it, run:
+> **Submodules:** The API server (`src/scripts/api-server/`) is a git submodule pointing to the [mc-api-server](https://github.com/LetsGaming/minecraft-server-api) repo. `--recurse-submodules` pulls it automatically. If you already cloned without it, run:
 > ```bash
 > git submodule update --init
 > ```
@@ -78,13 +79,13 @@ Edit [`variables.json`](./variables.json) — all settings are in one file:
 ```
 
 For modpack setup, also configure:
-- [`curseforge_variables.json`](./setup/download/json/curseforge_variables.json) — API key and pack ID. This file is git-ignored (it holds your API key). Copy the template first:
+- [`curseforge_variables.json`](./src/setup/download/json/curseforge_variables.example.json) — API key and pack ID. This file is git-ignored (it holds your API key). Copy the template first:
   ```bash
   cp src/setup/download/json/curseforge_variables.example.json \
      src/setup/download/json/curseforge_variables.json
   ```
   Setup also falls back to the `.example.json` automatically if the live file is missing, so it will run and tell you to set your key rather than crashing.
-- [`modrinth_variables.json`](./setup/download/json/modrinth_variables.json) — mod slugs (no API key, kept in version control)
+- [`modrinth_variables.json`](./src/setup/download/json/modrinth_variables.json) — mod slugs (no API key, kept in version control)
 
 ## Usage
 
@@ -150,6 +151,39 @@ Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhook
 
 `backup_complete`, `backup_failed`, `update_complete`, `update_failed`, `server_start`, `server_stop`, `server_restart`, `storage_warning`, `rollback_complete`, `rollback_start`
 
+## Documentation
+
+| Topic | Doc |
+|---|---|
+| HTTPS in front of the API wrapper | [docs/reverse-proxy.md](docs/reverse-proxy.md) |
+| API keys, RCON passwords, `.env` | [docs/secrets-management.md](docs/secrets-management.md) |
+| sudo rules the scripts need | [docs/sudoers-setup.md](docs/sudoers-setup.md) |
+| Retiring the bundled web interface | [docs/retiring-web-interface.md](docs/retiring-web-interface.md) |
+
+## Upgrading to 4.0
+
+**The bundled web interface is gone.** `minecraft-server-manager` was a second
+privileged service on this host that duplicated the API wrapper: its own RCON
+client, its own `variables.txt` parser, its own instance registry. Everything it
+did now lives in the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot)
+dashboard, which reaches this host through the wrapper instead of running on it.
+
+`migrate.sh` handles the service side where it finds one — it stops, disables
+and removes the unit, then renames the deployment to `services/manager.retired/`
+rather than deleting it, because that directory holds the only copy of its
+credentials. The rest is a short manual checklist:
+[docs/retiring-web-interface.md](docs/retiring-web-interface.md).
+
+The `WEB_INTERFACE` block in `variables.json` is now ignored. Setup warns about
+it once and carries on, so an upgrade does not fail over a leftover key — delete
+the block when convenient. If it had a non-empty `BLOCKED_COMMANDS`, those
+entries move to the bot's `config.json` under `webui.console.blockedCommands`.
+`--interface` is still accepted and does nothing but point you here.
+
+The dashboard's backup panel and rollback button need **API wrapper 3.3.0 or
+newer**. Older wrappers keep working; the dashboard hides what they cannot serve
+rather than showing controls that fail.
+
 ## Version Compatibility
 
 | Format | Example | Java Detection |
@@ -161,11 +195,18 @@ Set `"VERSION": "latest"` for newest release, or any specific version string.
 
 ## minecraft-bot API Wrapper
 
-The API wrapper (`scripts/api-server/`) is a standalone [mc-api-server](https://github.com/your-org/mc-api-server) repo included as a git submodule. It lets the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot manage and monitor this MC instance over HTTP from a different machine.
+The API wrapper (`src/scripts/api-server/`) is a standalone [mc-api-server](https://github.com/LetsGaming/minecraft-server-api) repo included as a git submodule. It lets the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot manage and monitor this MC instance over HTTP from a different machine.
 
 ### When to use it
 
-Only needed when the bot runs on a **different VM** from the MC server. If both run on the same machine, the bot accesses files and scripts directly — no wrapper needed.
+**Always, if you use minecraft-bot at all.** This used to say the wrapper was
+only needed when the bot ran on a different machine — that stopped being true in
+bot 5.0.0, which removed every local path (direct RCON, `screen`, `sudo`, local
+file reads). The wrapper is now the only way in, same-host or not.
+
+The reason it went that way: every feature written twice, once local and once
+remote, drifted, and the drift shipped as bugs. One path means one place for a
+bug.
 
 ### Setup
 
@@ -218,7 +259,7 @@ systemctl restart survival-api-server
 
 ### Standalone deployment
 
-The API server can also be deployed independently without this setup project. See the [mc-api-server README](./scripts/api-server/README.md) for standalone install and configuration instructions.
+The API server can also be deployed independently without this setup project. See the [mc-api-server README](./src/scripts/api-server/README.md) for standalone install and configuration instructions.
 
 ## Contributing
 

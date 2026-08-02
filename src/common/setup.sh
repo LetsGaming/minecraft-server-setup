@@ -131,19 +131,12 @@ run_optional_setup() {
     fi
   fi
 
-  if [ "$SETUP_INTERFACE" = true ]; then
-    log "Setting up web interface..."
-    run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_manager_service.js\""
-  else
-    # Still set up if enabled in variables.json and flag wasn't explicitly suppressed
-    local iface_enabled
-    iface_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.WEB_INTERFACE?.ENABLED || false)" 2>/dev/null)
-    if [ "$iface_enabled" = "true" ]; then
-      log "WEB_INTERFACE.ENABLED=true — setting up web interface..."
-      run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_manager_service.js\""
-    else
-      warn "Skipping web interface setup (use --interface or set WEB_INTERFACE.ENABLED=true)."
-    fi
+  # The bundled web interface (minecraft-server-manager) was retired: everything
+  # it did now lives in the minecraft-bot dashboard, which reaches this host
+  # through the API wrapper above. Enable API_SERVER and point the bot at it.
+  if [ -n "${SETUP_INTERFACE:-}" ] && [ "$SETUP_INTERFACE" = true ]; then
+    warn "The bundled web interface was removed — use the minecraft-bot dashboard instead."
+    warn "It talks to this host through the API wrapper (API_SERVER.ENABLED=true)."
   fi
 
   # Setup restart cron if enabled
@@ -175,7 +168,9 @@ run_rollback() {
   if [[ "$base_dir" == "$MAIN_DIR" || "$base_dir" == "/" || -z "$base_dir" ]]; then
     warn "Unsafe base_dir detected ('$base_dir') — skipping directory removal."
   else
-    # Stop and remove all created systemd services
+    # Stop and remove all created systemd services. The -manager unit is no
+    # longer created, but an install from before the web interface was retired
+    # still has one — uninstall has to clear it or it stays enabled forever.
     for svc in "$instance_name" "${target_dir}-api-server" "${target_dir}-manager"; do
       if sudo systemctl list-unit-files "${svc}.service" &>/dev/null; then
         log "Stopping service: ${svc}.service"
@@ -193,7 +188,7 @@ run_rollback() {
     fi
 
     # Remove the entire instance directory tree
-    # (contains server files, scripts, api-server, manager)
+    # (server files, scripts, api-server, and any retired manager deployment)
     if [[ -d "$base_dir" ]]; then
       log "Removing $base_dir"
       sudo rm -rf "$base_dir"
@@ -403,23 +398,22 @@ run_preflight_check() {
     echo "  ✓ API server disabled (set API_SERVER.ENABLED=true to enable)"
   fi
 
-  # 10. Check web interface config
-  echo "[CHECK] Web interface config..."
-  local wi_enabled wi_port
+  # 10. Retired web interface — warn if a stale config or service is left over
+  echo "[CHECK] Retired web interface..."
+  local wi_enabled
   wi_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.WEB_INTERFACE?.ENABLED || false)" 2>/dev/null)
   if [ "$wi_enabled" = "true" ]; then
-    wi_port=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.WEB_INTERFACE?.PORT || 3001)" 2>/dev/null)
-    echo "  ✓ Web interface enabled (port $wi_port)"
-    # Check submodule is present
-    if [ ! -f "$SCRIPT_DIR/src/scripts/minecraft-server-manager/app.js" ]; then
-      echo "  ✗ scripts/minecraft-server-manager/ submodule not initialised"
-      echo "    Run: git submodule update --init"
-      errors=$((errors + 1))
-    else
-      echo "  ✓ Manager submodule present"
-    fi
+    # Not an error: the setup simply ignores the block now. Saying so beats
+    # letting someone wait for an interface that is never going to appear.
+    echo "  ! WEB_INTERFACE.ENABLED is still true in variables.json"
+    echo "    The bundled interface was retired — the block is ignored and can be deleted."
+    echo "    Use the minecraft-bot dashboard; it reaches this host via API_SERVER."
   else
-    echo "  ✓ Web interface disabled (set WEB_INTERFACE.ENABLED=true to enable)"
+    echo "  ✓ No stale WEB_INTERFACE config"
+  fi
+  if systemctl list-unit-files "${TARGET_DIR_NAME}-manager.service" &>/dev/null; then
+    echo "  ! ${TARGET_DIR_NAME}-manager.service still exists"
+    echo "    Run migrate.sh, or remove it by hand — see docs/retiring-web-interface.md"
   fi
 
   # Summary

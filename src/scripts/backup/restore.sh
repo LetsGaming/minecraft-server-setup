@@ -128,15 +128,16 @@ if [[ -d "$META_DIR" ]]; then
     rsync -a "$META_DIR/scripts/" "$INSTANCE_SCRIPTS_DIR/"
     echo "[INFO]   ✓ scripts/"
 
-    # Reinstall node_modules that were excluded from the backup
-    for dir in "$INSTANCE_SCRIPTS_DIR/update" "$INSTANCE_SCRIPTS_DIR/minecraft-server-manager"; do
-      if [[ -f "$dir/package.json" ]]; then
-        echo "[INFO]   npm install in $(basename "$dir")..."
-        npm install --omit=dev --prefix "$dir" >/dev/null \
-          && echo "[INFO]     ✓ $(basename "$dir")/node_modules" \
-          || echo "[WARN]     npm install failed in $(basename "$dir") — run manually"
-      fi
-    done
+    # Reinstall node_modules, which the backup excludes. Only update/ has any
+    # since the web interface was retired — a loop over one entry was left
+    # behind by that removal and shellcheck was right to object.
+    _update_dir="$INSTANCE_SCRIPTS_DIR/update"
+    if [[ -f "$_update_dir/package.json" ]]; then
+      echo "[INFO]   npm install in update/..."
+      npm install --omit=dev --prefix "$_update_dir" >/dev/null \
+        && echo "[INFO]     ✓ update/node_modules" \
+        || echo "[WARN]     npm install failed in update/ — run manually"
+    fi
   fi
 
   # 2. Systemd service files
@@ -144,6 +145,13 @@ if [[ -d "$META_DIR" ]]; then
     for svc_file in "$META_DIR/systemd/"*.service; do
       [[ -f "$svc_file" ]] || continue
       svc_name="$(basename "$svc_file")"
+      # A backup taken before the web interface was retired still carries its
+      # unit. Reinstalling it here would quietly bring a retired, credentialed
+      # service back up on a host the operator had already cleaned.
+      if [[ "$svc_name" == *-manager.service ]]; then
+        echo "[INFO]   — skipped $svc_name (the web interface was retired)"
+        continue
+      fi
       sudo cp "$svc_file" "/etc/systemd/system/$svc_name"
       sudo chmod 644 "/etc/systemd/system/$svc_name"
       echo "[INFO]   ✓ /etc/systemd/system/$svc_name"

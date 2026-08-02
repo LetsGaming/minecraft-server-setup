@@ -22,7 +22,7 @@ Cmnd_Alias MC_GAME_SERVER = \
     /usr/bin/systemctl restart server.service, \
     /usr/bin/systemctl status server.service
 
-# Support services (api-server, manager) — matched by prefix wildcard
+# Support services (api-server) — matched by prefix wildcard
 Cmnd_Alias MC_SUPPORT_SERVICES = \
     /usr/bin/systemctl start minecraft-server-*.service, \
     /usr/bin/systemctl stop minecraft-server-*.service, \
@@ -41,7 +41,14 @@ minecraft ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES
 # pinning this to the exact deployed instance directory rather than a wildcard,
 # e.g.:
 #   mcbot ALL=(minecraft) NOPASSWD: /usr/bin/bash /home/minecraft/mc/instances/survival/scripts/
-mcbot ALL=(minecraft) NOPASSWD: /usr/bin/bash /home/minecraft/*/scripts/*/*
+# NOTE the two patterns: management scripts live at BOTH depths.
+#   scripts/start.sh, shutdown.sh, smart_restart.sh, restart.sh, rollback.sh
+#   scripts/backup/backup.sh, scripts/backup/restore.sh, scripts/misc/status.sh
+# sudo wildcards do not match "/", so a single */* glob silently misses every
+# top-level script — including rollback.sh, which the dashboard's Rollback
+# button needs. Grant both, and adjust the depth to your actual install path.
+mcbot ALL=(minecraft) NOPASSWD: /usr/bin/bash /home/minecraft/*/scripts/*, \
+                                /usr/bin/bash /home/minecraft/*/scripts/*/*
 
 # Allow the application user to manage all Minecraft services
 mcbot ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES
@@ -65,7 +72,6 @@ The entries above use the default service names created by the setup script:
 |---|---|
 | `server.service` | The Minecraft game server |
 | `minecraft-server-api-server.service` | The API server (mc-api-server) |
-| `minecraft-server-manager.service` | The web-based server manager |
 
 If you have multiple game server instances, add a matching set of `server.service` entries for each (e.g. `creative.service`, `survival.service`).
 

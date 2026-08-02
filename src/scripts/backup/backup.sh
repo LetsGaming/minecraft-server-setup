@@ -168,10 +168,12 @@ if $ARCHIVE_MODE && ! $DRY_RUN; then
   log INFO "  ✓ scripts/ ($(du -sh "$META_DIR/scripts" | cut -f1))"
 
   # 2. Systemd service files
+  # ${TARGET_DIR_NAME}-manager.service is deliberately absent: the bundled web
+  # interface was retired, so a new backup should not carry a unit that restore
+  # would then reinstall. Restore skips it in old backups for the same reason.
   for svc_file in \
     "/etc/systemd/system/${INSTANCE_NAME}.service" \
-    "/etc/systemd/system/${TARGET_DIR_NAME}-api-server.service" \
-    "/etc/systemd/system/${TARGET_DIR_NAME}-manager.service"; do
+    "/etc/systemd/system/${TARGET_DIR_NAME}-api-server.service"; do
     if [[ -f "$svc_file" ]]; then
       cp "$svc_file" "$META_DIR/systemd/$(basename "$svc_file")"
       log INFO "  ✓ systemd/$(basename "$svc_file")"

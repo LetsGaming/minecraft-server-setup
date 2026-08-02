@@ -14,22 +14,22 @@ set -euo pipefail
 # ║    - Systemd services, cron jobs                            ║
 # ║    - Your variables.txt values (only adds new fields)       ║
 # ║    - downloaded_versions.json                               ║
-# ║    - interface/  (web interface — preserved and restored)   ║
+# ║    - interface/  (retired web interface — left untouched)   ║
 # ║    - update/node_modules/   (preserved; reinstalled only    ║
 # ║      when the dependency set changes)                       ║
-# ║    - services/api-server/node_modules/,                     ║
-# ║      services/manager/node_modules/  (same)                 ║
+# ║    - services/api-server/node_modules/  (same)              ║
 # ║    - services/*/dist/  (build output — rebuilt, not         ║
 # ║      deleted; the previous build survives a failed build)   ║
-# ║    - JSON config files (e.g. services/manager/src/config/   ║
-# ║      config.json) (existing values kept; new keys merged)   ║
-# ║    - services/manager/src/config/users.json  (untouched)    ║
 # ║    - services/api-server/api-server-config.json  (untouched)║
 # ║                                                             ║
+# ║  Retires the bundled web interface where it finds one: the  ║
+# ║  systemd unit is stopped, disabled and removed; the         ║
+# ║  deployment is renamed to *.retired and left on disk,       ║
+# ║  because it holds the only copy of its credentials.         ║
+# ║                                                             ║
 # ║  The Minecraft instance is stopped ONLY when the migration  ║
-# ║  actually touches it. A services-only update (api-server,   ║
-# ║  manager) leaves the server running and restarts just the   ║
-# ║  affected systemd units.                                    ║
+# ║  actually touches it. A services-only update leaves the     ║
+# ║  server running and restarts just the affected units.       ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 MIGRATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,8 +88,7 @@ What gets replaced (per-instance scripts):
 
 What gets updated (shared services):
   - services/api-server/   at <install-root>/services/api-server/
-  - services/manager/      at <install-root>/services/manager/
-  Both are fully replaced: files removed upstream are deleted, and a changed
+  Fully replaced: files removed upstream are deleted, and a changed
   dependency set (package.json / package-lock.json) triggers a fresh install
   instead of restoring the old node_modules/
 
@@ -104,23 +103,29 @@ Build output (services/*/dist/):
 When the Minecraft server is stopped:
   Only when the migration touches the instance — per-instance script changes,
   a per-instance npm install, or the structural instance-directory move.
-  Updating only api-server/manager leaves the server running.
+  Updating only the shared services leaves the server running.
 
 Structural migration (run once, automatically detected):
   - <install-root>/<instance>/            → <install-root>/instances/<instance>/
   - <install-root>/api-server/            → <install-root>/services/api-server/
-  - <install-root>/manager/               → <install-root>/services/manager/
   Updates SERVER_PATH in variables.txt and patches systemd unit files.
+
+Retiring the bundled web interface (automatic, where one is found):
+  The minecraft-server-manager panel was superseded by the minecraft-bot
+  dashboard, which reaches this host through the API wrapper. Its systemd unit
+  is stopped, disabled and removed — a retired service that is still enabled
+  keeps a port open and comes back on the next reboot. The deployment itself is
+  renamed to services/manager.retired/ rather than deleted: it holds users.json,
+  and a migration that silently shreds credentials is one people stop trusting.
+  The removal commands are printed.
 
 What is NEVER touched:
   - common/variables.txt          (only new variables are appended)
   - common/downloaded_versions.json
-  - interface/                    (web interface — preserved and restored)
+  - interface/                    (retired web interface — left as found)
   - update/node_modules/          (preserved; reinstalled if deps changed)
-  - services/api-server/node_modules/, services/manager/node_modules/  (same)
+  - services/api-server/node_modules/            (same)
   - services/api-server/api-server-config.json   (user config — fully preserved)
-  - services/manager/src/config/config.json      (merged: existing values kept, new keys added)
-  - services/manager/src/config/users.json       (credentials — fully preserved)
   - backup/logs/, logs/
   - World data, mods, server.jar, server.properties
   - Systemd services, cron jobs
@@ -177,11 +182,14 @@ BASE_DIR="$(dirname "$(dirname "$TARGET_SCRIPTS_DIR")")"
 
 # Root-level shared services: source name → deployed subpath under $BASE_DIR/
 # Parallel arrays (bash 3 compatible)
-ROOT_SRC_NAMES=("api-server"              "minecraft-server-manager")
-ROOT_DST_NAMES=("services/api-server"     "services/manager")
+# The web interface (minecraft-server-manager) used to be the second entry.
+# It was retired — its submodule is gone, so there is nothing to sync from —
+# and Step 3d below decommissions whatever an older install left behind.
+ROOT_SRC_NAMES=("api-server")
+ROOT_DST_NAMES=("services/api-server")
 # Systemd service-name suffix (separate from path because 'services/' is not
 # part of the service identifier)
-ROOT_SVC_NAMES=("api-server"              "manager")
+ROOT_SVC_NAMES=("api-server")
 
 # Per-service state, filled during the diff pass, consumed by Step 5 / Step 9b.
 # Parallel to the arrays above.
@@ -622,12 +630,14 @@ _old_instance_dir="$BASE_DIR/$INSTANCE_NAME"
 _new_instance_dir="$BASE_DIR/instances/$INSTANCE_NAME"
 _old_api_dir="$BASE_DIR/api-server"
 _new_api_dir="$BASE_DIR/services/api-server"
+# Both places an older install may have put the retired web interface.
 _old_manager_dir="$BASE_DIR/manager"
 _new_manager_dir="$BASE_DIR/services/manager"
+_manager_svc_name="$(basename "$BASE_DIR")-manager.service"
 
 NEEDS_INSTANCE_MOVE=false
 NEEDS_API_MOVE=false
-NEEDS_MANAGER_MOVE=false
+NEEDS_MANAGER_RETIRE=false
 
 # Instance move: SERVER_PATH still points at the old location and that dir exists
 if [[ "${SERVER_PATH:-}" == "$_old_instance_dir" && -d "$_old_instance_dir" && ! -d "$_new_instance_dir" ]]; then
@@ -639,12 +649,15 @@ if [[ -d "$_old_api_dir" && ! -d "$_new_api_dir" ]]; then
   NEEDS_API_MOVE=true
   info "MOVE    services/api-server/  (${_old_api_dir} → ${_new_api_dir})"
 fi
-if [[ -d "$_old_manager_dir" && ! -d "$_new_manager_dir" ]]; then
-  NEEDS_MANAGER_MOVE=true
-  info "MOVE    services/manager/  (${_old_manager_dir} → ${_new_manager_dir})"
+# The web interface is retired rather than relocated: a unit that still exists
+# is a listening, credentialed service the operator believes is gone.
+if [[ -d "$_old_manager_dir" || -d "$_new_manager_dir" ]] \
+   || systemctl list-unit-files "$_manager_svc_name" &>/dev/null; then
+  NEEDS_MANAGER_RETIRE=true
+  info "RETIRE  the bundled web interface (service + deployment)"
 fi
 NEEDS_STRUCT_MIGRATION=false
-{ $NEEDS_INSTANCE_MOVE || $NEEDS_API_MOVE || $NEEDS_MANAGER_MOVE; } && NEEDS_STRUCT_MIGRATION=true
+{ $NEEDS_INSTANCE_MOVE || $NEEDS_API_MOVE || $NEEDS_MANAGER_RETIRE; } && NEEDS_STRUCT_MIGRATION=true
 
 # ── Scope: what actually has to be touched ──
 # The Minecraft instance is only affected when the per-instance scripts change,
@@ -695,7 +708,8 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
     echo "  3. Structural directory migration:"
     $NEEDS_INSTANCE_MOVE && echo "       mv  $BASE_DIR/$INSTANCE_NAME  →  $BASE_DIR/instances/$INSTANCE_NAME"
     $NEEDS_API_MOVE      && echo "       mv  $BASE_DIR/api-server  →  $BASE_DIR/services/api-server"
-    $NEEDS_MANAGER_MOVE  && echo "       mv  $BASE_DIR/manager  →  $BASE_DIR/services/manager"
+    $NEEDS_MANAGER_RETIRE && echo "       retire the bundled web interface (stop/disable/remove its unit,"
+    $NEEDS_MANAGER_RETIRE && echo "              rename its deployment to *.retired — nothing is deleted)"
     $NEEDS_INSTANCE_MOVE && echo "     Updates SERVER_PATH in variables.txt and patches systemd unit files"
   fi
   if $NEEDS_INSTANCE_UPDATE; then
@@ -870,25 +884,50 @@ if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
     fi
   fi
 
-  # ── 3c: manager: BASE_DIR/manager  →  BASE_DIR/services/manager
-  if $NEEDS_MANAGER_MOVE; then
-    log "Moving manager to services/manager/"
-    run_cmd mkdir -p "$BASE_DIR/services"
-    run_cmd mv "$_old_manager_dir" "$_new_manager_dir"
-    info "Moved: $_old_manager_dir → $_new_manager_dir"
+  # ── 3d: retire the bundled web interface
+  #
+  # It was superseded by the minecraft-bot dashboard, which reaches this host
+  # through the API wrapper. Two halves, treated differently on purpose:
+  #
+  #   The systemd unit is removed automatically. A retired service that is
+  #   still enabled keeps a port open and a credential file live on a host the
+  #   operator believes is clean, and it comes back on the next reboot. That is
+  #   the part that must not be left to a checklist.
+  #
+  #   The deployment directory is NOT deleted. It holds users.json — the only
+  #   copy of credentials someone may still want to look at — and a migration
+  #   script that silently shreds credentials is a migration script people stop
+  #   trusting. It is renamed out of the way and the removal command printed.
+  if $NEEDS_MANAGER_RETIRE; then
+    log "Retiring the bundled web interface"
 
-    # Patch manager systemd service file
-    _mgr_svc_name="$(basename "$BASE_DIR")-manager.service"
-    _mgr_svc_file="/etc/systemd/system/$_mgr_svc_name"
-    if [[ -f "$_mgr_svc_file" ]]; then
+    _mgr_svc_file="/etc/systemd/system/$_manager_svc_name"
+    if systemctl list-unit-files "$_manager_svc_name" &>/dev/null || [[ -f "$_mgr_svc_file" ]]; then
       if ! $DRY_RUN; then
-        sudo sed -i "s|${_old_manager_dir}|${_new_manager_dir}|g" "$_mgr_svc_file"
+        sudo systemctl stop    "$_manager_svc_name" 2>/dev/null || true
+        sudo systemctl disable "$_manager_svc_name" 2>/dev/null || true
+        sudo rm -f "$_mgr_svc_file"
         sudo systemctl daemon-reload
       else
-        echo "[DRY-RUN] sudo sed -i paths in $_mgr_svc_file + daemon-reload"
+        echo "[DRY-RUN] sudo systemctl stop/disable $_manager_svc_name"
+        echo "[DRY-RUN] sudo rm -f $_mgr_svc_file + daemon-reload"
       fi
-      info "Patched: $_mgr_svc_file"
+      info "Stopped, disabled and removed: $_manager_svc_name"
     fi
+
+    for _mgr_dir in "$_new_manager_dir" "$_old_manager_dir"; do
+      [[ -d "$_mgr_dir" ]] || continue
+      _retired_dir="${_mgr_dir}.retired"
+      run_cmd mv "$_mgr_dir" "$_retired_dir"
+      info "Moved aside: $_mgr_dir → $_retired_dir"
+      warn "The retired deployment still holds credentials (users.json, .env)."
+      warn "Once you no longer need them:"
+      warn "  sudo shred -u \"$_retired_dir\"/src/config/users.json 2>/dev/null"
+      warn "  sudo rm -rf \"$_retired_dir\""
+    done
+
+    info "Its features now live in the minecraft-bot dashboard — see"
+    info "docs/retiring-web-interface.md"
   fi
 
   # Re-source variables.txt so the rest of the script sees the updated SERVER_PATH
@@ -967,17 +1006,15 @@ if [[ -f "$_legacy_api/api-server-config.json" ]]; then
     info "A copy remains in the backup archive; the root-level service keeps its own config."
   fi
 fi
+# A pre-services install may still have a per-instance copy of the retired web
+# interface under scripts/. It used to have its config rescued into the
+# root-level deployment; there is no longer a live deployment to rescue it into.
+# Step 1's archive holds the whole tree, so nothing is lost — say where.
 _legacy_mgr="$TARGET_SCRIPTS_DIR/minecraft-server-manager"
-if [[ -d "$_legacy_mgr/src/config" ]]; then
-  _root_mgr="$BASE_DIR/services/manager"
-  [[ ! -d "$_root_mgr" && -d "$BASE_DIR/manager" ]] && _root_mgr="$BASE_DIR/manager"
-  for _cfg in users.json config.json; do
-    if [[ -f "$_legacy_mgr/src/config/$_cfg" && -d "$_root_mgr" && ! -f "$_root_mgr/src/config/$_cfg" ]]; then
-      run_cmd mkdir -p "$_root_mgr/src/config"
-      run_cmd cp -a "$_legacy_mgr/src/config/$_cfg" "$_root_mgr/src/config/$_cfg"
-      log "Rescued legacy manager $_cfg → $_root_mgr/src/config/"
-    fi
-  done
+if [[ -d "$_legacy_mgr" ]]; then
+  warn "Legacy per-instance web interface found — it will be removed."
+  info "The web interface was retired; its config (including users.json) is in"
+  info "the pre-migration backup archive if you still need it."
 fi
 
 # Wipe and replace

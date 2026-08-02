@@ -17,7 +17,10 @@ declare -A ARG_OPTS=(
   ["--no-service"]="NO_SERVICE=false|Skip creating the systemd service"
   ["--no-backup"]="NO_BACKUP=false|Skip creating the backup job"
   ["--api-server"]="SETUP_API_SERVER=false|Set up the minecraft-bot API wrapper service"
-  ["--interface"]="SETUP_INTERFACE=false|Setup the web interface"
+  # Kept as a recognised no-op rather than deleted: an upgrade with --interface
+  # in a cron line or a runbook should be told what replaced it, not just get
+  # "unknown option" and stop.
+  ["--interface"]="SETUP_INTERFACE=false|(retired) The bundled web interface — use the minecraft-bot dashboard"
   ["--dry-run"]="DRY_RUN=false|Only print what would be done"
   ["--verbose"]="VERBOSE=false|Print additional logging info"
   ["--y"]="ACCEPT_ALL=false|Accept all defaults and skip prompts"
