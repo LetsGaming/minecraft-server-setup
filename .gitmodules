@@ -2,6 +2,3 @@
 	path = src/scripts/api-server
 	url = https://github.com/LetsGaming/minecraft-server-api.git
 
-[submodule "src/scripts/minecraft-server-manager"]
-	path = src/scripts/minecraft-server-manager
-	url = https://github.com/LetsGaming/minecraft-server-manager.git
