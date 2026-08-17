@@ -194,7 +194,109 @@ async function downloadFile(url, targetPath) {
   });
 }
 
-// ---------------- main ----------------
+// ---------------- update runner ----------------
+
+/**
+ * Update installed mods to their latest compatible build.
+ *
+ * `only` restricts the run to a single slug, which is how update-mod.js reuses
+ * this for one mod. Returns a summary; it neither emits JSON nor exits, so both
+ * the CLI here and update-mod.js can decide how to report.
+ */
+async function runUpdates({ mcVersion = null, only = null } = {}) {
+  const vars = loadVariables();
+  const serverPath = vars.SERVER_PATH;
+  if (!serverPath || !fs.existsSync(serverPath)) {
+    throw new Error(`Invalid SERVER_PATH: ${serverPath}`);
+  }
+
+  const modsDir = path.join(serverPath, "mods");
+  fs.mkdirSync(modsDir, { recursive: true });
+
+  const downloadedVersions = JSON.parse(
+    fs.readFileSync(downloadedVersionsPath, "utf8"),
+  );
+  downloadedVersions.mods ??= {};
+
+  const version = mcVersion || downloadedVersions.gameVersion || "latest";
+  const { results } = await runCheckUpdates(version);
+
+  // Restrict to one mod when asked. A slug that is not in the check results is
+  // not installed, so report it rather than silently doing nothing.
+  let scoped = results;
+  if (only) {
+    scoped = results.filter((m) => m.slug === only);
+    if (scoped.length === 0) {
+      return {
+        updated: [],
+        upToDate: [],
+        failed: [{ slug: only, error: "Mod is not installed." }],
+      };
+    }
+  }
+
+  const updated = [];
+  const upToDate = [];
+  const failed = [];
+
+  for (const mod of scoped) {
+    if (mod.status !== "update_available") {
+      console.log(`No update available for: ${mod.slug}\n`);
+      upToDate.push(mod.slug);
+      continue;
+    }
+    if (!mod.downloadUrl) continue;
+
+    try {
+      const filename = decodeURIComponent(
+        path.basename(new URL(mod.downloadUrl).pathname),
+      );
+      const targetPath = path.join(modsDir, filename);
+      const tempPath = `${targetPath}.tmp`;
+
+      console.log(`Updating mod: ${mod.slug} to version ${mod.latestVersionId}`);
+      await downloadFile(mod.downloadUrl, tempPath);
+
+      const previous = downloadedVersions.mods[mod.slug];
+      if (previous?.filename) {
+        safeUnlink(path.join(modsDir, previous.filename));
+      } else {
+        for (const jar of detectInstalledJar(modsDir, mod.slug, filename)) {
+          safeUnlink(jar.fullPath);
+        }
+      }
+
+      fs.renameSync(tempPath, targetPath);
+      downloadedVersions.mods[mod.slug] = {
+        versionId: mod.latestVersionId,
+        filename,
+      };
+      fs.writeFileSync(
+        downloadedVersionsPath,
+        JSON.stringify(downloadedVersions, null, 2),
+        "utf8",
+      );
+      console.log(`Downloaded and installed: ${filename}\n`);
+      updated.push({ slug: mod.slug, toVersionId: mod.latestVersionId, filename });
+    } catch (err) {
+      // One mod failing must not abort the rest of a batch.
+      console.error(`Failed to update ${mod.slug}: ${err.message}`);
+      failed.push({ slug: mod.slug, error: err.message });
+    }
+  }
+
+  console.log("Mod updates completed.");
+  return { updated, upToDate, failed };
+}
+
+/** Report a fatal failure in the caller's chosen channel and exit non-zero. */
+function failWith(code, message) {
+  if (JSON_MODE) emitJson({ ok: false, error: message, code });
+  else console.error("Error:", message);
+  process.exit(1);
+}
+
+// ---------------- CLI ----------------
 
 async function main() {
   try {
@@ -204,100 +306,29 @@ async function main() {
       positional: ["mcVersion"],
     });
 
-    const migrateOnly = args.bool("migrate");
-
-    const vars = loadVariables();
-    const serverPath = vars.SERVER_PATH;
-    if (!serverPath || !fs.existsSync(serverPath)) {
-      throw new Error(`Invalid SERVER_PATH: ${serverPath}`);
-    }
-
-    const modsDir = path.join(serverPath, "mods");
-    fs.mkdirSync(modsDir, { recursive: true });
-
-    const downloadedVersions = JSON.parse(
-      fs.readFileSync(downloadedVersionsPath, "utf8"),
-    );
-
-    downloadedVersions.mods ??= {};
-
-    if (migrateOnly) {
+    if (args.bool("migrate")) {
+      const vars = loadVariables();
+      const serverPath = vars.SERVER_PATH;
+      if (!serverPath || !fs.existsSync(serverPath)) {
+        throw new Error(`Invalid SERVER_PATH: ${serverPath}`);
+      }
+      const modsDir = path.join(serverPath, "mods");
+      const downloadedVersions = JSON.parse(
+        fs.readFileSync(downloadedVersionsPath, "utf8"),
+      );
+      downloadedVersions.mods ??= {};
       migrateDownloadedVersions(downloadedVersions, modsDir);
       if (JSON_MODE) emitJson({ ok: true, migrated: true });
       return;
     }
 
-    const version =
-      args.get("mcVersion") || downloadedVersions.gameVersion || "latest";
-
-    const { results } = await runCheckUpdates(version);
-
-    // Accumulated for the --json summary; ignored in human mode.
-    const updated = [];
-    const upToDate = [];
-
-    for (const mod of results) {
-      if (mod.status !== "update_available") {
-        console.log(`No update available for: ${mod.slug}\n`);
-        upToDate.push(mod.slug);
-        continue;
-      }
-
-      if (!mod.downloadUrl) continue;
-
-      const filename = decodeURIComponent(
-        path.basename(new URL(mod.downloadUrl).pathname),
-      );
-
-      const targetPath = path.join(modsDir, filename);
-      const tempPath = `${targetPath}.tmp`;
-
-      console.log(
-        `Updating mod: ${mod.slug} to version ${mod.latestVersionId}`,
-      );
-
-      await downloadFile(mod.downloadUrl, tempPath);
-
-      const previous = downloadedVersions.mods[mod.slug];
-      if (previous?.filename) {
-        safeUnlink(path.join(modsDir, previous.filename));
-      } else {
-        const installedJars = detectInstalledJar(modsDir, mod.slug, filename);
-        for (const jar of installedJars) {
-          safeUnlink(jar.fullPath);
-        }
-      }
-
-      fs.renameSync(tempPath, targetPath);
-
-      downloadedVersions.mods[mod.slug] = {
-        versionId: mod.latestVersionId,
-        filename,
-      };
-
-      fs.writeFileSync(
-        downloadedVersionsPath,
-        JSON.stringify(downloadedVersions, null, 2),
-        "utf8",
-      );
-      console.log(`Downloaded and installed: ${filename}\n`);
-      updated.push({
-        slug: mod.slug,
-        toVersionId: mod.latestVersionId,
-        filename,
-      });
-    }
-
-    console.log("Mod updates completed.");
-    if (JSON_MODE) emitJson({ ok: true, updated, upToDate, failed: [] });
+    const summary = await runUpdates({ mcVersion: args.get("mcVersion") });
+    if (JSON_MODE) emitJson({ ok: true, ...summary });
   } catch (err) {
-    if (JSON_MODE) {
-      emitJson({ ok: false, error: err.message, code: "error" });
-    } else {
-      console.error("Error:", err.message);
-    }
-    process.exit(1);
+    failWith("error", err.message);
   }
 }
 
-main();
+module.exports = { runUpdates, emitJson, failWith, JSON_MODE };
+
+if (require.main === module) main();

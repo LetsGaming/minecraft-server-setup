@@ -49,7 +49,7 @@ const cliArgs = parseArgs({
 // (no --json) is completely unaffected — the overrides below only install
 // when JSON_MODE is set.
 const JSON_MODE = cliArgs.bool("json");
-const _realLog = console.log.bind(console);
+const _realWrite = process.stdout.write.bind(process.stdout);
 let _lastError = null;
 if (JSON_MODE) {
   console.log = () => {};
@@ -59,7 +59,9 @@ if (JSON_MODE) {
   process.stdout.write = () => true; // swallow the download progress line
 }
 function emitJson(obj) {
-  _realLog(JSON.stringify(obj));
+  // Write straight to the real stdout: console.log would route through the
+  // process.stdout.write override installed above and print nothing.
+  _realWrite(JSON.stringify(obj) + "\n");
 }
 function classifyError(msg) {
   if (!msg) return "error";
