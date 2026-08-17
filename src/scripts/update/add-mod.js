@@ -40,12 +40,46 @@ const cliArgs = parseArgs({
   positional: ["slug", "mcVersion", "modLoader"],
 });
 
+// ── Machine-readable mode ─────────────────────────────────────────────────
+//
+// With --json the wrapper drives this script and needs one JSON object on
+// stdout, not the human log. Rather than thread a result through every exit
+// site, we silence the human channels and, at the bottom, run main() with
+// process.exit intercepted so any exit becomes one emitted object. Human mode
+// (no --json) is completely unaffected — the overrides below only install
+// when JSON_MODE is set.
+const JSON_MODE = cliArgs.bool("json");
+const _realLog = console.log.bind(console);
+let _lastError = null;
+if (JSON_MODE) {
+  console.log = () => {};
+  console.error = (...a) => {
+    _lastError = a.map(String).join(" ");
+  };
+  process.stdout.write = () => true; // swallow the download progress line
+}
+function emitJson(obj) {
+  _realLog(JSON.stringify(obj));
+}
+function classifyError(msg) {
+  if (!msg) return "error";
+  if (/not found on modrinth/i.test(msg)) return "not-found";
+  if (/no compatible version|no version matching/i.test(msg))
+    return "no-compatible-version";
+  if (/downloaded_versions\.json/i.test(msg)) return "manifest";
+  return "error";
+}
+
 const slug = cliArgs.get("slug");
 
 if (!slug) {
-  console.error(
-    "Usage: node add-mod.js <slug-or-project-id> [--slug=...] [--mcVersion=...] [--modLoader=...]",
-  );
+  if (JSON_MODE) {
+    emitJson({ ok: false, error: "Missing mod slug", code: "error" });
+  } else {
+    console.error(
+      "Usage: node add-mod.js <slug-or-project-id> [--slug=...] [--mcVersion=...] [--modLoader=...]",
+    );
+  }
   process.exit(1);
 }
 
@@ -401,7 +435,33 @@ async function main() {
   console.log("All dependencies installed.\n");
 }
 
-main().catch((err) => {
-  console.error("Fatal:", err.message);
-  process.exit(1);
-});
+if (!JSON_MODE) {
+  main().catch((err) => {
+    console.error("Fatal:", err.message);
+    process.exit(1);
+  });
+} else {
+  // Intercept exits so the many `process.exit(1)` sites inside the helpers
+  // become one emitted object. exit(0) is a success that had nothing to do
+  // (already registered); anything else is a handled failure.
+  const _realExit = process.exit.bind(process);
+  process.exit = (code = 0) => {
+    const e = new Error(_lastError || "exit");
+    e.__exit = code;
+    throw e;
+  };
+  main()
+    .then(() => emitJson({ ok: true, slug }))
+    .catch((e) => {
+      if (e && e.__exit === 0) {
+        emitJson({ ok: true, slug });
+        return;
+      }
+      emitJson({
+        ok: false,
+        error: _lastError || e.message,
+        code: classifyError(_lastError || e.message),
+      });
+      _realExit(1);
+    });
+}

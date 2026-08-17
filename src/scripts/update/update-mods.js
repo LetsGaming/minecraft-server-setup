@@ -12,6 +12,22 @@ const { parseArgs } = require("./args");
 //   --migrate  Migrate legacy string entries in downloaded_versions.json to
 //              { versionId, filename } format. No download is performed.
 
+// ---------------- machine-readable mode ----------------
+//
+// With --json the wrapper drives this script and needs one JSON object on
+// stdout. We silence the human channels here so only the final emit reaches
+// stdout; human mode (no --json) is unaffected.
+const JSON_MODE = process.argv.includes("--json");
+const _realLog = console.log.bind(console);
+if (JSON_MODE) {
+  console.log = () => {};
+  console.warn = () => {};
+  console.error = () => {};
+}
+function emitJson(obj) {
+  _realLog(JSON.stringify(obj));
+}
+
 // ---------------- paths ----------------
 
 const variablesPath = path.resolve(__dirname, "..", "common", "variables.txt");
@@ -184,7 +200,7 @@ async function main() {
   try {
     const args = parseArgs({
       flags: { mcVersion: null },
-      boolFlags: ["migrate"],
+      boolFlags: ["migrate", "json"],
       positional: ["mcVersion"],
     });
 
@@ -207,6 +223,7 @@ async function main() {
 
     if (migrateOnly) {
       migrateDownloadedVersions(downloadedVersions, modsDir);
+      if (JSON_MODE) emitJson({ ok: true, migrated: true });
       return;
     }
 
@@ -215,9 +232,14 @@ async function main() {
 
     const { results } = await runCheckUpdates(version);
 
+    // Accumulated for the --json summary; ignored in human mode.
+    const updated = [];
+    const upToDate = [];
+
     for (const mod of results) {
       if (mod.status !== "update_available") {
         console.log(`No update available for: ${mod.slug}\n`);
+        upToDate.push(mod.slug);
         continue;
       }
 
@@ -259,11 +281,21 @@ async function main() {
         "utf8",
       );
       console.log(`Downloaded and installed: ${filename}\n`);
+      updated.push({
+        slug: mod.slug,
+        toVersionId: mod.latestVersionId,
+        filename,
+      });
     }
 
     console.log("Mod updates completed.");
+    if (JSON_MODE) emitJson({ ok: true, updated, upToDate, failed: [] });
   } catch (err) {
-    console.error("Error:", err.message);
+    if (JSON_MODE) {
+      emitJson({ ok: false, error: err.message, code: "error" });
+    } else {
+      console.error("Error:", err.message);
+    }
     process.exit(1);
   }
 }
