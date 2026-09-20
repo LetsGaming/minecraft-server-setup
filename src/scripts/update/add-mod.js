@@ -5,10 +5,11 @@
 // Required dependencies are installed automatically.
 //
 // Usage:
-//   node add-mod.js <slug-or-project-id> [--mcVersion=1.21.4] [--modLoader=fabric]
+//   node add-mod.js <slug-or-project-id> [--mcVersion=1.21.4] [--modLoader=fabric] [--versionId=abc123]
 //
 // mcVersion and modLoader fall back to the values in downloaded_versions.json
-// when not supplied.
+// when not supplied. versionId pins the install to that exact Modrinth
+// build instead of resolving the newest compatible one.
 
 const fs = require("fs");
 const path = require("path");
@@ -36,7 +37,7 @@ const downloadedVersionsPath = path.resolve(
 const { parseArgs } = require("./args");
 
 const cliArgs = parseArgs({
-  flags: { slug: null, mcVersion: null, modLoader: null },
+  flags: { slug: null, mcVersion: null, modLoader: null, versionId: null },
   positional: ["slug", "mcVersion", "modLoader"],
 });
 
@@ -194,10 +195,21 @@ async function fetchCompatibleVersion(projectId, mcVersion, modLoader) {
 }
 
 async function fetchVersion(versionId) {
-  const res = await axios.get(
-    `https://api.modrinth.com/v2/version/${versionId}`,
-  );
-  return res.data;
+  try {
+    const res = await axios.get(
+      `https://api.modrinth.com/v2/version/${versionId}`,
+    );
+    return res.data;
+  } catch (err) {
+    if (err.response?.status === 404) {
+      console.error(`Version not found on Modrinth: "${versionId}"`);
+    } else {
+      console.error(
+        `Modrinth API error: ${err.response?.data?.description ?? err.message}`,
+      );
+    }
+    process.exit(1);
+  }
 }
 
 // ── Core install logic ────────────────────────────────────────────────────────
@@ -213,6 +225,8 @@ async function fetchVersion(versionId) {
  * @param {string}  modsDir
  * @param {object}  downloadedVersions  Mutated in-place; caller must persist.
  * @param {string}  [indent=""]         Prefix for log lines (used for deps).
+ * @param {string}  [versionId]         Pin to this exact build instead of
+ *                                      resolving the newest compatible one.
  * @returns {object|null}  The Modrinth version object if freshly installed,
  *                         { filenameUpdated: true } if an existing null-filename
  *                         entry was patched, or null if already fully registered.
@@ -224,6 +238,7 @@ async function installMod(
   modsDir,
   downloadedVersions,
   indent = "",
+  versionId,
 ) {
   // Resolve canonical slug so we can key into downloadedVersions.mods
   const project = await resolveProject(slugOrId);
@@ -282,10 +297,14 @@ async function installMod(
     return { filenameUpdated: true };
   }
 
-  const version = await fetchCompatibleVersion(projectId, mcVersion, modLoader);
+  const version = versionId
+    ? await fetchVersion(versionId)
+    : await fetchCompatibleVersion(projectId, mcVersion, modLoader);
   if (!version) {
     console.error(
-      `${indent}No compatible version found for "${canonicalSlug}" (MC ${mcVersion}, ${modLoader}).`,
+      versionId
+        ? `${indent}Version "${versionId}" not found for "${canonicalSlug}".`
+        : `${indent}No compatible version found for "${canonicalSlug}" (MC ${mcVersion}, ${modLoader}).`,
     );
     process.exit(1);
   }
@@ -336,16 +355,20 @@ async function main() {
   const downloadedVersions = readVersionsFile();
   downloadedVersions.mods ??= {};
 
+  const versionId = cliArgs.get("versionId");
   const mcVersion = cliArgs.get("mcVersion") ?? downloadedVersions.gameVersion;
   const modLoader = cliArgs.get("modLoader") ?? downloadedVersions.modLoader;
 
-  if (!mcVersion) {
+  // versionId pins the exact build, so resolving by mcVersion/modLoader is
+  // skipped for the requested mod — but dependencies still need both to
+  // resolve their own compatible builds.
+  if (!versionId && !mcVersion) {
     console.error(
       "Minecraft version unknown. Pass --mcVersion=... or ensure gameVersion is set in downloaded_versions.json.",
     );
     process.exit(1);
   }
-  if (!modLoader) {
+  if (!versionId && !modLoader) {
     console.error(
       "Mod loader unknown. Pass --modLoader=... or ensure modLoader is set in downloaded_versions.json.",
     );
@@ -362,9 +385,10 @@ async function main() {
   fs.mkdirSync(modsDir, { recursive: true });
 
   console.log(`\nAdding mod: ${slug}`);
-  console.log(`  MC version : ${mcVersion}`);
-  console.log(`  Mod loader : ${modLoader}`);
+  console.log(`  MC version : ${mcVersion ?? "(pinned to versionId)"}`);
+  console.log(`  Mod loader : ${modLoader ?? "(pinned to versionId)"}`);
   console.log(`  Mods dir   : ${modsDir}\n`);
+  if (versionId) console.log(`  Version ID : ${versionId}\n`);
 
   // ── Install the requested mod ────────────────────────────────────────────────
   const version = await installMod(
@@ -373,6 +397,8 @@ async function main() {
     modLoader,
     modsDir,
     downloadedVersions,
+    "",
+    versionId,
   );
 
   if (!version) {
