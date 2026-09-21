@@ -1,4 +1,4 @@
-// scripts/update/args.js
+// scripts/update/lib/args.js
 //
 // Shared argument parser for all update scripts.
 //

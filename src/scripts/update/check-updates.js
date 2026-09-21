@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
-const { parseArgs } = require("./args");
+const { parseArgs } = require("./lib/args");
 
 // Usage:
 //   node check-updates.js [mcVersion] [--mcVersion=<ver>] [--json]

@@ -16,18 +16,26 @@ Create `/etc/sudoers.d/minecraft-management` with the following content.
 # need them at runtime, so they are deliberately NOT granted here. (SEC-03)
 
 # Game server instance(s) — add a line per instance if you have more than one
+# reset-failed: clears a unit's crash-loop-tripped `failed` state (see
+# StartLimitBurst in create_service.sh) so start/restart can recover from a
+# fixed problem without SSH. show: read-only, lets the health probe report
+# NRestarts/ActiveState so the bot can tell a crash loop from a clean outage.
+# Both are runtime actions, not setup ones — kept here per the note above.
 Cmnd_Alias MC_GAME_SERVER = \
     /usr/bin/systemctl start server.service, \
     /usr/bin/systemctl stop server.service, \
     /usr/bin/systemctl restart server.service, \
-    /usr/bin/systemctl status server.service
+    /usr/bin/systemctl status server.service, \
+    /usr/bin/systemctl reset-failed server.service, \
+    /usr/bin/systemctl show server.service *
 
 # Support services (api-server) — matched by prefix wildcard
 Cmnd_Alias MC_SUPPORT_SERVICES = \
     /usr/bin/systemctl start minecraft-server-*.service, \
     /usr/bin/systemctl stop minecraft-server-*.service, \
     /usr/bin/systemctl restart minecraft-server-*.service, \
-    /usr/bin/systemctl status minecraft-server-*.service
+    /usr/bin/systemctl status minecraft-server-*.service, \
+    /usr/bin/systemctl reset-failed minecraft-server-*.service
 
 # ── User grants ────────────────────────────────────────────────────────────────
 

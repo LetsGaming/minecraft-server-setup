@@ -34,7 +34,7 @@ const downloadedVersionsPath = path.resolve(
 //   slug       Modrinth slug or project ID — positional or --slug=.
 //   mcVersion  Target MC version. Falls back to downloaded_versions.json.
 //   modLoader  Mod loader (e.g. fabric). Falls back to downloaded_versions.json.
-const { parseArgs } = require("./args");
+const { parseArgs } = require("./lib/args");
 
 const cliArgs = parseArgs({
   flags: { slug: null, mcVersion: null, modLoader: null, versionId: null },

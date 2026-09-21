@@ -54,11 +54,22 @@ systemctl_cmd() {
   local extra_args=("${@:2}")
   local output
 
+  # A crash-looping server trips StartLimitBurst (see create_service.sh) and
+  # the unit lands in `failed` — systemd then refuses any further start until
+  # reset-failed clears it. Without this, restart/start from the dashboard
+  # would keep failing even after the underlying cause (e.g. a bad mod) is
+  # fixed, with no way to recover short of SSH. Best-effort and silent: a
+  # healthy unit has nothing to reset, and a sudoers gap here must not block
+  # the actual start/restart from at least being attempted.
+  if [[ "$action" == "start" || "$action" == "restart" ]]; then
+    sudo -n systemctl reset-failed "$service" >/dev/null 2>&1 || true
+  fi
+
   if ! output=$(sudo -n systemctl "$action" "${extra_args[@]}" "$service" 2>&1); then
     if echo "$output" | grep -qiE "password is required|not in the sudoers|authentication failure|a terminal is required"; then
       echo "[SUDO ERROR] Passwordless sudo is not configured for 'systemctl $action $service'." >&2
       echo "[SUDO ERROR] Required sudoers rule:" >&2
-      echo "[SUDO ERROR]   $USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl start $service, /usr/bin/systemctl stop $service, /usr/bin/systemctl restart $service, /usr/bin/systemctl enable $service" >&2
+      echo "[SUDO ERROR]   $USER ALL=(ALL) NOPASSWD: /usr/bin/systemctl start $service, /usr/bin/systemctl stop $service, /usr/bin/systemctl restart $service, /usr/bin/systemctl enable $service, /usr/bin/systemctl reset-failed $service" >&2
       echo "[SUDO ERROR] See docs/sudoers-setup.md for full instructions." >&2
       return 1
     fi

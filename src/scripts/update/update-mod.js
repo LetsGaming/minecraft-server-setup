@@ -10,7 +10,7 @@
 // dashboard's per-mod Update must touch exactly one mod, and add-mod.js refuses
 // an already-installed mod by design.
 
-const { parseArgs } = require("./args");
+const { parseArgs } = require("./lib/args");
 const { runUpdates, emitJson, failWith, JSON_MODE } = require("./update-mods.js");
 
 const cli = parseArgs({

@@ -14,10 +14,14 @@
 // dependency pulled in only for this mod cannot be identified offline. Nothing
 // is auto-removed; orphanedDependencies is reported empty, and the operator
 // decides. (Resolving true orphans needs Modrinth and belongs on the dashboard.)
+//
+// Also checks mods/disabled/ (see toggle-mod.js) — a disabled mod is still
+// "installed" as far as the manifest is concerned, so removing it must find
+// its jar wherever it currently sits, not just in mods/.
 
 const fs = require("fs");
 const path = require("path");
-const { parseArgs } = require("./args");
+const { parseArgs } = require("./lib/args");
 
 // ── Paths ─────────────────────────────────────────────────────────────────
 const variablesPath = path.resolve(__dirname, "..", "common", "variables.txt");
@@ -86,6 +90,7 @@ function escapeRegex(str) {
 
 /** Real jar files whose name carries this slug (for legacy null-filename entries). */
 function detectInstalledJars(modsDir, modSlug) {
+  if (!fs.existsSync(modsDir)) return [];
   const slugRegex = new RegExp(
     `(^|[-_.])${escapeRegex(modSlug)}([-.+_]|$).*\\.jar$`,
     "i",
@@ -112,6 +117,7 @@ function main() {
     fail("error", `Invalid SERVER_PATH: "${serverPath}"`);
   }
   const modsDir = path.join(serverPath, "mods");
+  const disabledDir = path.join(modsDir, "disabled");
 
   if (!fs.existsSync(downloadedVersionsPath)) {
     fail("manifest", "downloaded_versions.json not found.");
@@ -142,8 +148,12 @@ function main() {
     typeof entry === "string" ? null : (entry.filename ?? null);
 
   const toRemove = new Set();
-  if (recordedFilename) toRemove.add(path.join(modsDir, recordedFilename));
+  if (recordedFilename) {
+    toRemove.add(path.join(modsDir, recordedFilename));
+    toRemove.add(path.join(disabledDir, recordedFilename));
+  }
   for (const jar of detectInstalledJars(modsDir, key)) toRemove.add(jar);
+  for (const jar of detectInstalledJars(disabledDir, key)) toRemove.add(jar);
 
   let removedFile = null;
   for (const jarPath of toRemove) {

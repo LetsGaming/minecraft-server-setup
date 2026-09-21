@@ -17,7 +17,7 @@ const path = require("path");
 const readline = require("readline");
 const { spawn, execFile, execSync } = require("child_process");
 const axios = require("axios");
-const { parseArgs } = require("./args");
+const { parseArgs } = require("./lib/args");
 
 // Usage:
 //   node update-server.js [version] [--version=<ver>]

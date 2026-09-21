@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
 const axios = require("axios");
-const { parseArgs } = require("./args");
+const { parseArgs } = require("./lib/args");
 
 // Usage:
 //   node update-mods.js [mcVersion] [--mcVersion=<ver>] [--migrate]
@@ -211,6 +211,7 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
   }
 
   const modsDir = path.join(serverPath, "mods");
+  const disabledDir = path.join(modsDir, "disabled");
   fs.mkdirSync(modsDir, { recursive: true });
 
   const downloadedVersions = JSON.parse(
@@ -251,17 +252,27 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
       const filename = decodeURIComponent(
         path.basename(new URL(mod.downloadUrl).pathname),
       );
-      const targetPath = path.join(modsDir, filename);
+
+      // An update must not silently flip a disabled mod back on: the new jar
+      // goes into whichever directory the old one is currently sitting in
+      // (mods/ or mods/disabled/), and only that directory is searched for
+      // the old jar to remove. See toggle-mod.js for why state lives here.
+      const previous = downloadedVersions.mods[mod.slug];
+      const currentDir =
+        previous?.filename && fs.existsSync(path.join(disabledDir, previous.filename))
+          ? disabledDir
+          : modsDir;
+
+      const targetPath = path.join(currentDir, filename);
       const tempPath = `${targetPath}.tmp`;
 
       console.log(`Updating mod: ${mod.slug} to version ${mod.latestVersionId}`);
       await downloadFile(mod.downloadUrl, tempPath);
 
-      const previous = downloadedVersions.mods[mod.slug];
       if (previous?.filename) {
-        safeUnlink(path.join(modsDir, previous.filename));
+        safeUnlink(path.join(currentDir, previous.filename));
       } else {
-        for (const jar of detectInstalledJar(modsDir, mod.slug, filename)) {
+        for (const jar of detectInstalledJar(currentDir, mod.slug, filename)) {
           safeUnlink(jar.fullPath);
         }
       }
