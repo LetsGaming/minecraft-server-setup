@@ -19,7 +19,12 @@ fi
 
 mkdir -p "$LOGS_DIR"
 
-HOURLY_CMD="0 * * * * bash $RUN_BACKUP >> $LOGS_DIR/backup.log 2>&1"
+# Off :00 deliberately: the bot's hourly leaderboard snapshot and several
+# of its other hourly timers land on the hour boundary, and stacking this
+# backup's save-off/save-all RCON stall plus a CPU-saturating zstd -T0 on
+# top of that traffic is one of the causes behind the wrapper's periodic
+# unavailability. A mid-hour minute keeps it isolated from that boundary.
+HOURLY_CMD="20 * * * * bash $RUN_BACKUP >> $LOGS_DIR/backup.log 2>&1"
 
 # Existing crontab (empty if the user has none — crontab -l exits 1 then)
 existing="$(crontab -l 2>/dev/null || true)"

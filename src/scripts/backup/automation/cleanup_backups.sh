@@ -7,6 +7,19 @@ log() {
   echo "[$(date +'%F %T')] $*"
 }
 
+# See backup.sh's identical helper: de-prioritizes I/O-heavy commands
+# (du here) so cleanup does not compete with the game server or the API
+# wrapper for CPU/disk.
+nice_run() {
+  if command -v ionice &>/dev/null; then
+    ionice -c2 -n7 nice -n 10 "$@"
+  elif command -v nice &>/dev/null; then
+    nice -n 10 "$@"
+  else
+    "$@"
+  fi
+}
+
 log "Starting backup cleanup..."
 BACKUP_BASE="$BACKUPS_PATH"
 
@@ -57,7 +70,7 @@ enforce_storage_limit() {
 
   local max_bytes=$((MAX_STORAGE_GB * 1024 * 1024 * 1024))
   local current_bytes
-  current_bytes=$(du -sb "$BACKUP_BASE" | cut -f1)
+  current_bytes=$(nice_run du -sb "$BACKUP_BASE" | cut -f1)
 
   log "Current backup usage: $((current_bytes / 1024 / 1024)) MB (limit: ${MAX_STORAGE_GB} GB)"
   log "Used space: $((current_bytes * 100 / (MAX_STORAGE_GB * 1024 * 1024 * 1024)))%"
@@ -66,9 +79,14 @@ enforce_storage_limit() {
 
   mapfile -t all_backups < <(find "$BACKUP_BASE" -type f -name 'minecraft_backup_*.tar.*' -printf '%T@ %p\n' | sort -n | cut -d' ' -f2-)
   for file in "${all_backups[@]}"; do
+    # A file's own size, subtracted from the running total, tells us the
+    # same thing a fresh `du -sb "$BACKUP_BASE"` would — without a full
+    # recursive walk of the whole backups tree after every single deletion.
+    local file_bytes
+    file_bytes=$(stat -c%s "$file" 2>/dev/null || echo 0)
     log "Deleting (to free space): $file"
     rm -v "$file"
-    current_bytes=$(du -sb "$BACKUP_BASE" | cut -f1)
+    current_bytes=$((current_bytes - file_bytes))
     (( current_bytes <= max_bytes )) && break
   done
 }
