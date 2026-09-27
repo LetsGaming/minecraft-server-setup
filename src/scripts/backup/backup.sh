@@ -24,6 +24,21 @@ log() {
     echo "$(date +'%F %T') [$level] $*"
 }
 
+# Runs the given command de-prioritized (CPU niceness and, where supported,
+# I/O class) so the hourly backup does not compete on equal footing with the
+# game server or the API wrapper for the same CPU/disk. Falls back to plain
+# nice, then to running the command as-is, on a system missing either tool
+# rather than failing the backup over it.
+nice_run() {
+  if command -v ionice &>/dev/null; then
+    ionice -c2 -n7 nice -n 10 "$@"
+  elif command -v nice &>/dev/null; then
+    nice -n 10 "$@"
+  else
+    "$@"
+  fi
+}
+
 # ——— args ———
 ARCHIVE_MODE=false
 ARCHIVE_TYPE=""
@@ -127,7 +142,7 @@ mkdir -p "$TMP_DIR"
 # ——— rsync to the temporary directory ———
 log INFO "Syncing server data to temporary backup directory..."
 $DRY_RUN && log INFO "Dry run mode — no rsync performed"
-$DRY_RUN || rsync -a --inplace --numeric-ids "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$TMP_DIR" || {
+$DRY_RUN || nice_run rsync -a --inplace --numeric-ids "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$TMP_DIR" || {
     log ERROR "rsync failed"
     exit 1
 }
@@ -208,14 +223,14 @@ if ! $DRY_RUN; then
     ZSTD_OPTS+=("-$COMPRESSION_LEVEL" -o "$ARCHIVE_PATH")
   fi
 
-  tar "${TAR_OPTS[@]}" | zstd "${ZSTD_OPTS[@]}"
+  nice_run tar "${TAR_OPTS[@]}" | nice_run zstd "${ZSTD_OPTS[@]}"
   FINAL_ARCHIVE="$ARCHIVE_PATH"
 fi
 
 # ——— validate archive ———
 if ! $DRY_RUN; then
   log INFO "Validating archive..."
-  if ! zstd -t "$FINAL_ARCHIVE" &>/dev/null; then
+  if ! nice_run zstd -t "$FINAL_ARCHIVE" &>/dev/null; then
     send_message "Backup archive appears corrupted. Removing"
     log ERROR "Validation failed — corrupted archive removed"
     notify_error "backup_failed" "Backup archive was corrupted and removed."

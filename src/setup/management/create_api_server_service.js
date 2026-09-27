@@ -168,9 +168,19 @@ User=${currentUser}
 Group=${currentUser}
 WorkingDirectory=${API_SERVER_DIR}
 Environment="CONFIG_FILE=${API_SERVER_CONFIG}"
+# Default 4 is shared by every fs.readFile/stat/readdir this process makes;
+# a stats/backups/mods fan-out can starve /health's own filesystem read
+# behind it. Bounded server-side concurrency (see instances/*.ts) is the
+# real fix; this is cheap insurance on top of it.
+Environment="UV_THREADPOOL_SIZE=8"
 ExecStart=/usr/bin/node ${API_SERVER_ENTRY}
 Restart=on-failure
 RestartSec=5s
+# Unlike the PM2 deployment path this unit previously had no ceiling at
+# all, so a leak would grow until the OS OOM-killer intervened rather than
+# a clean, logged restart. 768M mirrors the PM2 ecosystem config's own
+# ceiling for consistency across deployment methods.
+MemoryMax=768M
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${TARGET_DIR_NAME}-api-server
