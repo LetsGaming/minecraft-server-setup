@@ -16,22 +16,6 @@ test_tier_relative_file_restores_world() {
   assert_exists "$T/server/.restored_dotfile" "archive dotfile extracted"
 }
 
-test_stale_dotfiles_survive_restore() {
-  setup
-  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
-  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
-  assert_exists "$T/server/.live_dotfile" "pre-existing dotfile is not removed by the glob"
-}
-
-test_corrupt_archive_wipes_world() {
-  setup
-  mkdir -p "$T/backups/hourly"
-  echo "not an archive" > "$T/backups/hourly/minecraft_backup_bad.tar.zst"
-  run_script "$RESTORE" --file minecraft_backup_bad.tar.zst --y
-  assert_nonzero "$RC" "corrupt archive fails"
-  assert_missing "$T/server/world" "world already deleted before the archive was read"
-}
-
 test_restore_proceeds_while_server_running() {
   setup
   server_running
@@ -153,6 +137,72 @@ test_ago_picks_closest_backup() {
   run_script "$RESTORE" --ago 5h --y
   assert_rc 0 "$RC" "--ago exits 0"
   assert_file_content "$T/server/world/level.dat" old "closest-to-5h archive chosen"
+}
+
+test_stale_dotfiles_are_replaced() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore exits 0"
+  assert_missing "$T/server/.live_dotfile" "dotfile absent from the archive is gone"
+  assert_exists "$T/server/.restored_dotfile" "dotfile from the archive is present"
+}
+
+test_no_staging_or_old_directories_remain() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "no server.restore-staging.* or server.pre-restore.* left"
+}
+
+test_corrupt_archive_leaves_world_untouched() {
+  setup
+  mkdir -p "$T/backups/hourly"
+  echo "not an archive" > "$T/backups/hourly/minecraft_backup_bad.tar.zst"
+  run_script "$RESTORE" --file minecraft_backup_bad.tar.zst --y
+  assert_nonzero "$RC" "corrupt archive fails"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  assert_exists "$T/server/.live_dotfile" "dotfiles untouched"
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "no staging directory left"
+}
+
+test_zstd_integrity_failure_leaves_world_untouched() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  export ZSTD_SHIM_FAIL_TEST=1
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_nonzero "$RC" "failed zstd -t aborts"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_extraction_failure_leaves_world_untouched() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  export TAR_SHIM_FAIL_EXTRACT=1
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_nonzero "$RC" "failed extraction aborts"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  assert_exists "$T/server/.live_dotfile" "dotfiles untouched"
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "staging directory cleaned up"
+}
+
+test_unsupported_extension_is_rejected_before_any_change() {
+  setup
+  mkdir -p "$T/backups/hourly"
+  echo x > "$T/backups/hourly/minecraft_backup_a.zip"
+  run_script "$RESTORE" --file minecraft_backup_a.zip --y
+  assert_nonzero "$RC" "unsupported format fails"
+  assert_contains "$OUT" "Unsupported backup file format" "says why"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_restore_into_missing_server_dir() {
+  setup
+  rm -rf "$T/server"
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore creates the server directory"
+  assert_file_content "$T/server/world/level.dat" restored "world restored"
 }
 
 run_tests

@@ -36,3 +36,65 @@ resolve_backup_file() {
 
   printf '%s\n' "$resolved"
 }
+
+# validate_archive <file>
+# Fails unless the whole archive decompresses and lists cleanly, so a corrupt
+# or truncated file is caught before anything on disk is touched.
+validate_archive() {
+  local file="$1"
+  case "$file" in
+    *.tar.zst)
+      zstd -t "$file" >/dev/null 2>&1 || { _ar_error "Archive failed zstd integrity test: $file"; return 1; }
+      ( set -o pipefail; zstd -d "$file" -c | tar -tf - >/dev/null ) 2>/dev/null \
+        || { _ar_error "Archive contents cannot be listed: $file"; return 1; }
+      ;;
+    *.tar.gz)
+      ( set -o pipefail; tar -tzf "$file" >/dev/null ) 2>/dev/null \
+        || { _ar_error "Archive contents cannot be listed: $file"; return 1; }
+      ;;
+    *)
+      _ar_error "Unsupported backup file format: $file"
+      return 1
+      ;;
+  esac
+}
+
+# extract_archive <file> <dest_dir>
+# Extracts into a fresh directory. On failure the partial directory is removed.
+extract_archive() {
+  local file="$1" dest="$2"
+  rm -rf -- "$dest"
+  mkdir -p -- "$dest" || return 1
+  case "$file" in
+    *.tar.zst) ( set -o pipefail; zstd -d "$file" -c | tar -xf - -C "$dest" ) ;;
+    *.tar.gz)  tar -xzf "$file" -C "$dest" ;;
+    *)         _ar_error "Unsupported backup file format: $file"; false ;;
+  esac || {
+    _ar_error "Extraction failed: $file"
+    rm -rf -- "$dest"
+    return 1
+  }
+}
+
+# swap_server_dir <staging_dir> <server_dir>
+# Replaces <server_dir> with <staging_dir> by renaming, so the server directory
+# is either the old contents or the new ones, never a half-written mix. If the
+# second rename fails the original is moved back. Both paths must live on the
+# same filesystem (the staging directory is created next to the server dir).
+swap_server_dir() {
+  local staging="$1" server="${2%/}" old
+  old="$server.pre-restore.$$"
+
+  if [[ -e "$server" ]]; then
+    chmod --reference="$server" -- "$staging" 2>/dev/null || true
+    mv -- "$server" "$old" || { _ar_error "Could not move the current server directory aside"; return 1; }
+  fi
+  if ! mv -- "$staging" "$server"; then
+    _ar_error "Could not move the restored files into place"
+    if [[ -e "$old" ]]; then
+      mv -- "$old" "$server" || _ar_error "Original server data is preserved at: $old"
+    fi
+    return 1
+  fi
+  rm -rf -- "$old"
+}

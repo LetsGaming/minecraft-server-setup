@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common/server_control.sh"
+source "$SCRIPT_DIR/common/archive_restore.sh"
 
 BACKUP_DIR="$BACKUPS_PATH/archives/update"
 SKIP_CONFIRMATION=false
@@ -59,7 +60,7 @@ echo "       Size: $(du -sh "$LATEST_BACKUP" | cut -f1)"
 echo
 echo "[WARN] This will:"
 echo "       1. Stop the server"
-echo "       2. Replace ALL server files in $SERVER_PATH"
+echo "       2. Replace ALL server files in $SERVER_PATH (only after the archive checks out)"
 echo "       3. Restart the server"
 
 if [[ "$SKIP_CONFIRMATION" != true ]]; then
@@ -67,26 +68,44 @@ if [[ "$SKIP_CONFIRMATION" != true ]]; then
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "[INFO] Rollback aborted."; exit 0; }
 fi
 
+# Check the archive before the server goes down: a bad archive must not cost
+# the players any downtime, let alone the world.
+echo "[INFO] Validating archive..."
+validate_archive "$LATEST_BACKUP" || exit 1
+
+restart_after_failure() {
+  echo "[WARN] Rollback failed; the server files were not changed. Starting the server again..."
+  systemctl_cmd start || echo "[WARN] Could not start the server. Start it manually."
+}
+
 # Stop the server
 echo "[INFO] Stopping server..."
 send_message "Server is rolling back to a previous version. Going down now." 2>/dev/null || true
 sleep 2
-sudo -n systemctl stop "$INSTANCE_NAME".service 2>/dev/null || true
-sleep 3
+if ! systemctl_cmd stop; then
+  echo "[ERROR] Could not stop $INSTANCE_NAME.service; aborting. Server files were not changed." >&2
+  exit 1
+fi
+for _ in $(seq 1 15); do
+  server_reachable || break
+  sleep 2
+done
+if server_reachable; then
+  echo "[ERROR] $INSTANCE_NAME is still running after stop; aborting. Server files were not changed." >&2
+  exit 1
+fi
 
 notify_warning "rollback_start" "Server $INSTANCE_NAME is rolling back to backup from $BACKUP_DATE"
 
-# Clear server directory
-echo "[INFO] Clearing server files..."
-# SC2115: ${SERVER_PATH:?} aborts if var is empty, preventing accidental rm -rf /*
-rm -rf "${SERVER_PATH:?}"/*
+# Extract next to the server directory and swap, so a failure leaves the
+# current files in place.
+STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
+trap 'rm -rf -- "$STAGING_DIR"' EXIT
 
-# Restore backup
 echo "[INFO] Restoring backup..."
-if [[ "$LATEST_BACKUP" == *.tar.gz ]]; then
-  tar -xzf "$LATEST_BACKUP" -C "$SERVER_PATH"
-elif [[ "$LATEST_BACKUP" == *.tar.zst ]]; then
-  zstd -d "$LATEST_BACKUP" -c | tar -xf - -C "$SERVER_PATH"
+if ! extract_archive "$LATEST_BACKUP" "$STAGING_DIR" || ! swap_server_dir "$STAGING_DIR" "$SERVER_PATH"; then
+  restart_after_failure
+  exit 1
 fi
 
 # Restart the server

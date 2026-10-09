@@ -96,26 +96,25 @@ fi
 
 echo "[INFO] Selected backup: $BACKUP_TO_RESTORE"
 
-if [ "$(ls -A "$SERVER_PATH")" ]; then
-    echo "[WARN] $SERVER_PATH is not empty and will be overwritten."
+echo "[INFO] Validating archive..."
+validate_archive "$BACKUP_TO_RESTORE" || exit 1
+
+if [[ -d "$SERVER_PATH" && -n "$(ls -A "$SERVER_PATH")" ]]; then
+    echo "[WARN] $SERVER_PATH is not empty and will be replaced."
     if [ "$SKIP_CONFIRMATION" = false ]; then
         read -rp "Continue with restore? (y/N): " confirm
         [[ "$confirm" =~ ^[Yy]$ ]] || { echo "[INFO] Restore aborted."; exit 0; }
     fi
 fi
 
-# SC2115: ${SERVER_PATH:?} aborts if var is empty, preventing accidental rm -rf /*
-rm -rf "${SERVER_PATH:?}"/*
-echo "[INFO] Restoring backup..."
+# The archive is unpacked next to the server directory and swapped in only
+# once extraction succeeded, so a failure leaves the current world untouched.
+STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
+trap 'rm -rf -- "$STAGING_DIR"' EXIT
 
-if [[ "$BACKUP_TO_RESTORE" == *.tar.gz ]]; then
-    tar -xvzf "$BACKUP_TO_RESTORE" -C "$SERVER_PATH"
-elif [[ "$BACKUP_TO_RESTORE" == *.tar.zst ]]; then
-    zstd -d "$BACKUP_TO_RESTORE" -c | tar -xvf - -C "$SERVER_PATH"
-else
-    echo "[ERROR] Unsupported backup file format: $BACKUP_TO_RESTORE"
-    exit 1
-fi
+echo "[INFO] Restoring backup..."
+extract_archive "$BACKUP_TO_RESTORE" "$STAGING_DIR" || exit 1
+swap_server_dir "$STAGING_DIR" "$SERVER_PATH" || exit 1
 
 echo "[INFO] Server data restored."
 
