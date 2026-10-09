@@ -4,13 +4,13 @@
 # Usage: source webhook.sh; notify "event_type" "message" ["title"]
 
 # Avoid re-sourcing
-if [[ -n "$_WEBHOOK_LOADED" ]]; then return 0 2>/dev/null || true; fi
+if [[ -n "${_WEBHOOK_LOADED:-}" ]]; then return 0 2>/dev/null || true; fi
 _WEBHOOK_LOADED=1
 
 _WEBHOOK_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load webhook config if not already loaded
-if [[ -z "$WEBHOOK_URL" ]]; then
+if [[ -z "${WEBHOOK_URL:-}" ]]; then
   if [[ -f "$_WEBHOOK_SCRIPT_DIR/variables.txt" ]]; then
     source "$_WEBHOOK_SCRIPT_DIR/variables.txt"
   fi
@@ -20,7 +20,7 @@ fi
 _event_enabled() {
   local event="$1"
   # If WEBHOOK_EVENTS is not set, all events are enabled
-  if [[ -z "$WEBHOOK_EVENTS" ]]; then
+  if [[ -z "${WEBHOOK_EVENTS:-}" ]]; then
     return 0
   fi
   echo "$WEBHOOK_EVENTS" | grep -qw "$event"
@@ -41,7 +41,7 @@ notify() {
   local color="${4:-3447003}" # Default: blue
 
   # Skip if no webhook URL configured
-  if [[ -z "$WEBHOOK_URL" || "$WEBHOOK_URL" == "none" ]]; then
+  if [[ -z "${WEBHOOK_URL:-}" || "${WEBHOOK_URL:-}" == "none" ]]; then
     return 0
   fi
 
