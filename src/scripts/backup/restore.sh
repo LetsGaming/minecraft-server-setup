@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../common/load_variables.sh"
+source "$SCRIPT_DIR/../common/archive_restore.sh"
 
 BASE_BACKUP_DIR="$BACKUPS_PATH"
 BACKUP_DIR="$BASE_BACKUP_DIR"
@@ -16,7 +17,8 @@ print_help() {
     echo ""
     echo "Options:"
     echo "  --y                   Skip confirmation prompt"
-    echo "  --file <filename>     Restore a specific backup file"
+    echo "  --file <path>         Restore a specific backup: an absolute path inside the backups"
+    echo "                        directory, or a name relative to hourly/ (archives/ with --archive)"
     echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '15m', '2d')"
     echo "  --archive             Restore from the archive folder instead of hourly snapshots"
     echo "  --help                Show this help message and exit"
@@ -40,11 +42,18 @@ normalize_relative_time() {
     fi
 }
 
+require_value() {
+    if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "$(date +'%F %T') [ERROR] $1 requires a value" >&2
+        exit 1
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --y) SKIP_CONFIRMATION=true; shift ;;
-        --file) SPECIFIC_BACKUP="$2"; shift 2 ;;
-        --ago) RELATIVE_TIME="$2"; shift 2 ;;
+        --file) require_value "$@"; SPECIFIC_BACKUP="$2"; shift 2 ;;
+        --ago) require_value "$@"; RELATIVE_TIME="$2"; shift 2 ;;
         --archive) FROM_ARCHIVE=true; shift ;;
         --help) print_help; exit 0 ;;
         *) echo "$(date +'%F %T') [ERROR] Unknown argument: $1" >&2; exit 1 ;;
@@ -66,12 +75,11 @@ find_closest_backup_by_time() {
     local target_ts="$1"
     find "$BACKUP_DIR" -maxdepth 2 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
         awk -v tgt="$target_ts" '{ diff = ($1 - tgt); if (diff < 0) diff = -diff; print diff, $0; }' |
-        sort -n | head -n1 | cut -d' ' -f2-
+        sort -n | head -n1 | cut -d' ' -f3-
 }
 
 if [[ -n "$SPECIFIC_BACKUP" ]]; then
-    BACKUP_TO_RESTORE="$BACKUP_DIR/$SPECIFIC_BACKUP"
-    [[ -e "$BACKUP_TO_RESTORE" ]] || { echo "[ERROR] Specified backup does not exist: $SPECIFIC_BACKUP"; exit 1; }
+    BACKUP_TO_RESTORE=$(resolve_backup_file "$SPECIFIC_BACKUP" "$BACKUP_DIR") || exit 1
 elif [[ -n "$RELATIVE_TIME" ]]; then
     HUMAN_TIME=$(normalize_relative_time "$RELATIVE_TIME") || {
         echo "[ERROR] Invalid time format for --ago: $RELATIVE_TIME"; exit 1;

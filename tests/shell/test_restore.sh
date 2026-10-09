@@ -16,15 +16,6 @@ test_tier_relative_file_restores_world() {
   assert_exists "$T/server/.restored_dotfile" "archive dotfile extracted"
 }
 
-test_absolute_file_is_rejected() {
-  setup
-  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
-  run_script "$RESTORE" --file "$T/backups/hourly/minecraft_backup_a.tar.zst" --y
-  assert_rc 1 "$RC" "absolute --file fails (the form the wrapper sends)"
-  assert_contains "$OUT" "Specified backup does not exist" "reports missing backup"
-  assert_file_content "$T/server/world/level.dat" current "server untouched"
-}
-
 test_stale_dotfiles_survive_restore() {
   setup
   make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
@@ -60,26 +51,108 @@ test_latest_backup_is_default() {
   assert_file_content "$T/server/world/level.dat" new "newest archive chosen"
 }
 
-test_file_without_value_fails_on_unbound_variable() {
-  setup
-  run_script "$RESTORE" --file
-  assert_nonzero "$RC" "--file with no value fails"
-  assert_contains "$OUT" "unbound variable" "failure is a bash unbound-variable error, not a usage message"
-}
-
 test_unknown_argument() {
   setup
   run_script "$RESTORE" --bogus
   assert_rc 1 "$RC" "unknown argument exits 1"
 }
 
-test_ago_never_resolves_a_backup() {
+test_absolute_file_inside_backups_root_restores() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file "$T/backups/hourly/minecraft_backup_a.tar.zst" --y
+  assert_rc 0 "$RC" "absolute --file (the form the wrapper sends) exits 0"
+  assert_file_content "$T/server/world/level.dat" restored "world replaced from archive"
+}
+
+test_absolute_file_in_other_tier_restores() {
+  setup
+  make_archive "$T/backups/archives/daily/minecraft_backup_a.tar.zst" daily
+  run_script "$RESTORE" --file "$T/backups/archives/daily/minecraft_backup_a.tar.zst" --y
+  assert_rc 0 "$RC" "absolute path in archives/<type> accepted"
+  assert_file_content "$T/server/world/level.dat" daily "world replaced from archive"
+}
+
+test_absolute_file_outside_backups_root_is_rejected() {
+  setup
+  make_archive "$T/elsewhere/minecraft_backup_a.tar.zst" evil
+  run_script "$RESTORE" --file "$T/elsewhere/minecraft_backup_a.tar.zst" --y
+  assert_rc 1 "$RC" "path outside the backups root exits 1"
+  assert_contains "$OUT" "outside the backups directory" "explains the rejection"
+  assert_file_content "$T/server/world/level.dat" current "server untouched"
+}
+
+test_symlink_escape_is_rejected() {
+  setup
+  make_archive "$T/elsewhere/minecraft_backup_a.tar.zst" evil
+  mkdir -p "$T/backups/hourly"
+  if ! ln -s "$T/elsewhere/minecraft_backup_a.tar.zst" "$T/backups/hourly/link.tar.zst" 2>/dev/null      || [[ ! -L "$T/backups/hourly/link.tar.zst" ]]; then
+    skip "symlink escape" "this host cannot create real symlinks"
+    return
+  fi
+  run_script "$RESTORE" --file "$T/backups/hourly/link.tar.zst" --y
+  assert_rc 1 "$RC" "symlink pointing outside the backups root exits 1"
+  run_script "$RESTORE" --file link.tar.zst --y
+  assert_rc 1 "$RC" "same via a tier-relative name"
+  assert_file_content "$T/server/world/level.dat" current "server untouched"
+}
+
+test_symlink_inside_backups_root_is_allowed() {
+  setup
+  make_archive "$T/backups/archives/update/minecraft_backup_a.tar.zst" snap
+  mkdir -p "$T/backups/archives"
+  if ! ln -s "$T/backups/archives/update/minecraft_backup_a.tar.zst" "$T/backups/archives/latest.tar.zst" 2>/dev/null      || [[ ! -L "$T/backups/archives/latest.tar.zst" ]]; then
+    skip "in-root symlink" "this host cannot create real symlinks"
+    return
+  fi
+  run_script "$RESTORE" --file "$T/backups/archives/latest.tar.zst" --y
+  assert_rc 0 "$RC" "symlink resolving inside the backups root is accepted"
+  assert_file_content "$T/server/world/level.dat" snap "world replaced from archive"
+}
+
+test_dotdot_is_rejected() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file "../hourly/minecraft_backup_a.tar.zst" --y
+  assert_rc 1 "$RC" "relative .. exits 1"
+  run_script "$RESTORE" --file "$T/backups/hourly/../hourly/minecraft_backup_a.tar.zst" --y
+  assert_rc 1 "$RC" "absolute path containing .. exits 1"
+  assert_contains "$OUT" "must not contain" "explains the rejection"
+  assert_file_content "$T/server/world/level.dat" current "server untouched"
+}
+
+test_directory_is_rejected() {
+  setup
+  mkdir -p "$T/backups/hourly/sub"
+  run_script "$RESTORE" --file "$T/backups/hourly/sub" --y
+  assert_rc 1 "$RC" "a directory is not a backup"
+}
+
+test_missing_file_is_rejected() {
+  setup
+  run_script "$RESTORE" --file nope.tar.zst --y
+  assert_rc 1 "$RC" "missing backup exits 1"
+  assert_contains "$OUT" "Specified backup does not exist" "reports missing backup"
+}
+
+test_file_without_value_is_a_usage_error() {
+  setup
+  run_script "$RESTORE" --file
+  assert_rc 1 "$RC" "--file with no value exits 1"
+  assert_contains "$OUT" "--file requires a value" "usage message"
+  assert_not_contains "$OUT" "unbound variable" "no bash error leaks"
+  run_script "$RESTORE" --ago
+  assert_contains "$OUT" "--ago requires a value" "same for --ago"
+}
+
+test_ago_picks_closest_backup() {
   setup
   make_archive "$T/backups/hourly/minecraft_backup_old.tar.zst" old
   touch -d "5 hours ago" "$T/backups/hourly/minecraft_backup_old.tar.zst"
+  make_archive "$T/backups/hourly/minecraft_backup_new.tar.zst" new
   run_script "$RESTORE" --ago 5h --y
-  assert_rc 1 "$RC" "--ago fails: the awk diff column is not stripped from the selected path"
-  assert_file_content "$T/server/world/level.dat" current "server untouched"
+  assert_rc 0 "$RC" "--ago exits 0"
+  assert_file_content "$T/server/world/level.dat" old "closest-to-5h archive chosen"
 }
 
 run_tests
