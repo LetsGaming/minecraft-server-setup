@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../common/load_variables.sh"
+source "$SCRIPT_DIR/../common/server_control.sh"
 source "$SCRIPT_DIR/../common/archive_restore.sh"
 
 BASE_BACKUP_DIR="$BACKUPS_PATH"
@@ -22,6 +22,8 @@ print_help() {
     echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '15m', '2d')"
     echo "  --archive             Restore from the archive folder instead of hourly snapshots"
     echo "  --help                Show this help message and exit"
+    echo ""
+    echo "The server must be stopped; the restore refuses to run (exit 3) while it is online."
 }
 
 normalize_relative_time() {
@@ -95,6 +97,13 @@ fi
 [[ -e "$BACKUP_TO_RESTORE" ]] || { echo "[ERROR] No suitable backup found."; exit 1; }
 
 echo "[INFO] Selected backup: $BACKUP_TO_RESTORE"
+
+# Replacing the world under a live server corrupts it, so a running server is
+# a hard stop. Stop the server first (or use rollback.sh, which does it).
+if server_reachable || session_running; then
+    echo "[ERROR] $INSTANCE_NAME is running. Stop the server before restoring." >&2
+    exit 3
+fi
 
 echo "[INFO] Validating archive..."
 validate_archive "$BACKUP_TO_RESTORE" || exit 1

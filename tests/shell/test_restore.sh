@@ -16,13 +16,22 @@ test_tier_relative_file_restores_world() {
   assert_exists "$T/server/.restored_dotfile" "archive dotfile extracted"
 }
 
-test_restore_proceeds_while_server_running() {
+test_restore_refuses_while_server_running() {
   setup
   server_running
   make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
   run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
-  assert_rc 0 "$RC" "no running-server check: restore succeeds on a live server"
-  assert_file_content "$T/server/world/level.dat" restored "live world overwritten"
+  assert_rc 3 "$RC" "exit 3 while the session is up"
+  assert_contains "$OUT" "is running" "tells the operator why"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "no staging directory created"
+}
+
+test_restore_runs_once_server_is_stopped() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "no session, restore proceeds"
 }
 
 test_latest_backup_is_default() {
