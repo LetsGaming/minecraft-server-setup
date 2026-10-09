@@ -1,0 +1,19 @@
+#!/bin/bash
+# cp-based stand-in: rsync [opts] SRC... DEST. Excludes are ignored.
+#   RSYNC_SHIM_FAIL=1  exit 23
+echo "rsync $*" >> "$SHIM_LOG"
+[[ "${RSYNC_SHIM_FAIL:-}" == 1 ]] && exit 23
+paths=()
+for a in "$@"; do
+  [[ "$a" == -* ]] || paths+=("$a")
+done
+dest="${paths[${#paths[@]}-1]}"
+mkdir -p "$dest"
+for ((i = 0; i < ${#paths[@]} - 1; i++)); do
+  src="${paths[$i]}"
+  if [[ "$src" == */ ]]; then
+    cp -a "$src." "$dest/"
+  else
+    cp -a "$src" "$dest/"
+  fi
+done

@@ -1,0 +1,23 @@
+#!/bin/bash
+# Wraps the real tar so tests can inject failures.
+#   TAR_SHIM_FAIL_CREATE=1   create mode emits a few bytes then exits 2 (a tar dying midway)
+#   TAR_SHIM_FAIL_EXTRACT=1  extract mode unpacks nothing useful and exits 2
+echo "tar $*" >> "$SHIM_LOG"
+mode=""
+for a in "$@"; do
+  case "$a" in
+    -c*|--create) mode=create ;;
+    -x*|--extract) mode=extract ;;
+    -t*|--list) mode=list ;;
+  esac
+  [[ -n "$mode" ]] && break
+done
+if [[ "$mode" == create && "${TAR_SHIM_FAIL_CREATE:-}" == 1 ]]; then
+  "$REAL_TAR" "$@" | head -c 512
+  exit 2
+fi
+if [[ "$mode" == extract && "${TAR_SHIM_FAIL_EXTRACT:-}" == 1 ]]; then
+  echo "tar: simulated extraction failure" >&2
+  exit 2
+fi
+exec "$REAL_TAR" "$@"

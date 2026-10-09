@@ -1,0 +1,11 @@
+#!/bin/bash
+echo "screen $*" >> "$SHIM_LOG"
+if [[ "$1" == "-list" ]]; then
+  if [[ -e "$SHIM_STATE/screen_running" ]]; then
+    printf 'There is a screen on:\n\t1234.%s\t(Detached)\n1 Socket in /run/screen.\n' "$INSTANCE_NAME"
+    exit 0
+  fi
+  echo "No Sockets found in /run/screen."
+  exit 1
+fi
+exit 0

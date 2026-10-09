@@ -1,0 +1,13 @@
+#!/bin/bash
+# Records calls and flips the fake screen session state.
+#   SYSTEMCTL_STOP_RC=N  exit status of `stop` (session stays up when non-zero)
+echo "systemctl $*" >> "$SHIM_LOG"
+case "$1" in
+  stop)
+    rc="${SYSTEMCTL_STOP_RC:-0}"
+    [[ "$rc" == 0 ]] && rm -f "$SHIM_STATE/screen_running"
+    exit "$rc"
+    ;;
+  start|restart) touch "$SHIM_STATE/screen_running" ;;
+esac
+exit 0

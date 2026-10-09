@@ -1,0 +1,25 @@
+#!/bin/bash
+# Stand-in for zstd that uses gzip as the container, so tests do not need the
+# real binary. Supports: -t FILE | -d FILE -c | compress stdin -o FILE.
+#   ZSTD_SHIM_FAIL_TEST=1  makes -t fail
+echo "zstd $*" >> "$SHIM_LOG"
+test_mode=false; decompress=false; out=""; in=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    -t) test_mode=true ;;
+    -d) decompress=true ;;
+    -o) i=$((i + 1)); out="${args[$i]}" ;;
+    -c|-T*|-N|-[0-9]|-[0-9][0-9]|-q|-f) ;;
+    -*) ;;
+    *) in="${args[$i]}" ;;
+  esac
+done
+if $test_mode; then
+  [[ "${ZSTD_SHIM_FAIL_TEST:-}" == 1 ]] && exit 1
+  gzip -t "$in"
+elif $decompress; then
+  gzip -dc "$in"
+else
+  if [[ -n "$out" ]]; then gzip -c > "$out"; else gzip -c; fi
+fi

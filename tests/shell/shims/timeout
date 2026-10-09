@@ -1,0 +1,3 @@
+#!/bin/bash
+# Prevents wait_for_server_ready from tailing a log for up to two minutes.
+exit 124

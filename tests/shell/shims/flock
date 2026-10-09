@@ -1,0 +1,5 @@
+#!/bin/bash
+# Non-blocking lock stand-in. FLOCK_SHIM_BUSY=1 simulates another holder.
+echo "flock $*" >> "$SHIM_LOG"
+[[ "${FLOCK_SHIM_BUSY:-}" == 1 ]] && exit 1
+exit 0
