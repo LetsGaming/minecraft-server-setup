@@ -30,6 +30,7 @@ test(
     assert.equal(out.ok, true);
     assert.equal(out.slug, "sodium");
     assert.equal(out.removedFile, "sodium-1.0.jar");
+    assert.deepEqual(Object.keys(out).sort(), ["ok", "removedFile", "slug"]);
     assert.equal(fs.existsSync(path.join(inst.mods, "sodium-1.0.jar")), false);
     assert.deepEqual(inst.readManifest().mods, {});
   }),

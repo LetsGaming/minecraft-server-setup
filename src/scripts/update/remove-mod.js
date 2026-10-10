@@ -126,7 +126,7 @@ function main() {
   console.log(`Removed "${key}" from downloaded_versions.json.`);
 
   if (JSON_MODE) {
-    emitJson({ ok: true, slug: key, removedFile, orphanedDependencies: [] });
+    emitJson({ ok: true, slug: key, removedFile });
   } else {
     console.log("Done.");
   }
