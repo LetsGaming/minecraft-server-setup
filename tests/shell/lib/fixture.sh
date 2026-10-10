@@ -48,7 +48,7 @@ VARS
   export INSTANCE_NAME=testinst
   export PATH="$T/bin:$PATH"
   unset TAR_SHIM_FAIL_CREATE TAR_SHIM_FAIL_EXTRACT TAR_SHIM_FAIL_LIST TAR_SHIM_START_SERVER ZSTD_SHIM_FAIL_TEST RSYNC_SHIM_FAIL \
-        SYSTEMCTL_STOP_RC FLOCK_SHIM_BUSY SCREEN_SHIM_SAVE_LOG SCREEN_SHIM_SESSION INSTANCE_LOCK_DIR DU_SHIM_BYTES CURL_SHIM_GATE
+        SYSTEMCTL_STOP_RC FLOCK_SHIM_BUSY SCREEN_SHIM_SAVE_LOG SCREEN_SHIM_SESSION INSTANCE_LOCK_DIR DU_SHIM_BYTES CURL_SHIM_GATE SYSTEMD_UNIT_DIR BACKUP_UMASK INSTALL_UNITS
 
   seed_world current
 }
@@ -75,6 +75,19 @@ make_archive() {
   echo "$label" > "$src/world/level.dat"
   echo "$label" > "$src/server.properties"
   echo "$label-dotfile" > "$src/.restored_dotfile"
+  mkdir -p "$(dirname "$dest")"
+  "$REAL_TAR" -cf - -C "$src" . | gzip -c > "$dest"
+  rm -rf "$src"
+}
+
+# make_archive_with_unit <dest.tar.zst> <label> <unit-name> <unit-text>: like
+# make_archive, plus a .mc-meta/systemd unit file.
+make_archive_with_unit() {
+  local dest="$1" label="$2" unit="$3" text="$4" src
+  src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world" "$src/.mc-meta/systemd"
+  echo "$label" > "$src/world/level.dat"
+  echo "$text" > "$src/.mc-meta/systemd/$unit"
   mkdir -p "$(dirname "$dest")"
   "$REAL_TAR" -cf - -C "$src" . | gzip -c > "$dest"
   rm -rf "$src"

@@ -114,6 +114,11 @@ else
   BACKUP_DIR="$BACKUP_BASE/hourly"
 fi
 
+# Archives hold variables.txt (API key, RCON password, webhook URL) and
+# api-server-config.json, so nothing this run creates is readable by other
+# users. Set BACKUP_UMASK to widen it when another account must read backups.
+umask "${BACKUP_UMASK:-077}"
+
 mkdir -p "$BACKUP_DIR" "$JAR_STORAGE"
 
 # ——— one backup per instance at a time ———

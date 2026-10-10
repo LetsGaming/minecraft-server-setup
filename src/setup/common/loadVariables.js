@@ -57,6 +57,11 @@ function loadVariables() {
     if (api.API_KEY !== undefined && typeof api.API_KEY !== 'string') {
       throw new Error('API_SERVER.API_KEY must be a string.');
     }
+    if (api.ENABLED && api.API_KEY && api.API_KEY.length < 32) {
+      throw new Error(
+        `API_SERVER.API_KEY is ${api.API_KEY.length} characters; the API wrapper refuses to start with fewer than 32. Generate one with: openssl rand -hex 32`,
+      );
+    }
   }
 
   // ── SERVER_CONTROL (optional) ──

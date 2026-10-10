@@ -241,4 +241,47 @@ test_restore_into_missing_server_dir() {
   assert_file_content "$T/server/world/level.dat" restored "world restored"
 }
 
+# ── systemd units from an archive ────────────────────────────────────────────
+
+unit_archive() { # unit text
+  make_archive_with_unit "$T/backups/archives/minecraft_backup_u.tar.zst" restored testinst.service "$1"
+  export SYSTEMD_UNIT_DIR="$T/units"
+  mkdir -p "$SYSTEMD_UNIT_DIR"
+}
+
+test_units_in_an_archive_are_not_installed_without_consent() {
+  setup
+  unit_archive "ExecStart=/bin/true"
+  run_script "$RESTORE" --archive --file minecraft_backup_u.tar.zst --y
+  assert_rc 0 "$RC" "restore itself succeeds"
+  assert_not_logged "sudo cp" "no unit copied with sudo"
+  assert_not_logged "daemon-reload" "no daemon-reload without an install"
+  assert_missing "$T/units/testinst.service" "nothing written to the unit directory"
+  assert_contains "$OUT" "NOT installed" "tells the operator the unit was skipped"
+  assert_contains "$OUT" "--install-units" "says how to install it"
+  assert_contains "$OUT" "ExecStart=/bin/true" "shows the unit that was skipped"
+}
+
+test_changed_unit_shows_a_diff_before_installing() {
+  setup
+  unit_archive "ExecStart=/bin/new"
+  echo "ExecStart=/bin/old" > "$T/units/testinst.service"
+  run_script "$RESTORE" --archive --file minecraft_backup_u.tar.zst --y --install-units
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_contains "$OUT" "-ExecStart=/bin/old" "diff shows the installed line"
+  assert_contains "$OUT" "+ExecStart=/bin/new" "diff shows the incoming line"
+  assert_logged "sudo cp" "installed after review with --install-units"
+  assert_logged "systemctl daemon-reload" "systemd reloaded after installing"
+}
+
+test_identical_unit_is_left_alone() {
+  setup
+  unit_archive "ExecStart=/bin/same"
+  echo "ExecStart=/bin/same" > "$T/units/testinst.service"
+  run_script "$RESTORE" --archive --file minecraft_backup_u.tar.zst --y --install-units
+  assert_contains "$OUT" "is unchanged" "unchanged unit reported"
+  assert_not_logged "sudo cp" "nothing copied"
+  assert_not_logged "daemon-reload" "no reload"
+}
+
 run_tests

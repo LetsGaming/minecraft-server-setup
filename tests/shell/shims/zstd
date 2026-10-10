@@ -3,6 +3,7 @@
 # real binary. Supports: -t FILE | -d FILE -c | compress stdin -o FILE.
 #   ZSTD_SHIM_FAIL_TEST=1  makes -t fail
 echo "zstd $*" >> "$SHIM_LOG"
+echo "zstd-umask $(umask)" >> "$SHIM_LOG"
 test_mode=false; decompress=false; out=""; in=""
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
