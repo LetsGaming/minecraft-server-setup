@@ -5,13 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common/server_control.sh"
 source "$SCRIPT_DIR/common/utils.sh"
 
-LOCK_FILE="/tmp/minecraft_maintenance.lock"
-if [ -e "$LOCK_FILE" ]; then
-    echo "Maintenance script already running (lock file $LOCK_FILE exists). Exiting."
-    exit 1
-fi
-trap 'rm -f "$LOCK_FILE"' EXIT
-touch "$LOCK_FILE"
+acquire_instance_lock "maintenance" || exit 1
 
 init_log_file "$SCRIPT_DIR/logs" "maintenance.log"
 
@@ -88,6 +82,7 @@ cleanup() {
         wait "$KICK_PID" 2>/dev/null || true
     fi
     log "INFO" "Maintenance script exited cleanly."
+    release_instance_lock
     restart_server
 }
 
@@ -115,7 +110,6 @@ handle_join_during_maintenance() {
 
 start_kick_monitor() {
     log "INFO" "Monitoring player joins to kick unauthorized users..."
-    # shellcheck disable=SC2153  # LOG_FILE is exported by the sourced common/server_control.sh, not a typo for LOCK_FILE
     on_player_join "$LOG_FILE" handle_join_during_maintenance
 }
 
