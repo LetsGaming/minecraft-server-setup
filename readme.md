@@ -159,6 +159,7 @@ Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhook
 | API keys, RCON passwords, `.env` | [docs/secrets-management.md](docs/secrets-management.md) |
 | sudo rules the scripts need | [docs/sudoers-setup.md](docs/sudoers-setup.md) |
 | Retiring the bundled web interface | [docs/retiring-web-interface.md](docs/retiring-web-interface.md) |
+| Bumping the API wrapper submodule | [docs/wrapper-submodule.md](docs/wrapper-submodule.md) |
 
 ## Upgrading to 4.0
 
