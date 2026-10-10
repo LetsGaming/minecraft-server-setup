@@ -4,13 +4,15 @@ const axios = require("axios");
 const { parseArgs } = require("./lib/args");
 
 // Usage:
-//   node check-updates.js [mcVersion] [--mcVersion=<ver>] [--json]
+//   node check-updates.js [mcVersion] [--mcVersion=<ver>] [--only=<slug>] [--json]
 //
 //   mcVersion  MC version to check against — positional or --mcVersion=.
 //              Falls back to gameVersion in downloaded_versions.json.
+//   --only     Check just this installed mod slug. A slug that is not installed
+//              is reported as invalid_entry.
 //   --json     Output results as a JSON blob instead of human-readable text.
 const args = parseArgs({
-  flags: { mcVersion: null },
+  flags: { mcVersion: null, only: null },
   boolFlags: ["json"],
   positional: ["mcVersion"],
 });
@@ -172,7 +174,19 @@ async function main() {
 
   const results = [];
 
-  for (const [slug, entry] of Object.entries(mods)) {
+  const only = args.get("only");
+  const entries = Object.entries(mods).filter(
+    ([slug]) => only === null || slug === only,
+  );
+  if (only !== null && entries.length === 0) {
+    results.push({
+      slug: only,
+      status: "invalid_entry",
+      message: "Mod is not installed",
+    });
+  }
+
+  for (const [slug, entry] of entries) {
     const currentVersionId = extractVersionId(entry);
     if (!currentVersionId) {
       results.push({

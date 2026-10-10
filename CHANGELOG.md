@@ -15,6 +15,7 @@ All notable changes to this project are documented here. The format follows
 - `common/webhook.sh`: `wait_for_notifications`.
 - `common/utils.sh`: `acquire_instance_lock` / `release_instance_lock`, a per-instance `flock` lock (with a `mkdir` fallback) in a private directory.
 - `update/lib/`: shared `variables.js`, `jars.js`, `json-mode.js` and `download.js`; `lib/args.js` honours a bare `--`.
+- `check-updates.js --only=<slug>` checks a single installed mod (default behaviour and JSON shape unchanged); the API wrapper uses it for live progress on the mod compatibility check.
 - `check-updates.js` reports `downloadSha512` for each available update.
 - `docs/sudoers-setup.md` documents the `node` grant the API wrapper's mod operations need and the `MC_BASH_PATH` / `MC_NODE_PATH` pinning.
 - `tests/js/`: Node tests for the update scripts (stubbed `axios`), run by `tests/shell/run.sh`.
