@@ -1,11 +1,11 @@
 const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
-const axios = require("axios");
 const { parseArgs } = require("./lib/args");
 const { loadVariables } = require("./lib/variables");
 const { detectInstalledJars } = require("./lib/jars");
 const { createJsonMode } = require("./lib/json-mode");
+const { safeFilenameFromUrl, downloadToTemp } = require("./lib/download");
 
 // Usage:
 //   node update-mods.js [mcVersion] [--mcVersion=<ver>] [--migrate]
@@ -124,22 +124,6 @@ function runCheckUpdates(version) {
   });
 }
 
-async function downloadFile(url, targetPath) {
-  const response = await axios({
-    url,
-    method: "GET",
-    responseType: "stream",
-    validateStatus: (s) => s >= 200 && s < 300,
-  });
-
-  return new Promise((resolve, reject) => {
-    const writer = fs.createWriteStream(targetPath);
-    response.data.pipe(writer);
-    writer.on("error", reject);
-    writer.on("close", resolve);
-  });
-}
-
 // ---------------- update runner ----------------
 
 /**
@@ -195,9 +179,7 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
     if (!mod.downloadUrl) continue;
 
     try {
-      const filename = decodeURIComponent(
-        path.basename(new URL(mod.downloadUrl).pathname),
-      );
+      const filename = safeFilenameFromUrl(mod.downloadUrl);
 
       // An update must not silently flip a disabled mod back on: the new jar
       // goes into whichever directory the old one is currently sitting in
@@ -213,7 +195,9 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
       const tempPath = `${targetPath}.tmp`;
 
       console.log(`Updating mod: ${mod.slug} to version ${mod.latestVersionId}`);
-      await downloadFile(mod.downloadUrl, tempPath);
+      await downloadToTemp(mod.downloadUrl, tempPath, {
+        sha512: mod.downloadSha512 || undefined,
+      });
 
       if (previous?.filename) {
         safeUnlink(path.join(currentDir, previous.filename));

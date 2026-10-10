@@ -115,6 +115,8 @@ async function checkModUpdate(slug, currentVersionId) {
     }
 
     const latestVersionId = latestVersion.id;
+    const latestFile =
+      latestVersion.files.find((f) => f.primary) ?? latestVersion.files[0];
 
     if (currentVersionId === latestVersionId) {
       if (!useJsonOutput) {
@@ -135,7 +137,7 @@ async function checkModUpdate(slug, currentVersionId) {
       console.log(`  Latest version ID : ${latestVersionId}`);
       console.log(`  Latest version name: ${latestVersion.name}`);
       console.log(`  Published on: ${latestVersion.date_published}`);
-      console.log(`  Download URL: ${latestVersion.files[0]?.url || "N/A"}`);
+      console.log(`  Download URL: ${latestFile?.url || "N/A"}`);
     }
 
     return {
@@ -145,7 +147,8 @@ async function checkModUpdate(slug, currentVersionId) {
       latestVersionId,
       latestVersionName: latestVersion.name,
       datePublished: latestVersion.date_published,
-      downloadUrl: latestVersion.files[0]?.url || null,
+      downloadUrl: latestFile?.url || null,
+      downloadSha512: latestFile?.hashes?.sha512 || null,
     };
   } catch (err) {
     const errMsg = err.response?.data || err.message;

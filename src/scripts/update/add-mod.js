@@ -37,6 +37,7 @@ const downloadedVersionsPath = path.resolve(
 const { parseArgs } = require("./lib/args");
 const { loadVariables } = require("./lib/variables");
 const { createJsonMode } = require("./lib/json-mode");
+const { safeFilenameFromUrl, downloadVerified } = require("./lib/download");
 
 const cliArgs = parseArgs({
   flags: { slug: null, mcVersion: null, modLoader: null, versionId: null },
@@ -100,29 +101,22 @@ function writeVersionsFile(data) {
   fs.renameSync(tmp, downloadedVersionsPath);
 }
 
-async function downloadFile(url, targetPath) {
-  const response = await axios({ url, method: "GET", responseType: "stream" });
-  const total = parseInt(response.headers["content-length"] || "0", 10);
-  let received = 0;
-
-  return new Promise((resolve, reject) => {
-    const writer = fs.createWriteStream(targetPath);
-
-    response.data.on("data", (chunk) => {
-      received += chunk.length;
-      if (total) {
-        const pct = ((received / total) * 100).toFixed(1);
-        process.stdout.write(`  Downloading... ${pct}%\r`);
-      }
-    });
-
-    response.data.pipe(writer);
-    writer.on("error", reject);
-    writer.on("close", () => {
-      if (total) process.stdout.write("\n");
-      resolve();
-    });
+/**
+ * Download a Modrinth file object to `targetPath`: through a temp file, size
+ * capped, and verified against the sha512 Modrinth publishes.
+ */
+async function downloadFile(file, targetPath) {
+  let announced = false;
+  await downloadVerified(file.url, targetPath, {
+    sha512: file.hashes?.sha512,
+    sha1: file.hashes?.sha1,
+    onProgress(received, total) {
+      if (!total) return;
+      announced = true;
+      process.stdout.write(`  Downloading... ${((received / total) * 100).toFixed(1)}%\r`);
+    },
   });
+  if (announced) process.stdout.write("\n");
 }
 
 // ── Modrinth API ──────────────────────────────────────────────────────────────
@@ -246,11 +240,8 @@ async function installMod(
       process.exit(1);
     }
 
-    const filename = decodeURIComponent(
-      path.basename(new URL(primaryFile.url).pathname),
-    );
+    const filename = safeFilenameFromUrl(primaryFile.url);
     const targetPath = path.join(modsDir, filename);
-    const tempPath = `${targetPath}.tmp`;
 
     console.log(`${indent}File      : ${filename}`);
 
@@ -258,8 +249,7 @@ async function installMod(
       console.log(`${indent}File already present in mods dir.`);
     } else {
       process.stdout.write(indent);
-      await downloadFile(primaryFile.url, tempPath);
-      fs.renameSync(tempPath, targetPath);
+      await downloadFile(primaryFile, targetPath);
       console.log(`${indent}Downloaded: ${filename}`);
     }
 
@@ -289,11 +279,8 @@ async function installMod(
     process.exit(1);
   }
 
-  const filename = decodeURIComponent(
-    path.basename(new URL(primaryFile.url).pathname),
-  );
+  const filename = safeFilenameFromUrl(primaryFile.url);
   const targetPath = path.join(modsDir, filename);
-  const tempPath = `${targetPath}.tmp`;
 
   console.log(`${indent}Version   : ${version.name} (${version.id})`);
   console.log(`${indent}File      : ${filename}`);
@@ -303,8 +290,7 @@ async function installMod(
     console.log(`${indent}File already present in mods dir — skipping download.`);
   } else {
     process.stdout.write(indent); // align the progress line with the rest
-    await downloadFile(primaryFile.url, tempPath);
-    fs.renameSync(tempPath, targetPath);
+    await downloadFile(primaryFile, targetPath);
     console.log(`${indent}Downloaded: ${filename}`);
   }
 

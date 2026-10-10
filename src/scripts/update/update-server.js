@@ -19,6 +19,7 @@ const { spawn, execFile, execSync } = require("child_process");
 const axios = require("axios");
 const { parseArgs } = require("./lib/args");
 const { loadVariables: readVariables } = require("./lib/variables");
+const { downloadVerified } = require("./lib/download");
 
 // Usage:
 //   node update-server.js [version] [--version=<ver>]
@@ -311,13 +312,12 @@ async function updateVanilla(versionId, metadataUrl, serverPath) {
   const meta = await axios.get(metadataUrl);
   const serverUrl = meta.data.downloads?.server?.url;
   if (!serverUrl) throw new Error(`No vanilla server jar for ${versionId}`);
-  const jarPath = path.join(serverPath, "server.jar");
-  const writer = fs.createWriteStream(jarPath);
-  const resp = await axios.get(serverUrl, { responseType: "stream" });
-  resp.data.pipe(writer);
-  await new Promise((res, rej) => {
-    writer.on("finish", res);
-    writer.on("error", rej);
+  const serverSha1 = meta.data.downloads.server.sha1;
+  if (!serverSha1) {
+    throw new Error(`Mojang published no sha1 for the ${versionId} server jar`);
+  }
+  await downloadVerified(serverUrl, path.join(serverPath, "server.jar"), {
+    sha1: serverSha1,
   });
   console.log("Vanilla server updated.");
 }
