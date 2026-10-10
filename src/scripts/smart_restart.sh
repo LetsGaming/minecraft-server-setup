@@ -30,6 +30,12 @@ EOF
   esac
 done
 
+if ! [[ "$WARN_TIME" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] --warn must be a whole number of seconds, got: $WARN_TIME"
+  exit 1
+fi
+WARN_TIME=$((10#$WARN_TIME))
+
 # ── Check if restart makes sense ──
 if ! server_reachable; then
   echo "[INFO] Server is not running. Nothing to restart."

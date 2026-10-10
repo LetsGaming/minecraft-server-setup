@@ -8,6 +8,7 @@ SCRIPTS_SRC="$(cd "$SHELL_TEST_DIR/../../src/scripts" && pwd)"
 
 # Resolved once, before any shim directory is put on PATH.
 export REAL_TAR="${REAL_TAR:-$(command -v tar)}"
+export REAL_DU="${REAL_DU:-$(command -v du)}"
 REAL_FLOCK="$(command -v flock || true)"
 
 make_fixture() {
@@ -16,7 +17,7 @@ make_fixture() {
   mkdir -p "$T/scripts" "$T/server/world" "$T/backups" "$T/bin" "$T/state"
 
   cp -r "$SCRIPTS_SRC/backup" "$SCRIPTS_SRC/common" "$T/scripts/"
-  cp "$SCRIPTS_SRC/rollback.sh" "$T/scripts/"
+  cp "$SCRIPTS_SRC"/*.sh "$T/scripts/"
 
   cat > "$T/scripts/common/variables.txt" <<VARS
 USER="tester"
@@ -47,7 +48,7 @@ VARS
   export INSTANCE_NAME=testinst
   export PATH="$T/bin:$PATH"
   unset TAR_SHIM_FAIL_CREATE TAR_SHIM_FAIL_EXTRACT TAR_SHIM_FAIL_LIST TAR_SHIM_START_SERVER ZSTD_SHIM_FAIL_TEST RSYNC_SHIM_FAIL \
-        SYSTEMCTL_STOP_RC FLOCK_SHIM_BUSY
+        SYSTEMCTL_STOP_RC FLOCK_SHIM_BUSY SCREEN_SHIM_SAVE_LOG SCREEN_SHIM_SESSION INSTANCE_LOCK_DIR DU_SHIM_BYTES
 
   seed_world current
 }
