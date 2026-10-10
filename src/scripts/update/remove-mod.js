@@ -12,8 +12,8 @@
 //
 // Dependency handling: the manifest does not record a dependency graph, so a
 // dependency pulled in only for this mod cannot be identified offline. Nothing
-// is auto-removed; orphanedDependencies is reported empty, and the operator
-// decides. (Resolving true orphans needs Modrinth and belongs on the dashboard.)
+// is auto-removed and no orphan list is reported; the operator decides.
+// (Resolving true orphans needs Modrinth and belongs on the dashboard.)
 //
 // Also checks mods/disabled/ (see toggle-mod.js) — a disabled mod is still
 // "installed" as far as the manifest is concerned, so removing it must find
