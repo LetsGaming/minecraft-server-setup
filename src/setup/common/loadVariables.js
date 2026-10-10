@@ -39,6 +39,9 @@ function loadVariables() {
       throw new Error(`BACKUPS.${key} must be a non-negative number.`);
     }
   }
+  if (backups.MAX_UPDATE_BACKUPS !== undefined && (typeof backups.MAX_UPDATE_BACKUPS !== "number" || backups.MAX_UPDATE_BACKUPS < 1)) {
+    throw new Error("BACKUPS.MAX_UPDATE_BACKUPS must be a positive number when set.");
+  }
 
   // ── API_SERVER (optional) ──
   if (data.API_SERVER) {

@@ -22,6 +22,39 @@ nice_run() {
 
 log "Starting backup cleanup..."
 BACKUP_BASE="$BACKUPS_PATH"
+MAX_UPDATE_BACKUPS="${MAX_UPDATE_BACKUPS:-5}"
+
+# Eviction order when the storage limit is exceeded: the cheapest-to-lose tier
+# first, oldest archive first within a tier. Monthly archives are the long-term
+# history and go last, so they are never evicted while any hourly, daily,
+# weekly or update archive remains.
+STORAGE_EVICTION_DIRS=(
+  "$BACKUP_BASE/hourly"
+  "$BACKUP_BASE/archives/daily"
+  "$BACKUP_BASE/archives/weekly"
+  "$BACKUP_BASE/archives/update"
+  "$BACKUP_BASE/archives/monthly"
+)
+
+# remove_file <path>: delete one archive or jar. A file that cannot be removed
+# is reported and skipped; one bad file must not abort the whole run (set -e)
+# or hide the rest of the cleanup.
+remove_file() {
+  if rm -v -- "$1"; then
+    return 0
+  fi
+  log "WARN: could not delete $1"
+  return 1
+}
+
+# list_archives <dir> [oldest-first]: archive paths in a tier directory,
+# newest first unless "oldest-first" is given.
+list_archives() {
+  local dir="$1" order="${2:-newest-first}" flags="-1t"
+  [[ "$order" == "oldest-first" ]] && flags="-1tr"
+  # shellcheck disable=SC2086  # $flags is one of two fixed literals
+  ls $flags "$dir"/minecraft_backup_*.tar.{gz,zst} 2>/dev/null || true
+}
 
 delete_old_archives() {
   local type="$1"
@@ -35,11 +68,11 @@ delete_old_archives() {
   }
 
   log "Checking $type backups in: $dir"
-  mapfile -t backups < <(ls -1t "$dir"/minecraft_backup_*.tar.{gz,zst} 2>/dev/null || true)
+  mapfile -t backups < <(list_archives "$dir")
   if (( ${#backups[@]} > max_value )); then
     for file in "${backups[@]:$max_value}"; do
       log "Deleting: $file"
-      rm -v "$file"
+      remove_file "$file" || true
     done
   else
     log "No $type backups to delete."
@@ -51,15 +84,54 @@ delete_old_hourly_backups() {
   local max="${MAX_HOURLY_BACKUPS:-3}"
 
   log "Checking hourly backups in: $dir"
-  mapfile -t snapshots < <(ls -1t "$dir"/minecraft_backup_*.tar.{gz,zst} 2>/dev/null || true)
+  mapfile -t snapshots < <(list_archives "$dir")
   if (( ${#snapshots[@]} > max )); then
     for file in "${snapshots[@]:$max}"; do
       log "Deleting old hourly backup: $file"
-      rm -v "$file"
+      remove_file "$file" || true
     done
   else
     log "No hourly backups to delete."
   fi
+}
+
+# Jars are stored once under jars/ and archives symlink to them (see
+# backup.sh), so a jar is only garbage once no remaining archive links to it.
+# Any archive that cannot be listed aborts the pruning: an unreadable archive
+# might be the one that references the jar. Jars younger than a day are kept so
+# a backup that has stored a jar but not yet finished its archive is safe.
+prune_orphan_jars() {
+  local jar_dir="$BACKUP_BASE/jars"
+  [[ -d "$jar_dir" ]] || return 0
+
+  log "Checking for orphaned jars in: $jar_dir"
+  declare -A referenced=()
+  local dir archive listing target
+  for dir in "${STORAGE_EVICTION_DIRS[@]}"; do
+    [[ "$dir" == "$BACKUP_BASE/archives/"* ]] || continue
+    while IFS= read -r archive; do
+      [[ -n "$archive" ]] || continue
+      if [[ "$archive" == *.tar.zst ]]; then
+        listing=$(zstd -d "$archive" -c 2>/dev/null | tar -tvf - 2>/dev/null) \
+          || { log "WARN: cannot list $archive; skipping jar pruning."; return 0; }
+      else
+        listing=$(tar -tvzf "$archive" 2>/dev/null) \
+          || { log "WARN: cannot list $archive; skipping jar pruning."; return 0; }
+      fi
+      while IFS= read -r target; do
+        [[ -n "$target" ]] && referenced["${target##*/}"]=1
+      done < <(printf '%s\n' "$listing" | sed -n 's/.* -> //p')
+    done < <(list_archives "$dir")
+  done
+
+  local jar removed=0
+  while IFS= read -r jar; do
+    [[ -n "$jar" ]] || continue
+    [[ -n "${referenced[${jar##*/}]:-}" ]] && continue
+    log "Deleting orphaned jar: $jar"
+    remove_file "$jar" && removed=$((removed + 1))
+  done < <(find "$jar_dir" -maxdepth 1 -type f -name '*.jar' -mmin +1440 2>/dev/null)
+  log "Removed $removed orphaned jar(s)."
 }
 
 enforce_storage_limit() {
@@ -77,18 +149,22 @@ enforce_storage_limit() {
 
   (( current_bytes <= max_bytes )) && return
 
-  mapfile -t all_backups < <(find "$BACKUP_BASE" -type f -name 'minecraft_backup_*.tar.*' -printf '%T@ %p\n' | sort -n | cut -d' ' -f2-)
-  for file in "${all_backups[@]}"; do
-    # A file's own size, subtracted from the running total, tells us the
-    # same thing a fresh `du -sb "$BACKUP_BASE"` would — without a full
-    # recursive walk of the whole backups tree after every single deletion.
-    local file_bytes
-    file_bytes=$(stat -c%s "$file" 2>/dev/null || echo 0)
-    log "Deleting (to free space): $file"
-    rm -v "$file"
-    current_bytes=$((current_bytes - file_bytes))
-    (( current_bytes <= max_bytes )) && break
+  local dir file file_bytes
+  for dir in "${STORAGE_EVICTION_DIRS[@]}"; do
+    while IFS= read -r file; do
+      [[ -n "$file" ]] || continue
+      # A file's own size, subtracted from the running total, tells us the
+      # same thing a fresh `du -sb "$BACKUP_BASE"` would, without a full
+      # recursive walk of the whole backups tree after every single deletion.
+      file_bytes=$(stat -c%s "$file" 2>/dev/null || echo 0)
+      log "Deleting (to free space): $file"
+      remove_file "$file" || continue
+      current_bytes=$((current_bytes - file_bytes))
+      (( current_bytes <= max_bytes )) && return
+    done < <(list_archives "$dir" oldest-first)
   done
+
+  log "WARN: still above the ${MAX_STORAGE_GB} GB limit after evicting every archive."
 }
 
 # Apply policies
@@ -96,6 +172,8 @@ delete_old_hourly_backups
 delete_old_archives "daily"   "MAX_DAILY_BACKUPS"
 delete_old_archives "weekly"  "MAX_WEEKLY_BACKUPS"
 delete_old_archives "monthly" "MAX_MONTHLY_BACKUPS"
+delete_old_archives "update"  "MAX_UPDATE_BACKUPS"
+prune_orphan_jars
 enforce_storage_limit
 
 log "Backup cleanup complete."
