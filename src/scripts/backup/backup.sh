@@ -329,3 +329,5 @@ if ! $DRY_RUN; then
 else
   log INFO "(dry-run) No backup written."
 fi
+
+wait_for_notifications

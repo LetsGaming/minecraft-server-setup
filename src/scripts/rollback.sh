@@ -126,3 +126,5 @@ notify_success "rollback_complete" "Server $INSTANCE_NAME has been rolled back t
 
 # Wait for it to come up
 wait_for_server_ready 120 || echo "[WARN] Server may still be starting. Check logs."
+
+wait_for_notifications

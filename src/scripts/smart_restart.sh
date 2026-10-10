@@ -51,6 +51,7 @@ if [[ "$PLAYER_COUNT" -eq 0 && "$FORCE" != true && "$RESTART_SKIP_IF_EMPTY" == "
   echo "[INFO] Server restarted."
   notify_success "server_restart" "Server $INSTANCE_NAME restarted (no players online)."
   wait_for_server_ready 120 || true
+  wait_for_notifications
   exit 0
 fi
 
@@ -75,3 +76,4 @@ systemctl_cmd restart
 echo "[INFO] Server restarted."
 notify_success "server_restart" "Server $INSTANCE_NAME restarted ($PLAYER_COUNT players were online)."
 wait_for_server_ready 120 || true
+wait_for_notifications
