@@ -1,0 +1,8 @@
+#!/bin/bash
+# DU_SHIM_BYTES=N reports N bytes for `du -sb`; without it, defers to the real du.
+echo "du $*" >> "$SHIM_LOG"
+if [[ -n "${DU_SHIM_BYTES:-}" ]]; then
+  printf '%s\t%s\n' "$DU_SHIM_BYTES" "${*: -1}"
+  exit 0
+fi
+exec "$REAL_DU" "$@"

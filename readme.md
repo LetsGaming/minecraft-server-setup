@@ -70,7 +70,7 @@ Edit [`variables.json`](./variables.json) — all settings are in one file:
   "API_SERVER": {
     "ENABLED": false,                 // true = set up the minecraft-bot API wrapper
     "PORT": 3000,                     // Port the wrapper listens on
-    "API_KEY": ""                     // Shared secret — must match apiKey in the bot's config.json
+    "API_KEY": ""                     // Shared secret, at least 32 characters (openssl rand -hex 32). Must match apiKey in the bot's config.json
   },
 
   "BACKUPS": { ... },

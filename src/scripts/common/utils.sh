@@ -7,6 +7,73 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
+_UTILS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── Per-instance script lock ──
+
+_have_flock() { command -v flock > /dev/null 2>&1; }
+
+# acquire_instance_lock <name>
+# Takes an exclusive lock for <name> on this instance and keeps it until the
+# process exits. Returns 1 when another run already holds it.
+#
+# The lock lives in a private directory (INSTANCE_LOCK_DIR, else the runtime
+# dir, else scripts/.locks), never directly in the world-writable /tmp where
+# another local user could squat the path. With flock the lock dies with the
+# process, so no cleanup trap is needed and an overridden EXIT trap cannot
+# strand it. Without flock a mkdir lock is used; such a lock is only released
+# by release_instance_lock, so a script that installs its own EXIT trap must
+# call that from it.
+_INSTANCE_LOCK_DIR_HELD=""
+
+acquire_instance_lock() {
+  local name="$1"
+  local dir="${INSTANCE_LOCK_DIR:-}"
+  if [[ -z "$dir" ]]; then
+    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+      dir="$XDG_RUNTIME_DIR/minecraft"
+    else
+      dir="$_UTILS_DIR/../.locks"
+    fi
+  fi
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2> /dev/null || true
+
+  local lock="$dir/${name}_${INSTANCE_NAME:-default}.lock"
+
+  if _have_flock; then
+    exec 8> "$lock"
+    if ! flock -n 8; then
+      echo "$name is already running for ${INSTANCE_NAME:-this instance} (lock $lock). Exiting."
+      return 1
+    fi
+    return 0
+  fi
+
+  local held="$lock.d"
+  if ! mkdir "$held" 2> /dev/null; then
+    local other
+    other="$(cat "$held/pid" 2> /dev/null || true)"
+    if [[ -n "$other" ]] && kill -0 "$other" 2> /dev/null; then
+      echo "$name is already running for ${INSTANCE_NAME:-this instance} (pid $other). Exiting."
+      return 1
+    fi
+    rm -rf "$held"
+    mkdir "$held" 2> /dev/null || return 1
+  fi
+  echo "$$" > "$held/pid"
+  _INSTANCE_LOCK_DIR_HELD="$held"
+  trap release_instance_lock EXIT
+  return 0
+}
+
+release_instance_lock() {
+  if [[ -n "$_INSTANCE_LOCK_DIR_HELD" ]]; then
+    rm -rf "$_INSTANCE_LOCK_DIR_HELD"
+    _INSTANCE_LOCK_DIR_HELD=""
+  fi
+}
+
 # Logging setup
 log_file_path=""
 

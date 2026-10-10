@@ -11,6 +11,8 @@ SKIP_CONFIRMATION=false
 SPECIFIC_BACKUP=""
 RELATIVE_TIME=""
 FROM_ARCHIVE=false
+INSTALL_UNITS=false
+SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 
 print_help() {
     echo "Usage: $0 [options]"
@@ -21,9 +23,50 @@ print_help() {
     echo "                        directory, or a name relative to hourly/ (archives/ with --archive)"
     echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '15m', '2d')"
     echo "  --archive             Restore from the archive folder instead of hourly snapshots"
+    echo "  --install-units       Install the systemd units stored in an archive (with sudo) after"
+    echo "                        showing what changes. Without it, units are installed only after"
+    echo "                        an interactive confirmation, and skipped when run non-interactively."
     echo "  --help                Show this help message and exit"
     echo ""
     echo "The server must be stopped; the restore refuses to run (exit 3) while it is online."
+}
+
+# review_and_install_unit <unit-file> <unit-name>
+# Units run as root once enabled, so one from an archive is never copied in
+# silently: show how it differs from the installed unit, then install only on
+# --install-units or an interactive "y". Returns 0 only when it was installed.
+review_and_install_unit() {
+    local src="$1" name="$2" dest="$SYSTEMD_UNIT_DIR/$2"
+
+    if [[ -f "$dest" ]]; then
+        if cmp -s "$src" "$dest"; then
+            echo "[INFO]   = $name is unchanged"
+            return 1
+        fi
+        echo "[INFO]   $name differs from the installed unit:"
+        diff -u "$dest" "$src" | sed 's/^/           /' || true
+    else
+        echo "[INFO]   $name is not installed yet. Contents:"
+        sed 's/^/           | /' "$src"
+    fi
+
+    local approved=false answer
+    if $INSTALL_UNITS; then
+        approved=true
+    elif [[ -t 0 ]]; then
+        read -rp "Install $name into $SYSTEMD_UNIT_DIR? (y/N): " answer
+        [[ "$answer" =~ ^[Yy]$ ]] && approved=true
+    fi
+
+    if ! $approved; then
+        echo "[WARN]   ✗ $name NOT installed. Review it, then rerun with --install-units or copy it yourself."
+        return 1
+    fi
+
+    sudo cp "$src" "$dest"
+    sudo chmod 644 "$dest"
+    echo "[INFO]   ✓ $dest"
+    return 0
 }
 
 normalize_relative_time() {
@@ -57,6 +100,7 @@ while [[ $# -gt 0 ]]; do
         --file) require_value "$@"; SPECIFIC_BACKUP="$2"; shift 2 ;;
         --ago) require_value "$@"; RELATIVE_TIME="$2"; shift 2 ;;
         --archive) FROM_ARCHIVE=true; shift ;;
+        --install-units) INSTALL_UNITS=true; shift ;;
         --help) print_help; exit 0 ;;
         *) echo "$(date +'%F %T') [ERROR] Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -156,6 +200,7 @@ if [[ -d "$META_DIR" ]]; then
   fi
 
   # 2. Systemd service files
+  units_installed=false
   if [[ -d "$META_DIR/systemd" ]] && compgen -G "$META_DIR/systemd/*.service" > /dev/null 2>&1; then
     for svc_file in "$META_DIR/systemd/"*.service; do
       [[ -f "$svc_file" ]] || continue
@@ -167,18 +212,21 @@ if [[ -d "$META_DIR" ]]; then
         echo "[INFO]   — skipped $svc_name (the web interface was retired)"
         continue
       fi
-      sudo cp "$svc_file" "/etc/systemd/system/$svc_name"
-      sudo chmod 644 "/etc/systemd/system/$svc_name"
-      echo "[INFO]   ✓ /etc/systemd/system/$svc_name"
+      if review_and_install_unit "$svc_file" "$svc_name"; then
+        units_installed=true
+      fi
     done
-    sudo systemctl daemon-reload
-    echo "[INFO]   ✓ systemctl daemon-reload"
+    if $units_installed; then
+      sudo systemctl daemon-reload
+      echo "[INFO]   ✓ systemctl daemon-reload"
+    fi
   fi
 
   # 3. api-server-config.json
   if [[ -f "$META_DIR/api-server-config.json" ]]; then
     mkdir -p "$BASE_DIR/api-server"
     cp "$META_DIR/api-server-config.json" "$BASE_DIR/api-server/api-server-config.json"
+    chmod 600 "$BASE_DIR/api-server/api-server-config.json"
     echo "[INFO]   ✓ api-server-config.json"
   fi
 
@@ -187,7 +235,7 @@ if [[ -d "$META_DIR" ]]; then
 
   echo "[INFO] Metadata restore complete."
   echo ""
-  echo "[INFO] Services have been installed but not started."
+  echo "[INFO] Services are never started by a restore."
   echo "[INFO] Review the restored config, then start manually:"
   echo "         sudo systemctl enable --now ${INSTANCE_NAME}.service"
   echo "         sudo systemctl enable --now ${TARGET_DIR_NAME}-api-server.service"

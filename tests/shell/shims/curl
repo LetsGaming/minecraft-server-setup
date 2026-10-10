@@ -1,0 +1,12 @@
+#!/bin/bash
+# Records its arguments and, for `--config -`, the config text read from stdin.
+#   CURL_SHIM_GATE=1  blocks until $SHIM_STATE/curl_go exists, then writes $SHIM_STATE/curl_done
+echo "curl $*" >> "$SHIM_LOG"
+for a in "$@"; do
+  if [[ "$a" == "-" ]]; then cat > "$SHIM_STATE/curl_stdin"; fi
+done
+if [[ "${CURL_SHIM_GATE:-}" == 1 ]]; then
+  while [[ ! -e "$SHIM_STATE/curl_go" ]]; do :; done
+fi
+touch "$SHIM_STATE/curl_done"
+exit 0

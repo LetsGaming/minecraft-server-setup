@@ -188,4 +188,18 @@ test_run_backup_skips_quietly_when_locked() {
   assert_contains "$OUT" "Another backup is running" "logs the skip"
 }
 
+test_backup_creates_archives_private_by_default() {
+  setup
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "backup exits 0"
+  assert_logged "zstd-umask 0077" "archive is written under umask 077"
+}
+
+test_backup_umask_can_be_widened_explicitly() {
+  setup
+  export BACKUP_UMASK=027
+  run_script "$BACKUP"
+  assert_logged "zstd-umask 0027" "BACKUP_UMASK is honoured"
+}
+
 run_tests

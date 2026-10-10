@@ -15,6 +15,7 @@
 const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("./lib/args");
+const { createJsonMode } = require("./lib/json-mode");
 const { resolveDirs, readManifest, resolveEntry, locateJar } = require("./lib/toggle-mod-common");
 
 const cliArgs = parseArgs({
@@ -24,14 +25,8 @@ const cliArgs = parseArgs({
 });
 
 const JSON_MODE = cliArgs.bool("json");
-const _realLog = console.log.bind(console);
-if (JSON_MODE) {
-  console.log = () => {};
-  console.error = () => {};
-}
-function emitJson(obj) {
-  _realLog(JSON.stringify(obj));
-}
+const jsonMode = createJsonMode(JSON_MODE);
+const emitJson = jsonMode.emit;
 function fail(code, message) {
   if (JSON_MODE) {
     emitJson({ ok: false, error: message, code });

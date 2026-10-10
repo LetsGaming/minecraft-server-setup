@@ -94,11 +94,30 @@ notify() {
     return 0
   fi
 
-  # Send async (don't block the caller)
-  curl -s -o /dev/null -X POST \
+  # Send async (don't block the caller). The URL is a secret (Discord webhook
+  # tokens live in the path), so it goes to curl as a config line on stdin and
+  # never appears in the process list. --max-time bounds how long a dead
+  # endpoint can hold the request, -f turns an HTTP error into a non-zero exit.
+  # Callers that are about to exit should run wait_for_notifications first.
+  local url_escaped=${WEBHOOK_URL//\\/\\\\}
+  url_escaped=${url_escaped//\"/\\\"}
+  printf 'url = "%s"\n' "$url_escaped" | curl -sS -f -o /dev/null -X POST \
+    --connect-timeout 5 --max-time 10 \
     -H "Content-Type: application/json" \
     -d "$payload" \
-    "$WEBHOOK_URL" &
+    --config - 2> /dev/null &
+  _WEBHOOK_PIDS+=("$!")
+}
+
+_WEBHOOK_PIDS=()
+
+# Wait for in-flight notifications (each is bounded by curl's --max-time).
+wait_for_notifications() {
+  local pid
+  for pid in "${_WEBHOOK_PIDS[@]}"; do
+    wait "$pid" 2> /dev/null || true
+  done
+  _WEBHOOK_PIDS=()
 }
 
 # Convenience wrappers
