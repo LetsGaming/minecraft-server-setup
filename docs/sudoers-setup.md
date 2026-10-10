@@ -129,7 +129,7 @@ If either command asks for a password, the sudoers entry is not applied correctl
 
 ## Principle of least privilege
 
-- Only the four runtime actions (`start`/`stop`/`restart`/`status`) are granted. `enable`, `disable`, `daemon-reload`, and unit-file creation are **setup-time** operations performed by an admin's own sudo — they are intentionally not granted to the app user (SEC-03).
+- Only the runtime actions (`start`/`stop`/`restart`/`status`, plus `reset-failed` and the read-only `show`) are granted. `enable`, `disable`, `daemon-reload`, and unit-file creation are **setup-time** operations performed by an admin's own sudo. They are intentionally not granted to the app user (SEC-03).
 - The `*/scripts/*/*` pattern restricts script execution to files inside an instance's `scripts/` directory. **Those directories must be owned by `minecraft` and not writable by `mcbot`** — otherwise the app user could drop a script there and run it as `minecraft`. Pin the path to the exact instance directory where you can.
 - Never grant `ALL=(minecraft) NOPASSWD: ALL` — that gives unlimited shell access as the MC user.
 - Never grant a `mv`/`cp`/`tee` from a world-writable location (e.g. `/tmp`) into `/etc/systemd/system/` — that is an arbitrary-root-unit install. Write unit files straight to their final path (the setup scripts now do this).
