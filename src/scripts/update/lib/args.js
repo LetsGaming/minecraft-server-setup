@@ -14,6 +14,9 @@
 //     positional: ['firstArgName', 'secondArgName'],      // ordered positional names
 //   }
 //
+// A bare `--` ends option parsing: everything after it is positional, so a
+// value that starts with `-` can never be read as a flag.
+//
 // Resolution order: --flag=value > positional > default
 
 /**
@@ -33,8 +36,11 @@ function parseArgs(spec = {}) {
   const parsedBools = {};
   const positionalValues = [];
 
+  let optionsEnded = false;
   for (const arg of raw) {
-    if (arg.startsWith("--")) {
+    if (!optionsEnded && arg === "--") {
+      optionsEnded = true;
+    } else if (!optionsEnded && arg.startsWith("--")) {
       const eqIdx = arg.indexOf("=");
       if (eqIdx !== -1) {
         const key = arg.slice(2, eqIdx);

@@ -43,3 +43,21 @@ test("extra positionals are exposed", () => {
     assert.deepEqual(parseArgs({ positional: ["first"] }).extra, ["b", "c"]);
   });
 });
+
+test("a bare -- ends option parsing", () => {
+  withArgv(["--json", "--", "--json", "--help", "-x"], () => {
+    const a = parseArgs({ boolFlags: ["json", "help"], positional: ["slug"] });
+    assert.equal(a.bool("json"), true);
+    assert.equal(a.bool("help"), false);
+    assert.equal(a.get("slug"), "--json");
+    assert.deepEqual(a.extra, ["--help", "-x"]);
+  });
+});
+
+test("flags before -- still apply when a positional follows", () => {
+  withArgv(["--mcVersion=1.21", "--", "sodium"], () => {
+    const a = parseArgs({ positional: ["slug"], flags: { mcVersion: null } });
+    assert.equal(a.get("slug"), "sodium");
+    assert.equal(a.get("mcVersion"), "1.21");
+  });
+});
