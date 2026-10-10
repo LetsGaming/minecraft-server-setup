@@ -2,6 +2,8 @@
 # Wraps the real tar so tests can inject failures.
 #   TAR_SHIM_FAIL_CREATE=1   create mode emits a few bytes then exits 2 (a tar dying midway)
 #   TAR_SHIM_FAIL_EXTRACT=1  extract mode unpacks nothing useful and exits 2
+#   TAR_SHIM_FAIL_LIST=1     list mode exits 2
+#   TAR_SHIM_START_SERVER=1  extract mode marks the fake server as running (a start racing the restore)
 echo "tar $*" >> "$SHIM_LOG"
 mode=""
 for a in "$@"; do
@@ -16,8 +18,15 @@ if [[ "$mode" == create && "${TAR_SHIM_FAIL_CREATE:-}" == 1 ]]; then
   "$REAL_TAR" "$@" | head -c 512
   exit 2
 fi
+if [[ "$mode" == extract && "${TAR_SHIM_START_SERVER:-}" == 1 ]]; then
+  touch "$SHIM_STATE/screen_running"
+fi
 if [[ "$mode" == extract && "${TAR_SHIM_FAIL_EXTRACT:-}" == 1 ]]; then
   echo "tar: simulated extraction failure" >&2
+  exit 2
+fi
+if [[ "$mode" == list && "${TAR_SHIM_FAIL_LIST:-}" == 1 ]]; then
+  echo "tar: simulated listing failure" >&2
   exit 2
 fi
 exec "$REAL_TAR" "$@"

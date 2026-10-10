@@ -9,5 +9,9 @@ case "$1" in
     exit "$rc"
     ;;
   start|restart) touch "$SHIM_STATE/screen_running" ;;
+  is-active)
+    if [[ -e "$SHIM_STATE/screen_running" ]]; then echo active; exit 0; fi
+    echo inactive; exit 3
+    ;;
 esac
 exit 0

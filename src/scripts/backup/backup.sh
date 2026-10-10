@@ -7,8 +7,19 @@ source "$SCRIPT_DIR/../common/server_control.sh"
 
 # Track auto-save state so we can always re-enable on exit
 _AUTO_SAVE_DISABLED=false
+# Set while a backup is being staged or compressed; removed by the EXIT trap
+# so no failure path leaves a temp tree or a half-written archive behind.
+TMP_DIR=""
+PARTIAL_ARCHIVE=""
 
 _backup_cleanup() {
+  if [[ -n "$PARTIAL_ARCHIVE" ]]; then
+    rm -f -- "$PARTIAL_ARCHIVE"
+    PARTIAL_ARCHIVE=""
+  fi
+  if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
+    rm -rf -- "$TMP_DIR"
+  fi
   if $_AUTO_SAVE_DISABLED; then
     log INFO "Re-enabling auto-save (cleanup trap)..."
     enable_auto_save 2>/dev/null || log WARN "Failed to re-enable auto-save — run /save-on manually"
@@ -49,7 +60,7 @@ while [[ "$#" -gt 0 ]]; do
   case $1 in
     --archive)
       ARCHIVE_MODE=true
-      if [[ -n "$2" && ! "$2" =~ ^-- ]]; then
+      if [[ -n "${2:-}" && ! "$2" =~ ^-- ]]; then
         ARCHIVE_TYPE="$2"
         shift
       fi
@@ -75,6 +86,12 @@ done
 # ——— backup message ———
 if $ARCHIVE_MODE; then
   ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"
+  # The type becomes a directory name under archives/, so it must not be able
+  # to carry a path separator or "..".
+  if [[ ! "$ARCHIVE_TYPE" =~ ^[a-z0-9_-]+$ ]]; then
+    log ERROR "Invalid archive type '$ARCHIVE_TYPE' (allowed: lowercase letters, digits, '_' and '-')"
+    exit 1
+  fi
   send_message "Starting archive backup ($ARCHIVE_TYPE)" || log WARN "Failed to send message to server"
   log INFO "Archive mode ON — type: $ARCHIVE_TYPE"
 else
@@ -98,6 +115,21 @@ else
 fi
 
 mkdir -p "$BACKUP_DIR" "$JAR_STORAGE"
+
+# ——— one backup per instance at a time ———
+# Cron and wrapper-triggered runs share the staging directory below, so they
+# must not overlap. Exit 75 (EX_TEMPFAIL) tells callers the run was skipped.
+if ! $DRY_RUN; then
+  if command -v flock &>/dev/null; then
+    exec 9>"$BACKUP_BASE/.backup.lock"
+    if ! flock -n 9; then
+      log WARN "Another backup is already running for $INSTANCE_NAME; skipping."
+      exit 75
+    fi
+  else
+    log WARN "flock not found; concurrent backups are not prevented"
+  fi
+fi
 
 log INFO "Backup directory: $BACKUP_DIR"
 
@@ -137,7 +169,14 @@ fi
 
 # ——— create temporary folder ———
 TMP_DIR="$BACKUP_DIR/tmp_backup"
-mkdir -p "$TMP_DIR"
+if ! $DRY_RUN; then
+  # Anything here is residue of a run that was killed; the lock above makes
+  # it safe to discard, and rsync into a stale tree would resurrect deleted files.
+  rm -rf -- "$TMP_DIR"
+  mkdir -p "$TMP_DIR"
+else
+  TMP_DIR=""
+fi
 
 # ——— rsync to the temporary directory ———
 log INFO "Syncing server data to temporary backup directory..."
@@ -223,25 +262,39 @@ if ! $DRY_RUN; then
     ZSTD_OPTS+=("-$COMPRESSION_LEVEL" -o "$ARCHIVE_PATH")
   fi
 
+  PARTIAL_ARCHIVE="$ARCHIVE_PATH"
+  set +e
+  set -o pipefail
   nice_run tar "${TAR_OPTS[@]}" | nice_run zstd "${ZSTD_OPTS[@]}"
+  PIPE_STATUS=("${PIPESTATUS[@]}")
+  set +o pipefail
+  set -e
+  if [[ "${PIPE_STATUS[0]}" -ne 0 || "${PIPE_STATUS[1]}" -ne 0 ]]; then
+    log ERROR "Compression failed (tar exit ${PIPE_STATUS[0]}, zstd exit ${PIPE_STATUS[1]}); removing partial archive"
+    send_message "Backup failed while compressing" || true
+    notify_error "backup_failed" "Backup compression failed (tar ${PIPE_STATUS[0]}, zstd ${PIPE_STATUS[1]})." || true
+    exit 1
+  fi
   FINAL_ARCHIVE="$ARCHIVE_PATH"
 fi
 
 # ——— validate archive ———
+# zstd -t proves the compressed stream is intact; listing it with tar proves
+# the tar inside is complete (a tar that died midway still yields a valid zstd
+# stream).
 if ! $DRY_RUN; then
   log INFO "Validating archive..."
-  if ! nice_run zstd -t "$FINAL_ARCHIVE" &>/dev/null; then
-    send_message "Backup archive appears corrupted. Removing"
-    log ERROR "Validation failed — corrupted archive removed"
-    notify_error "backup_failed" "Backup archive was corrupted and removed."
-    rm -f "$FINAL_ARCHIVE"
-    rm -rf "$TMP_DIR"
+  if ! nice_run zstd -t "$FINAL_ARCHIVE" &>/dev/null      || ! ( set -o pipefail; nice_run zstd -d -c "$FINAL_ARCHIVE" | nice_run tar -tf - >/dev/null ) 2>/dev/null; then
+    log ERROR "Validation failed, corrupted archive removed"
+    send_message "Backup archive appears corrupted. Removing" || true
+    notify_error "backup_failed" "Backup archive was corrupted and removed." || true
     exit 1
   fi
+  PARTIAL_ARCHIVE=""
 fi
 
 # ——— cleanup ———
-$DRY_RUN || rm -rf "$TMP_DIR"
+$DRY_RUN || { rm -rf -- "$TMP_DIR"; TMP_DIR=""; }
 
 # ——— re‑enable auto‑save (explicit + trap handles edge cases) ———
 if $_AUTO_SAVE_DISABLED && ! $DRY_RUN; then

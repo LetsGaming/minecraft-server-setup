@@ -58,8 +58,19 @@ exit 0
 SH
   run_script "$ROLLBACK" --y
   assert_nonzero "$RC" "rollback aborts"
-  assert_contains "$OUT" "still running after stop" "says why"
+  assert_contains "$OUT" "is running" "says why"
   assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_rollback_rechecks_right_before_the_swap() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
+  server_running
+  export TAR_SHIM_START_SERVER=1
+  run_script "$ROLLBACK" --y
+  assert_nonzero "$RC" "server that came up during extraction aborts the swap"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "staging directory cleaned up"
 }
 
 test_corrupt_archive_aborts_before_stopping_server() {

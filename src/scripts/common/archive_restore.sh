@@ -98,3 +98,41 @@ swap_server_dir() {
   fi
   rm -rf -- "$old"
 }
+
+# server_is_running
+# Live check, never cached. Returns 0 when the server is up, 1 when every
+# available signal says it is down, 2 when no signal could be consulted. Needs
+# server_control.sh (for _use_rcon, _rcon_send and session_running).
+server_is_running() {
+  local can_check=false state
+
+  if _use_rcon; then
+    can_check=true
+    _rcon_send "list" &>/dev/null && return 0
+  fi
+  if command -v screen &>/dev/null; then
+    can_check=true
+    session_running && return 0
+  fi
+  if command -v systemctl &>/dev/null; then
+    can_check=true
+    state="$(systemctl is-active "${INSTANCE_NAME}.service" 2>/dev/null || true)"
+    case "$state" in
+      active|activating|deactivating|reloading) return 0 ;;
+    esac
+  fi
+
+  $can_check || return 2
+  return 1
+}
+
+# require_server_stopped
+# Fails (after saying why) unless the server is positively known to be down.
+require_server_stopped() {
+  local rc=0
+  server_is_running || rc=$?
+  case "$rc" in
+    0) _ar_error "$INSTANCE_NAME is running. Stop the server before restoring."; return 1 ;;
+    2) _ar_error "Cannot tell whether $INSTANCE_NAME is running (no RCON, screen or systemctl); refusing to continue."; return 1 ;;
+  esac
+}

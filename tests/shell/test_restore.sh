@@ -27,6 +27,33 @@ test_restore_refuses_while_server_running() {
   assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "no staging directory created"
 }
 
+test_restore_refuses_when_only_systemd_reports_active() {
+  setup
+  cat > "$T/bin/screen" <<'SH'
+#!/bin/bash
+exit 1
+SH
+  cat > "$T/bin/systemctl" <<'SH'
+#!/bin/bash
+[[ "$1" == is-active ]] && { echo active; exit 0; }
+exit 0
+SH
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 3 "$RC" "systemd active alone is enough to refuse"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_restore_rechecks_right_before_the_swap() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  export TAR_SHIM_START_SERVER=1
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 3 "$RC" "server that came up during extraction aborts the swap"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "staging directory cleaned up"
+}
+
 test_restore_runs_once_server_is_stopped() {
   setup
   make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored

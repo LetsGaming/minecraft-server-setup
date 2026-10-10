@@ -100,10 +100,7 @@ echo "[INFO] Selected backup: $BACKUP_TO_RESTORE"
 
 # Replacing the world under a live server corrupts it, so a running server is
 # a hard stop. Stop the server first (or use rollback.sh, which does it).
-if server_reachable || session_running; then
-    echo "[ERROR] $INSTANCE_NAME is running. Stop the server before restoring." >&2
-    exit 3
-fi
+require_server_stopped || exit 3
 
 echo "[INFO] Validating archive..."
 validate_archive "$BACKUP_TO_RESTORE" || exit 1
@@ -123,6 +120,8 @@ trap 'rm -rf -- "$STAGING_DIR"' EXIT
 
 echo "[INFO] Restoring backup..."
 extract_archive "$BACKUP_TO_RESTORE" "$STAGING_DIR" || exit 1
+# Extraction takes a while; confirm nothing started the server in the meantime.
+require_server_stopped || exit 3
 swap_server_dir "$STAGING_DIR" "$SERVER_PATH" || exit 1
 
 echo "[INFO] Server data restored."

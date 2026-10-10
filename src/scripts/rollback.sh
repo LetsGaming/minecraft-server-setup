@@ -87,11 +87,11 @@ if ! systemctl_cmd stop; then
   exit 1
 fi
 for _ in $(seq 1 15); do
-  server_reachable || break
+  server_is_running || break
   sleep 2
 done
-if server_reachable; then
-  echo "[ERROR] $INSTANCE_NAME is still running after stop; aborting. Server files were not changed." >&2
+if ! require_server_stopped; then
+  echo "[ERROR] Aborting. Server files were not changed." >&2
   exit 1
 fi
 
@@ -103,7 +103,16 @@ STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
 trap 'rm -rf -- "$STAGING_DIR"' EXIT
 
 echo "[INFO] Restoring backup..."
-if ! extract_archive "$LATEST_BACKUP" "$STAGING_DIR" || ! swap_server_dir "$STAGING_DIR" "$SERVER_PATH"; then
+if ! extract_archive "$LATEST_BACKUP" "$STAGING_DIR"; then
+  restart_after_failure
+  exit 1
+fi
+# Extraction takes a while; confirm nothing started the server in the meantime.
+if ! require_server_stopped; then
+  echo "[ERROR] Aborting. Server files were not changed." >&2
+  exit 1
+fi
+if ! swap_server_dir "$STAGING_DIR" "$SERVER_PATH"; then
   restart_after_failure
   exit 1
 fi
