@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-10-10
+
 Items marked **BREAKING** change behaviour that scripts, cron jobs or the API wrapper may rely on.
 
 ### Added
