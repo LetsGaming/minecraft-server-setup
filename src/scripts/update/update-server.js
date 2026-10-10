@@ -18,6 +18,7 @@ const readline = require("readline");
 const { spawn, execFile, execSync } = require("child_process");
 const axios = require("axios");
 const { parseArgs } = require("./lib/args");
+const { loadVariables: readVariables } = require("./lib/variables");
 
 // Usage:
 //   node update-server.js [version] [--version=<ver>]
@@ -50,21 +51,7 @@ const MOJANG_MANIFEST_URL =
 // ── Config loading ────────────────────────────────────────────────────────
 
 function loadVariables() {
-  const content = fs.readFileSync(VARIABLES_PATH, "utf8");
-  const vars = {};
-  for (const line of content.split(/\r?\n/)) {
-    const m = line.match(/^(\w+)=(.*)$/);
-    if (!m) continue;
-    let value = m[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    vars[m[1]] = value;
-  }
-  return vars;
+  return readVariables(VARIABLES_PATH);
 }
 
 function readDownloadedVersions() {

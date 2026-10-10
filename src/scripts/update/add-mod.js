@@ -35,6 +35,8 @@ const downloadedVersionsPath = path.resolve(
 //   mcVersion  Target MC version. Falls back to downloaded_versions.json.
 //   modLoader  Mod loader (e.g. fabric). Falls back to downloaded_versions.json.
 const { parseArgs } = require("./lib/args");
+const { loadVariables } = require("./lib/variables");
+const { createJsonMode } = require("./lib/json-mode");
 
 const cliArgs = parseArgs({
   flags: { slug: null, mcVersion: null, modLoader: null, versionId: null },
@@ -45,25 +47,14 @@ const cliArgs = parseArgs({
 //
 // With --json the wrapper drives this script and needs one JSON object on
 // stdout, not the human log. Rather than thread a result through every exit
-// site, we silence the human channels and, at the bottom, run main() with
-// process.exit intercepted so any exit becomes one emitted object. Human mode
-// (no --json) is completely unaffected — the overrides below only install
-// when JSON_MODE is set.
+// site, the human channels are silenced and, at the bottom, main() runs with
+// process.exit intercepted so any exit becomes one emitted object.
 const JSON_MODE = cliArgs.bool("json");
-const _realWrite = process.stdout.write.bind(process.stdout);
-let _lastError = null;
-if (JSON_MODE) {
-  console.log = () => {};
-  console.error = (...a) => {
-    _lastError = a.map(String).join(" ");
-  };
-  process.stdout.write = () => true; // swallow the download progress line
-}
-function emitJson(obj) {
-  // Write straight to the real stdout: console.log would route through the
-  // process.stdout.write override installed above and print nothing.
-  _realWrite(JSON.stringify(obj) + "\n");
-}
+const jsonMode = createJsonMode(JSON_MODE, {
+  captureErrors: true,
+  silenceStdoutWrite: true,
+});
+const emitJson = jsonMode.emit;
 function classifyError(msg) {
   if (!msg) return "error";
   if (/not found on modrinth/i.test(msg)) return "not-found";
@@ -87,25 +78,6 @@ if (!slug) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function loadVariables() {
-  if (!fs.existsSync(variablesPath)) return {};
-  const content = fs.readFileSync(variablesPath, "utf8");
-  const vars = {};
-  for (const line of content.split(/\r?\n/)) {
-    const match = line.match(/^(\w+)=(.*)$/);
-    if (!match) continue;
-    let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    vars[match[1]] = value;
-  }
-  return vars;
-}
 
 function readVersionsFile() {
   if (!fs.existsSync(downloadedVersionsPath)) {
@@ -351,7 +323,7 @@ async function installMod(
 
 async function main() {
   // ── Resolve config ──────────────────────────────────────────────────────────
-  const vars = loadVariables();
+  const vars = loadVariables(variablesPath, { optional: true });
   const downloadedVersions = readVersionsFile();
   downloadedVersions.mods ??= {};
 
@@ -474,7 +446,7 @@ if (!JSON_MODE) {
   // (already registered); anything else is a handled failure.
   const _realExit = process.exit.bind(process);
   process.exit = (code = 0) => {
-    const e = new Error(_lastError || "exit");
+    const e = new Error(jsonMode.lastError() || "exit");
     e.__exit = code;
     throw e;
   };
@@ -487,8 +459,8 @@ if (!JSON_MODE) {
       }
       emitJson({
         ok: false,
-        error: _lastError || e.message,
-        code: classifyError(_lastError || e.message),
+        error: jsonMode.lastError() || e.message,
+        code: classifyError(jsonMode.lastError() || e.message),
       });
       _realExit(1);
     });

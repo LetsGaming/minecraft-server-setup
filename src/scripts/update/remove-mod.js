@@ -22,6 +22,9 @@
 const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("./lib/args");
+const { loadVariables } = require("./lib/variables");
+const { detectInstalledJars } = require("./lib/jars");
+const { createJsonMode } = require("./lib/json-mode");
 
 // ── Paths ─────────────────────────────────────────────────────────────────
 const variablesPath = path.resolve(__dirname, "..", "common", "variables.txt");
@@ -40,17 +43,8 @@ const cliArgs = parseArgs({
 });
 
 const JSON_MODE = cliArgs.bool("json");
-const _realLog = console.log.bind(console);
-let _lastError = null;
-if (JSON_MODE) {
-  console.log = () => {};
-  console.error = (...a) => {
-    _lastError = a.map(String).join(" ");
-  };
-}
-function emitJson(obj) {
-  _realLog(JSON.stringify(obj));
-}
+const jsonMode = createJsonMode(JSON_MODE, { captureErrors: true });
+const emitJson = jsonMode.emit;
 function fail(code, message) {
   if (JSON_MODE) {
     emitJson({ ok: false, error: message, code });
@@ -66,52 +60,9 @@ if (!slug) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
-function loadVariables() {
-  if (!fs.existsSync(variablesPath)) return {};
-  const vars = {};
-  for (const line of fs.readFileSync(variablesPath, "utf8").split(/\r?\n/)) {
-    const match = line.match(/^(\w+)=(.*)$/);
-    if (!match) continue;
-    let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    vars[match[1]] = value;
-  }
-  return vars;
-}
-
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Real jar files whose name carries this slug (for legacy null-filename entries). */
-function detectInstalledJars(modsDir, modSlug) {
-  if (!fs.existsSync(modsDir)) return [];
-  const slugRegex = new RegExp(
-    `(^|[-_.])${escapeRegex(modSlug)}([-.+_]|$).*\\.jar$`,
-    "i",
-  );
-  return fs
-    .readdirSync(modsDir)
-    .filter((f) => f.endsWith(".jar") && slugRegex.test(f))
-    .map((f) => path.join(modsDir, f))
-    .filter((full) => {
-      try {
-        const stat = fs.lstatSync(full);
-        return stat.isFile() && !stat.isSymbolicLink();
-      } catch {
-        return false;
-      }
-    });
-}
-
 // ── Main ──────────────────────────────────────────────────────────────────
 function main() {
-  const vars = loadVariables();
+  const vars = loadVariables(variablesPath, { optional: true });
   const serverPath = vars.SERVER_PATH;
   if (!serverPath || !fs.existsSync(serverPath)) {
     fail("error", `Invalid SERVER_PATH: "${serverPath}"`);
@@ -152,8 +103,8 @@ function main() {
     toRemove.add(path.join(modsDir, recordedFilename));
     toRemove.add(path.join(disabledDir, recordedFilename));
   }
-  for (const jar of detectInstalledJars(modsDir, key)) toRemove.add(jar);
-  for (const jar of detectInstalledJars(disabledDir, key)) toRemove.add(jar);
+  for (const jar of detectInstalledJars(modsDir, key)) toRemove.add(jar.fullPath);
+  for (const jar of detectInstalledJars(disabledDir, key)) toRemove.add(jar.fullPath);
 
   let removedFile = null;
   for (const jarPath of toRemove) {
