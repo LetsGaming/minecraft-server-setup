@@ -5,18 +5,7 @@ ONJOIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$ONJOIN_DIR/common/server_control.sh"
 source "$ONJOIN_DIR/common/utils.sh"
 
-# Per-instance lock. A single global /tmp lock let only one instance run the
-# join-welcomer at a time (the rest exited) and was a predictable shared path
-# any local user could squat. Scope it by instance and prefer the per-user
-# runtime dir when available.
-_ONJOIN_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
-LOCK_FILE="$_ONJOIN_RUNTIME_DIR/minecraft_onjoin_${INSTANCE_NAME}.lock"
-if [ -e "$LOCK_FILE" ]; then
-    echo "Script already running (lock file $LOCK_FILE exists). Exiting."
-    exit 1
-fi
-trap 'rm -f "$LOCK_FILE"' EXIT
-touch "$LOCK_FILE"
+acquire_instance_lock "onjoin" || exit 1
 
 init_log_file "$ONJOIN_DIR/logs" "onjoin_message.log"
 
@@ -107,5 +96,4 @@ handle_player_welcome() {
 }
 
 log "INFO" "Watching for joins to send /title"
-# shellcheck disable=SC2153  # LOG_FILE is exported by the sourced common/server_control.sh, not a typo for LOCK_FILE
 on_player_join "$LOG_FILE" handle_player_welcome

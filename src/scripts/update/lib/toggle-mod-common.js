@@ -10,6 +10,8 @@
 
 const fs = require("fs");
 const path = require("path");
+const { loadVariables } = require("./variables");
+const { detectInstalledJars } = require("./jars");
 
 const variablesPath = path.resolve(__dirname, "..", "..", "common", "variables.txt");
 const downloadedVersionsPath = path.resolve(
@@ -20,51 +22,9 @@ const downloadedVersionsPath = path.resolve(
   "downloaded_versions.json",
 );
 
-function loadVariables() {
-  if (!fs.existsSync(variablesPath)) return {};
-  const vars = {};
-  for (const line of fs.readFileSync(variablesPath, "utf8").split(/\r?\n/)) {
-    const match = line.match(/^(\w+)=(.*)$/);
-    if (!match) continue;
-    let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    vars[match[1]] = value;
-  }
-  return vars;
-}
-
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-/** Real jar files whose name carries this slug, in one directory. */
-function detectSlugJars(dir, modSlug) {
-  if (!fs.existsSync(dir)) return [];
-  const slugRegex = new RegExp(
-    `(^|[-_.])${escapeRegex(modSlug)}([-.+_]|$).*\\.jar$`,
-    "i",
-  );
-  return fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith(".jar") && slugRegex.test(f))
-    .filter((f) => {
-      try {
-        const stat = fs.lstatSync(path.join(dir, f));
-        return stat.isFile() && !stat.isSymbolicLink();
-      } catch {
-        return false;
-      }
-    });
-}
-
 /** Resolve SERVER_PATH and derive the enabled/disabled mod directories. */
 function resolveDirs() {
-  const vars = loadVariables();
+  const vars = loadVariables(variablesPath, { optional: true });
   const serverPath = vars.SERVER_PATH;
   if (!serverPath || !fs.existsSync(serverPath)) {
     throw Object.assign(new Error(`Invalid SERVER_PATH: "${serverPath}"`), {
@@ -126,7 +86,9 @@ function resolveEntry(downloadedVersions, slug) {
 function locateJar(modsDir, disabledDir, key, recordedFilename) {
   const candidates = recordedFilename
     ? [recordedFilename]
-    : [...detectSlugJars(modsDir, key), ...detectSlugJars(disabledDir, key)];
+    : [...detectInstalledJars(modsDir, key), ...detectInstalledJars(disabledDir, key)].map(
+        (jar) => jar.file,
+      );
 
   for (const filename of candidates) {
     const enabledPath = path.join(modsDir, filename);

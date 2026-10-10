@@ -47,6 +47,19 @@ _capture_update_snapshot() {
   fi
 }
 
+# backup.sh takes a per-instance lock and exits 75 when another run (cron or a
+# wrapper-triggered one) holds it. That is a skip, not a failure: the flag is
+# left unset so the next run retries the slot.
+run_backup_script() {
+  local rc=0
+  bash "$BACKUP_SCRIPT" "$@" || rc=$?
+  if [[ $rc -eq 75 ]]; then
+    echo "[$(date +'%F %T')] Another backup is running; skipping this run."
+    exit 0
+  fi
+  return $rc
+}
+
 HOUR=$(date +%H)
 DAY_OF_WEEK=$(date +%u)  # 1 (Mo) – 7 (So)
 DAY_OF_MONTH=$(date +%d)
@@ -56,11 +69,11 @@ DAILY_FLAG="$STATE_DIR/daily_$TODAY"
 WEEKLY_FLAG="$STATE_DIR/weekly_$TODAY"
 MONTHLY_FLAG="$STATE_DIR/monthly_$TODAY"
 
-if $DO_GENERATION_BACKUPS; then
+if [[ "$DO_GENERATION_BACKUPS" == "true" ]]; then
   # Großvater: Erster Sonntag im Monat (Priority 1)
   if [ "$DAY_OF_WEEK" -eq 7 ] && [ "$DAY_OF_MONTH" -le 7 ] && [ ! -f "$MONTHLY_FLAG" ]; then
     echo "[$(date +'%F %T')] Starting monthly backup..."
-    bash "$BACKUP_SCRIPT" --archive monthly
+    run_backup_script --archive monthly
     _capture_update_snapshot
     touch "$MONTHLY_FLAG"
     exit 0
@@ -69,7 +82,7 @@ if $DO_GENERATION_BACKUPS; then
   # Vater: Jeden Sonntag (Priority 2)
   if [ "$DAY_OF_WEEK" -eq 7 ] && [ ! -f "$WEEKLY_FLAG" ]; then
     echo "[$(date +'%F %T')] Starting weekly backup..."
-    bash "$BACKUP_SCRIPT" --archive weekly
+    run_backup_script --archive weekly
     _capture_update_snapshot
     touch "$WEEKLY_FLAG"
     exit 0
@@ -78,7 +91,7 @@ if $DO_GENERATION_BACKUPS; then
   # Enkel: Jeden Tag um 00:00 Uhr (Priority 3)
   if [ "$HOUR" -eq 0 ] && [ ! -f "$DAILY_FLAG" ]; then
     echo "[$(date +'%F %T')] Starting daily backup..."
-    bash "$BACKUP_SCRIPT" --archive daily
+    run_backup_script --archive daily
     touch "$DAILY_FLAG"
     exit 0
   fi
@@ -86,7 +99,7 @@ fi
 
 # Immer: Stündlich (Lowest priority - fallback)
 echo "[$(date +'%F %T')] Starting hourly backup..."
-bash "$BACKUP_SCRIPT"
+run_backup_script
 
 # Cleanup step
 bash "$AUTOMATION_SCRIPT_DIR/cleanup_backups.sh"

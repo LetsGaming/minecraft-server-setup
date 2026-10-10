@@ -33,8 +33,12 @@ _rcon_send() {
 
 # ── Screen transport ──
 
+# Anchored to `<pid>.<name><whitespace>`: a bare substring match would treat a
+# running "mc2" session as "mc".
 session_running() {
-  screen -list 2>/dev/null | grep -q "$INSTANCE_NAME"
+  local name_re
+  name_re=$(printf '%s' "$INSTANCE_NAME" | sed 's/[][\.*^$(){}+?|]/\\&/g')
+  screen -list 2>/dev/null | grep -Eq "^[[:space:]]*[0-9]+\.${name_re}[[:space:]]"
 }
 
 _screen_send() {
@@ -228,9 +232,34 @@ get_player_count() {
 
 # ── Save handling ──
 
-# shellcheck disable=SC2120  # timeout arg is optional; callers use the 60s default
+# Size of the server log in bytes, 0 when it does not exist yet.
+_log_size() {
+  if [[ -f "$LOG_FILE" ]]; then
+    wc -c < "$LOG_FILE" | tr -d '[:space:]'
+  else
+    echo 0
+  fi
+}
+
+# _log_has_since <byte-offset> <extended-regex>
+# True when the log has a line matching the pattern written after the offset.
+# A log that is now shorter than the offset was rotated, so it is read whole.
+_log_has_since() {
+  local offset="$1" pattern="$2" size
+  [[ -f "$LOG_FILE" ]] || return 1
+  size=$(_log_size)
+  (( size < offset )) && offset=0
+  tail -c +"$((offset + 1))" "$LOG_FILE" 2>/dev/null | grep -Eq "$pattern"
+}
+
+# wait_for_save_completion [timeout-seconds] [log-offset]
+# The offset must be taken BEFORE the save command is sent (see save_and_wait);
+# a save that finishes quickly would otherwise be written before the wait
+# begins and never be seen.
+# shellcheck disable=SC2120  # arguments are optional; callers use the defaults
 wait_for_save_completion() {
   local timeout="${1:-60}"
+  local offset="${2:-}"
 
   if _use_rcon; then
     # RCON: save-all is synchronous, just wait briefly
@@ -244,28 +273,29 @@ wait_for_save_completion() {
     return 1
   fi
 
+  [[ -n "$offset" ]] || offset=$(_log_size)
+
   echo "Waiting for save to complete (timeout: ${timeout}s)..."
 
-  local save_done=false
-  timeout "$timeout" bash -c "
-    tail -n 0 -f \"$LOG_FILE\" | while read -r line; do
-      if echo \"\$line\" | grep -Eq 'Saved the (game|world)|Saved'; then
-        echo 'Save completed.'
-        exit 0
-      fi
-    done
-  " && save_done=true
+  local waited
+  for ((waited = 0; waited < timeout; waited++)); do
+    if _log_has_since "$offset" 'Saved the (game|world)|Saved'; then
+      echo "Save completed."
+      return 0
+    fi
+    sleep 1
+  done
 
-  if ! $save_done; then
-    echo "[WARN] Save did not complete within ${timeout}s. Proceeding anyway."
-    return 1
-  fi
+  echo "[WARN] Save did not complete within ${timeout}s. Proceeding anyway."
+  return 1
 }
 
 save_and_wait() {
+  local offset
+  offset=$(_log_size)
   send_message "Saving the server now to ensure no data is lost..."
   send_command "/save-all"
-  wait_for_save_completion
+  wait_for_save_completion 60 "$offset"
 }
 
 # ── Countdown ──
@@ -274,11 +304,12 @@ countdown() {
   local base_message="$1"
   local start="${2:-5}"
   local end="${3:-1}"
+  local i
 
   for ((i=start; i>=end; i--)); do
     local current_announcement="$base_message in §4$i§r seconds!"
     send_message "$current_announcement"
-    if [ $i -gt $end ]; then
+    if [ "$i" -gt "$end" ]; then
       sleep 1
     fi
   done
@@ -309,20 +340,21 @@ wait_for_server_ready() {
       sleep 3
     done
   else
-    # Watch log for "Done" message
+    # Watch the log for the "Done" message
     if [[ ! -f "$LOG_FILE" ]]; then
       sleep 5
     fi
 
-    local ready=false
-    timeout "$timeout" bash -c "
-      tail -n 0 -f \"$LOG_FILE\" 2>/dev/null | while read -r line; do
-        if echo \"\$line\" | grep -Eq 'Done \\([0-9.]+s\\)'; then
-          echo 'Server is ready.'
-          exit 0
-        fi
-      done
-    " && ready=true
+    local offset ready=false waited
+    offset=$(_log_size)
+    for ((waited = 0; waited < timeout; waited++)); do
+      if _log_has_since "$offset" 'Done \([0-9.]+s\)'; then
+        echo "Server is ready."
+        ready=true
+        break
+      fi
+      sleep 1
+    done
 
     if $ready; then
       notify_success "server_start" "Server $INSTANCE_NAME is now online."

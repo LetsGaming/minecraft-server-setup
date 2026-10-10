@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../common/load_variables.sh"
+source "$SCRIPT_DIR/../common/server_control.sh"
+source "$SCRIPT_DIR/../common/archive_restore.sh"
 
 BASE_BACKUP_DIR="$BACKUPS_PATH"
 BACKUP_DIR="$BASE_BACKUP_DIR"
@@ -10,16 +11,62 @@ SKIP_CONFIRMATION=false
 SPECIFIC_BACKUP=""
 RELATIVE_TIME=""
 FROM_ARCHIVE=false
+INSTALL_UNITS=false
+SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 
 print_help() {
     echo "Usage: $0 [options]"
     echo ""
     echo "Options:"
     echo "  --y                   Skip confirmation prompt"
-    echo "  --file <filename>     Restore a specific backup file"
+    echo "  --file <path>         Restore a specific backup: an absolute path inside the backups"
+    echo "                        directory, or a name relative to hourly/ (archives/ with --archive)"
     echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '15m', '2d')"
     echo "  --archive             Restore from the archive folder instead of hourly snapshots"
+    echo "  --install-units       Install the systemd units stored in an archive (with sudo) after"
+    echo "                        showing what changes. Without it, units are installed only after"
+    echo "                        an interactive confirmation, and skipped when run non-interactively."
     echo "  --help                Show this help message and exit"
+    echo ""
+    echo "The server must be stopped; the restore refuses to run (exit 3) while it is online."
+}
+
+# review_and_install_unit <unit-file> <unit-name>
+# Units run as root once enabled, so one from an archive is never copied in
+# silently: show how it differs from the installed unit, then install only on
+# --install-units or an interactive "y". Returns 0 only when it was installed.
+review_and_install_unit() {
+    local src="$1" name="$2" dest="$SYSTEMD_UNIT_DIR/$2"
+
+    if [[ -f "$dest" ]]; then
+        if cmp -s "$src" "$dest"; then
+            echo "[INFO]   = $name is unchanged"
+            return 1
+        fi
+        echo "[INFO]   $name differs from the installed unit:"
+        diff -u "$dest" "$src" | sed 's/^/           /' || true
+    else
+        echo "[INFO]   $name is not installed yet. Contents:"
+        sed 's/^/           | /' "$src"
+    fi
+
+    local approved=false answer
+    if $INSTALL_UNITS; then
+        approved=true
+    elif [[ -t 0 ]]; then
+        read -rp "Install $name into $SYSTEMD_UNIT_DIR? (y/N): " answer
+        [[ "$answer" =~ ^[Yy]$ ]] && approved=true
+    fi
+
+    if ! $approved; then
+        echo "[WARN]   ✗ $name NOT installed. Review it, then rerun with --install-units or copy it yourself."
+        return 1
+    fi
+
+    sudo cp "$src" "$dest"
+    sudo chmod 644 "$dest"
+    echo "[INFO]   ✓ $dest"
+    return 0
 }
 
 normalize_relative_time() {
@@ -40,12 +87,20 @@ normalize_relative_time() {
     fi
 }
 
+require_value() {
+    if [[ $# -lt 2 || -z "$2" ]]; then
+        echo "$(date +'%F %T') [ERROR] $1 requires a value" >&2
+        exit 1
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --y) SKIP_CONFIRMATION=true; shift ;;
-        --file) SPECIFIC_BACKUP="$2"; shift 2 ;;
-        --ago) RELATIVE_TIME="$2"; shift 2 ;;
+        --file) require_value "$@"; SPECIFIC_BACKUP="$2"; shift 2 ;;
+        --ago) require_value "$@"; RELATIVE_TIME="$2"; shift 2 ;;
         --archive) FROM_ARCHIVE=true; shift ;;
+        --install-units) INSTALL_UNITS=true; shift ;;
         --help) print_help; exit 0 ;;
         *) echo "$(date +'%F %T') [ERROR] Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -66,12 +121,11 @@ find_closest_backup_by_time() {
     local target_ts="$1"
     find "$BACKUP_DIR" -maxdepth 2 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
         awk -v tgt="$target_ts" '{ diff = ($1 - tgt); if (diff < 0) diff = -diff; print diff, $0; }' |
-        sort -n | head -n1 | cut -d' ' -f2-
+        sort -n | head -n1 | cut -d' ' -f3-
 }
 
 if [[ -n "$SPECIFIC_BACKUP" ]]; then
-    BACKUP_TO_RESTORE="$BACKUP_DIR/$SPECIFIC_BACKUP"
-    [[ -e "$BACKUP_TO_RESTORE" ]] || { echo "[ERROR] Specified backup does not exist: $SPECIFIC_BACKUP"; exit 1; }
+    BACKUP_TO_RESTORE=$(resolve_backup_file "$SPECIFIC_BACKUP" "$BACKUP_DIR") || exit 1
 elif [[ -n "$RELATIVE_TIME" ]]; then
     HUMAN_TIME=$(normalize_relative_time "$RELATIVE_TIME") || {
         echo "[ERROR] Invalid time format for --ago: $RELATIVE_TIME"; exit 1;
@@ -88,26 +142,31 @@ fi
 
 echo "[INFO] Selected backup: $BACKUP_TO_RESTORE"
 
-if [ "$(ls -A "$SERVER_PATH")" ]; then
-    echo "[WARN] $SERVER_PATH is not empty and will be overwritten."
+# Replacing the world under a live server corrupts it, so a running server is
+# a hard stop. Stop the server first (or use rollback.sh, which does it).
+require_server_stopped || exit 3
+
+echo "[INFO] Validating archive..."
+validate_archive "$BACKUP_TO_RESTORE" || exit 1
+
+if [[ -d "$SERVER_PATH" && -n "$(ls -A "$SERVER_PATH")" ]]; then
+    echo "[WARN] $SERVER_PATH is not empty and will be replaced."
     if [ "$SKIP_CONFIRMATION" = false ]; then
         read -rp "Continue with restore? (y/N): " confirm
         [[ "$confirm" =~ ^[Yy]$ ]] || { echo "[INFO] Restore aborted."; exit 0; }
     fi
 fi
 
-# SC2115: ${SERVER_PATH:?} aborts if var is empty, preventing accidental rm -rf /*
-rm -rf "${SERVER_PATH:?}"/*
-echo "[INFO] Restoring backup..."
+# The archive is unpacked next to the server directory and swapped in only
+# once extraction succeeded, so a failure leaves the current world untouched.
+STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
+trap 'rm -rf -- "$STAGING_DIR"' EXIT
 
-if [[ "$BACKUP_TO_RESTORE" == *.tar.gz ]]; then
-    tar -xvzf "$BACKUP_TO_RESTORE" -C "$SERVER_PATH"
-elif [[ "$BACKUP_TO_RESTORE" == *.tar.zst ]]; then
-    zstd -d "$BACKUP_TO_RESTORE" -c | tar -xvf - -C "$SERVER_PATH"
-else
-    echo "[ERROR] Unsupported backup file format: $BACKUP_TO_RESTORE"
-    exit 1
-fi
+echo "[INFO] Restoring backup..."
+extract_archive "$BACKUP_TO_RESTORE" "$STAGING_DIR" || exit 1
+# Extraction takes a while; confirm nothing started the server in the meantime.
+require_server_stopped || exit 3
+swap_server_dir "$STAGING_DIR" "$SERVER_PATH" || exit 1
 
 echo "[INFO] Server data restored."
 
@@ -141,6 +200,7 @@ if [[ -d "$META_DIR" ]]; then
   fi
 
   # 2. Systemd service files
+  units_installed=false
   if [[ -d "$META_DIR/systemd" ]] && compgen -G "$META_DIR/systemd/*.service" > /dev/null 2>&1; then
     for svc_file in "$META_DIR/systemd/"*.service; do
       [[ -f "$svc_file" ]] || continue
@@ -152,18 +212,21 @@ if [[ -d "$META_DIR" ]]; then
         echo "[INFO]   — skipped $svc_name (the web interface was retired)"
         continue
       fi
-      sudo cp "$svc_file" "/etc/systemd/system/$svc_name"
-      sudo chmod 644 "/etc/systemd/system/$svc_name"
-      echo "[INFO]   ✓ /etc/systemd/system/$svc_name"
+      if review_and_install_unit "$svc_file" "$svc_name"; then
+        units_installed=true
+      fi
     done
-    sudo systemctl daemon-reload
-    echo "[INFO]   ✓ systemctl daemon-reload"
+    if $units_installed; then
+      sudo systemctl daemon-reload
+      echo "[INFO]   ✓ systemctl daemon-reload"
+    fi
   fi
 
   # 3. api-server-config.json
   if [[ -f "$META_DIR/api-server-config.json" ]]; then
     mkdir -p "$BASE_DIR/api-server"
     cp "$META_DIR/api-server-config.json" "$BASE_DIR/api-server/api-server-config.json"
+    chmod 600 "$BASE_DIR/api-server/api-server-config.json"
     echo "[INFO]   ✓ api-server-config.json"
   fi
 
@@ -172,7 +235,7 @@ if [[ -d "$META_DIR" ]]; then
 
   echo "[INFO] Metadata restore complete."
   echo ""
-  echo "[INFO] Services have been installed but not started."
+  echo "[INFO] Services are never started by a restore."
   echo "[INFO] Review the restored config, then start manually:"
   echo "         sudo systemctl enable --now ${INSTANCE_NAME}.service"
   echo "         sudo systemctl enable --now ${TARGET_DIR_NAME}-api-server.service"

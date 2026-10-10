@@ -1,0 +1,4 @@
+#!/bin/bash
+# Builds no real JSON; tests only need a non-empty payload to be produced.
+echo "jq $*" >> "$SHIM_LOG"
+echo '{"shim":true}'

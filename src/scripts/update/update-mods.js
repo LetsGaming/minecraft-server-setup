@@ -1,8 +1,11 @@
 const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
-const axios = require("axios");
 const { parseArgs } = require("./lib/args");
+const { loadVariables } = require("./lib/variables");
+const { detectInstalledJars } = require("./lib/jars");
+const { createJsonMode } = require("./lib/json-mode");
+const { safeFilenameFromUrl, downloadToTemp } = require("./lib/download");
 
 // Usage:
 //   node update-mods.js [mcVersion] [--mcVersion=<ver>] [--migrate]
@@ -18,15 +21,8 @@ const { parseArgs } = require("./lib/args");
 // stdout. We silence the human channels here so only the final emit reaches
 // stdout; human mode (no --json) is unaffected.
 const JSON_MODE = process.argv.includes("--json");
-const _realLog = console.log.bind(console);
-if (JSON_MODE) {
-  console.log = () => {};
-  console.warn = () => {};
-  console.error = () => {};
-}
-function emitJson(obj) {
-  _realLog(JSON.stringify(obj));
-}
+const jsonMode = createJsonMode(JSON_MODE, { silenceWarn: true });
+const emitJson = jsonMode.emit;
 
 // ---------------- paths ----------------
 
@@ -39,32 +35,6 @@ const downloadedVersionsPath = path.resolve(
 );
 
 // ---------------- helpers ----------------
-
-function loadVariables() {
-  const content = fs.readFileSync(variablesPath, "utf8");
-  const lines = content.split(/\r?\n/);
-
-  const vars = {};
-  for (const line of lines) {
-    const match = line.match(/^(\w+)=(.*)$/);
-    if (!match) continue;
-
-    let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-
-    vars[match[1]] = value;
-  }
-  return vars;
-}
-
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function safeUnlink(filePath) {
   try {
@@ -79,30 +49,6 @@ function safeUnlink(filePath) {
 
 // ---------------- detection ----------------
 
-function detectInstalledJar(modsDir, slug, excludeFilename) {
-  const slugRegex = new RegExp(
-    `(^|[-_.])${escapeRegex(slug)}([-.+_]|$).*\\.jar$`,
-    "i",
-  );
-
-  return fs
-    .readdirSync(modsDir)
-    .filter((f) => f.endsWith(".jar"))
-    .filter((f) => f !== excludeFilename)
-    .map((file) => {
-      const fullPath = path.join(modsDir, file);
-      try {
-        const stat = fs.lstatSync(fullPath);
-        if (!stat.isFile() || stat.isSymbolicLink()) return null;
-        return { file, fullPath };
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean)
-    .filter((e) => slugRegex.test(e.file));
-}
-
 // ---------------- migration ----------------
 
 function migrateDownloadedVersions(downloadedVersions, modsDir) {
@@ -113,7 +59,7 @@ function migrateDownloadedVersions(downloadedVersions, modsDir) {
 
     console.log(`Migrating legacy entry: ${slug}`);
 
-    const matches = detectInstalledJar(modsDir, slug);
+    const matches = detectInstalledJars(modsDir, slug);
 
     if (matches.length === 1) {
       downloadedVersions.mods[slug] = {
@@ -178,22 +124,6 @@ function runCheckUpdates(version) {
   });
 }
 
-async function downloadFile(url, targetPath) {
-  const response = await axios({
-    url,
-    method: "GET",
-    responseType: "stream",
-    validateStatus: (s) => s >= 200 && s < 300,
-  });
-
-  return new Promise((resolve, reject) => {
-    const writer = fs.createWriteStream(targetPath);
-    response.data.pipe(writer);
-    writer.on("error", reject);
-    writer.on("close", resolve);
-  });
-}
-
 // ---------------- update runner ----------------
 
 /**
@@ -204,7 +134,7 @@ async function downloadFile(url, targetPath) {
  * the CLI here and update-mod.js can decide how to report.
  */
 async function runUpdates({ mcVersion = null, only = null } = {}) {
-  const vars = loadVariables();
+  const vars = loadVariables(variablesPath);
   const serverPath = vars.SERVER_PATH;
   if (!serverPath || !fs.existsSync(serverPath)) {
     throw new Error(`Invalid SERVER_PATH: ${serverPath}`);
@@ -249,9 +179,7 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
     if (!mod.downloadUrl) continue;
 
     try {
-      const filename = decodeURIComponent(
-        path.basename(new URL(mod.downloadUrl).pathname),
-      );
+      const filename = safeFilenameFromUrl(mod.downloadUrl);
 
       // An update must not silently flip a disabled mod back on: the new jar
       // goes into whichever directory the old one is currently sitting in
@@ -267,12 +195,14 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
       const tempPath = `${targetPath}.tmp`;
 
       console.log(`Updating mod: ${mod.slug} to version ${mod.latestVersionId}`);
-      await downloadFile(mod.downloadUrl, tempPath);
+      await downloadToTemp(mod.downloadUrl, tempPath, {
+        sha512: mod.downloadSha512 || undefined,
+      });
 
       if (previous?.filename) {
         safeUnlink(path.join(currentDir, previous.filename));
       } else {
-        for (const jar of detectInstalledJar(currentDir, mod.slug, filename)) {
+        for (const jar of detectInstalledJars(currentDir, mod.slug, filename)) {
           safeUnlink(jar.fullPath);
         }
       }
@@ -318,7 +248,7 @@ async function main() {
     });
 
     if (args.bool("migrate")) {
-      const vars = loadVariables();
+      const vars = loadVariables(variablesPath);
       const serverPath = vars.SERVER_PATH;
       if (!serverPath || !fs.existsSync(serverPath)) {
         throw new Error(`Invalid SERVER_PATH: ${serverPath}`);

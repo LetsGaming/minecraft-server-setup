@@ -30,6 +30,12 @@ EOF
   esac
 done
 
+if ! [[ "$WARN_TIME" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] --warn must be a whole number of seconds, got: $WARN_TIME"
+  exit 1
+fi
+WARN_TIME=$((10#$WARN_TIME))
+
 # ── Check if restart makes sense ──
 if ! server_reachable; then
   echo "[INFO] Server is not running. Nothing to restart."
@@ -45,6 +51,7 @@ if [[ "$PLAYER_COUNT" -eq 0 && "$FORCE" != true && "$RESTART_SKIP_IF_EMPTY" == "
   echo "[INFO] Server restarted."
   notify_success "server_restart" "Server $INSTANCE_NAME restarted (no players online)."
   wait_for_server_ready 120 || true
+  wait_for_notifications
   exit 0
 fi
 
@@ -69,3 +76,4 @@ systemctl_cmd restart
 echo "[INFO] Server restarted."
 notify_success "server_restart" "Server $INSTANCE_NAME restarted ($PLAYER_COUNT players were online)."
 wait_for_server_ready 120 || true
+wait_for_notifications

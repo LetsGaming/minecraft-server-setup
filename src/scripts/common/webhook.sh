@@ -4,13 +4,13 @@
 # Usage: source webhook.sh; notify "event_type" "message" ["title"]
 
 # Avoid re-sourcing
-if [[ -n "$_WEBHOOK_LOADED" ]]; then return 0 2>/dev/null || true; fi
+if [[ -n "${_WEBHOOK_LOADED:-}" ]]; then return 0 2>/dev/null || true; fi
 _WEBHOOK_LOADED=1
 
 _WEBHOOK_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load webhook config if not already loaded
-if [[ -z "$WEBHOOK_URL" ]]; then
+if [[ -z "${WEBHOOK_URL:-}" ]]; then
   if [[ -f "$_WEBHOOK_SCRIPT_DIR/variables.txt" ]]; then
     source "$_WEBHOOK_SCRIPT_DIR/variables.txt"
   fi
@@ -20,7 +20,7 @@ fi
 _event_enabled() {
   local event="$1"
   # If WEBHOOK_EVENTS is not set, all events are enabled
-  if [[ -z "$WEBHOOK_EVENTS" ]]; then
+  if [[ -z "${WEBHOOK_EVENTS:-}" ]]; then
     return 0
   fi
   echo "$WEBHOOK_EVENTS" | grep -qw "$event"
@@ -41,7 +41,7 @@ notify() {
   local color="${4:-3447003}" # Default: blue
 
   # Skip if no webhook URL configured
-  if [[ -z "$WEBHOOK_URL" || "$WEBHOOK_URL" == "none" ]]; then
+  if [[ -z "${WEBHOOK_URL:-}" || "${WEBHOOK_URL:-}" == "none" ]]; then
     return 0
   fi
 
@@ -94,11 +94,30 @@ notify() {
     return 0
   fi
 
-  # Send async (don't block the caller)
-  curl -s -o /dev/null -X POST \
+  # Send async (don't block the caller). The URL is a secret (Discord webhook
+  # tokens live in the path), so it goes to curl as a config line on stdin and
+  # never appears in the process list. --max-time bounds how long a dead
+  # endpoint can hold the request, -f turns an HTTP error into a non-zero exit.
+  # Callers that are about to exit should run wait_for_notifications first.
+  local url_escaped=${WEBHOOK_URL//\\/\\\\}
+  url_escaped=${url_escaped//\"/\\\"}
+  printf 'url = "%s"\n' "$url_escaped" | curl -sS -f -o /dev/null -X POST \
+    --connect-timeout 5 --max-time 10 \
     -H "Content-Type: application/json" \
     -d "$payload" \
-    "$WEBHOOK_URL" &
+    --config - 2> /dev/null &
+  _WEBHOOK_PIDS+=("$!")
+}
+
+_WEBHOOK_PIDS=()
+
+# Wait for in-flight notifications (each is bounded by curl's --max-time).
+wait_for_notifications() {
+  local pid
+  for pid in "${_WEBHOOK_PIDS[@]}"; do
+    wait "$pid" 2> /dev/null || true
+  done
+  _WEBHOOK_PIDS=()
 }
 
 # Convenience wrappers

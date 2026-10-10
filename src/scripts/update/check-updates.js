@@ -4,13 +4,15 @@ const axios = require("axios");
 const { parseArgs } = require("./lib/args");
 
 // Usage:
-//   node check-updates.js [mcVersion] [--mcVersion=<ver>] [--json]
+//   node check-updates.js [mcVersion] [--mcVersion=<ver>] [--only=<slug>] [--json]
 //
 //   mcVersion  MC version to check against — positional or --mcVersion=.
 //              Falls back to gameVersion in downloaded_versions.json.
+//   --only     Check just this installed mod slug. A slug that is not installed
+//              is reported as invalid_entry.
 //   --json     Output results as a JSON blob instead of human-readable text.
 const args = parseArgs({
-  flags: { mcVersion: null },
+  flags: { mcVersion: null, only: null },
   boolFlags: ["json"],
   positional: ["mcVersion"],
 });
@@ -115,6 +117,8 @@ async function checkModUpdate(slug, currentVersionId) {
     }
 
     const latestVersionId = latestVersion.id;
+    const latestFile =
+      latestVersion.files.find((f) => f.primary) ?? latestVersion.files[0];
 
     if (currentVersionId === latestVersionId) {
       if (!useJsonOutput) {
@@ -135,7 +139,7 @@ async function checkModUpdate(slug, currentVersionId) {
       console.log(`  Latest version ID : ${latestVersionId}`);
       console.log(`  Latest version name: ${latestVersion.name}`);
       console.log(`  Published on: ${latestVersion.date_published}`);
-      console.log(`  Download URL: ${latestVersion.files[0]?.url || "N/A"}`);
+      console.log(`  Download URL: ${latestFile?.url || "N/A"}`);
     }
 
     return {
@@ -145,7 +149,8 @@ async function checkModUpdate(slug, currentVersionId) {
       latestVersionId,
       latestVersionName: latestVersion.name,
       datePublished: latestVersion.date_published,
-      downloadUrl: latestVersion.files[0]?.url || null,
+      downloadUrl: latestFile?.url || null,
+      downloadSha512: latestFile?.hashes?.sha512 || null,
     };
   } catch (err) {
     const errMsg = err.response?.data || err.message;
@@ -169,7 +174,19 @@ async function main() {
 
   const results = [];
 
-  for (const [slug, entry] of Object.entries(mods)) {
+  const only = args.get("only");
+  const entries = Object.entries(mods).filter(
+    ([slug]) => only === null || slug === only,
+  );
+  if (only !== null && entries.length === 0) {
+    results.push({
+      slug: only,
+      status: "invalid_entry",
+      message: "Mod is not installed",
+    });
+  }
+
+  for (const [slug, entry] of entries) {
     const currentVersionId = extractVersionId(entry);
     if (!currentVersionId) {
       results.push({

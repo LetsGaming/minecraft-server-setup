@@ -58,6 +58,22 @@ minecraft ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES
 mcbot ALL=(minecraft) NOPASSWD: /usr/bin/bash /home/minecraft/*/scripts/*, \
                                 /usr/bin/bash /home/minecraft/*/scripts/*/*
 
+# The API wrapper's mod operations (install, remove, update, enable, disable)
+# run the update scripts with node, as the minecraft user:
+#   sudo -n -u minecraft /usr/bin/node <scripts>/update/<name>.js [flags] --json -- [slug]
+# That needs its own grant, separate from the bash scripts above. Without it
+# every mod operation fails with a generic sudo error. Name each script and
+# the absolute node binary; the trailing * covers the flags. The same
+# directory-ownership warning as above applies.
+Cmnd_Alias MC_MOD_SCRIPTS = \
+    /usr/bin/node /home/minecraft/*/scripts/update/add-mod.js *, \
+    /usr/bin/node /home/minecraft/*/scripts/update/remove-mod.js *, \
+    /usr/bin/node /home/minecraft/*/scripts/update/update-mod.js *, \
+    /usr/bin/node /home/minecraft/*/scripts/update/update-mods.js *, \
+    /usr/bin/node /home/minecraft/*/scripts/update/check-updates.js *, \
+    /usr/bin/node /home/minecraft/*/scripts/update/toggle-mod.js *
+mcbot ALL=(minecraft) NOPASSWD: MC_MOD_SCRIPTS
+
 # Allow the application user to manage all Minecraft services
 mcbot ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES
 ```
@@ -71,6 +87,16 @@ Replace `mcbot` and `minecraft` with your actual application and server users, a
 > written directly to their final path with `sudo tee` during setup (see
 > `src/setup/common/writeRootFile.js`), so this grant is no longer needed or
 > recommended. If you previously added it, delete it.
+
+## Absolute paths for bash and node
+
+By default the wrapper starts `bash` and `node` by name and `sudo` resolves them through its `secure_path`. That breaks when node comes from nvm or another per-user install, and it makes the sudoers rule depend on whatever the name resolves to. Pin both:
+
+```bash
+command -v bash node          # for example /usr/bin/bash and /usr/bin/node
+```
+
+Set `MC_BASH_PATH` and `MC_NODE_PATH` in the wrapper's environment (the systemd unit or `.env`) to those absolute paths, and use exactly the same paths in the sudoers rules above. The wrapper refuses to start if either variable is set to a relative path.
 
 ## Default service names
 
@@ -94,13 +120,16 @@ sudo -n systemctl status server.service
 # As mcbot user
 sudo -n systemctl status server.service
 sudo -n -u minecraft echo "ok"
+
+# The mod scripts (needs a real instance path)
+sudo -n -u minecraft /usr/bin/node /home/minecraft/mc/instances/survival/scripts/update/check-updates.js --json
 ```
 
 If either command asks for a password, the sudoers entry is not applied correctly.
 
 ## Principle of least privilege
 
-- Only the four runtime actions (`start`/`stop`/`restart`/`status`) are granted. `enable`, `disable`, `daemon-reload`, and unit-file creation are **setup-time** operations performed by an admin's own sudo — they are intentionally not granted to the app user (SEC-03).
+- Only the runtime actions (`start`/`stop`/`restart`/`status`, plus `reset-failed` and the read-only `show`) are granted. `enable`, `disable`, `daemon-reload`, and unit-file creation are **setup-time** operations performed by an admin's own sudo. They are intentionally not granted to the app user (SEC-03).
 - The `*/scripts/*/*` pattern restricts script execution to files inside an instance's `scripts/` directory. **Those directories must be owned by `minecraft` and not writable by `mcbot`** — otherwise the app user could drop a script there and run it as `minecraft`. Pin the path to the exact instance directory where you can.
 - Never grant `ALL=(minecraft) NOPASSWD: ALL` — that gives unlimited shell access as the MC user.
 - Never grant a `mv`/`cp`/`tee` from a world-writable location (e.g. `/tmp`) into `/etc/systemd/system/` — that is an arbitrary-root-unit install. Write unit files straight to their final path (the setup scripts now do this).
