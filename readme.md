@@ -123,7 +123,7 @@ After setup, management scripts are in `<target>/scripts/<instance>/`:
 | `maintenance.sh` | Maintenance mode with admin whitelist |
 | `manage.sh` | Multi-instance management |
 | `backup/backup.sh` | Manual backup with archive mode |
-| `backup/restore.sh` | Restore from backup |
+| `backup/restore.sh` | Restore from backup (refuses while the server is running; see [docs/backup-restore.md](docs/backup-restore.md)) |
 | `update/update-server.js` | Update server version (auto Java install) |
 | `update/check-updates.js` | Check for mod updates |
 | `misc/status.sh` | Show server status and players |
@@ -149,13 +149,16 @@ Set `SERVER_CONTROL.USE_RCON` in `variables.json`:
 
 Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhooks. Events:
 
-`backup_complete`, `backup_failed`, `update_complete`, `update_failed`, `server_start`, `server_stop`, `server_restart`, `storage_warning`, `rollback_complete`, `rollback_start`
+`backup_complete`, `backup_failed`, `update_complete`, `update_failed`, `server_start`, `server_start_failed`, `server_restart`, `rollback_start`, `rollback_complete`
+
+If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. Names in the list that no script emits are accepted and never fire.
 
 ## Documentation
 
 | Topic | Doc |
 |---|---|
 | HTTPS in front of the API wrapper | [docs/reverse-proxy.md](docs/reverse-proxy.md) |
+| What backup, restore and rollback do and refuse to do | [docs/backup-restore.md](docs/backup-restore.md) |
 | API keys, RCON passwords, `.env` | [docs/secrets-management.md](docs/secrets-management.md) |
 | sudo rules the scripts need | [docs/sudoers-setup.md](docs/sudoers-setup.md) |
 | Retiring the bundled web interface | [docs/retiring-web-interface.md](docs/retiring-web-interface.md) |
@@ -181,9 +184,11 @@ the block when convenient. If it had a non-empty `BLOCKED_COMMANDS`, those
 entries move to the bot's `config.json` under `webui.console.blockedCommands`.
 `--interface` is still accepted and does nothing but point you here.
 
-The dashboard's backup panel and rollback button need **API wrapper 3.3.0 or
-newer**. Older wrappers keep working; the dashboard hides what they cannot serve
-rather than showing controls that fail.
+The dashboard's backup panel needs the wrapper's `backup-files` and
+`backup-restore` features, and its rollback button needs the `rollback` script
+capability. A wrapper without them keeps working; the dashboard hides what it
+cannot serve rather than showing controls that fail. The bot reads
+`GET /manifest` to find out which features the installed wrapper has.
 
 ## Version Compatibility
 
@@ -227,7 +232,9 @@ Then run setup normally (it will prompt) or pass the flag explicitly:
 sudo -u <user> bash main.sh --api-server
 ```
 
-This installs dependencies and creates and starts a systemd service named `<INSTANCE_NAME>-api-server.service`.
+This installs dependencies and creates and starts a systemd service named `<TARGET_DIR_NAME>-api-server.service`. One wrapper process serves every instance on the machine.
+
+The API key must be at least 32 characters (`openssl rand -hex 32`). `variables.json` validation and `--check` reject a shorter one, and the wrapper refuses to start with it. Pick the same key for `apiKey` in the bot's `config.json`.
 
 ### Bot configuration
 
@@ -253,14 +260,22 @@ ufw allow from <BOT_IP> to any port 3000 proto tcp
 ### Managing the service
 
 ```bash
-systemctl status survival-api-server
-journalctl -u survival-api-server -f
-systemctl restart survival-api-server
+systemctl status <TARGET_DIR_NAME>-api-server
+journalctl -u <TARGET_DIR_NAME>-api-server -f
+systemctl restart <TARGET_DIR_NAME>-api-server
 ```
 
 ### Standalone deployment
 
 The API server can also be deployed independently without this setup project. See the [mc-api-server README](./src/scripts/api-server/README.md) for standalone install and configuration instructions.
+
+## Tests
+
+```bash
+bash tests/shell/run.sh
+```
+
+Runs the shell tests for the backup, restore, rollback, cleanup, webhook and server-control scripts and the Node tests for the update scripts against a scratch instance with fake binaries on `PATH`. See [docs/backup-restore.md](docs/backup-restore.md#tests).
 
 ## Contributing
 

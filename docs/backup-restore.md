@@ -6,12 +6,16 @@ How `backup/backup.sh`, `backup/restore.sh` and `rollback.sh` treat your data, a
 
 `backup/backup.sh [--archive [type]] [--dry-run] [--verbose]` stages the server directory, compresses it with `tar | zstd` and verifies the result.
 
-- **One backup per instance at a time.** The script takes a non-blocking `flock` on `$BACKUPS_PATH/.backup.lock`. A second run (cron plus a wrapper-triggered one, for example) exits with status `75` without touching anything. `run_backup.sh` treats `75` as a skip and leaves that day's flag unset so the slot is retried.
+- **One backup per instance at a time.** The script takes a non-blocking `flock` on `$BACKUPS_PATH/.backup.lock`. A second run (cron plus a wrapper-triggered one, for example) exits with status `75` without touching anything. `run_backup.sh` treats `75` as a skip and leaves that day's flag unset so the slot is retried. On a host without `flock` the script logs a warning and runs unlocked.
 - **Archive type.** `--archive <type>` must match `^[a-z0-9_-]+$`; anything else is rejected before any directory is created. Without a type, `general` is used.
 - **Verification.** A failed `tar` or `zstd` in the pipeline fails the backup. The finished file must pass `zstd -t` and a full `tar -tf` listing. A failed backup never leaves a partial archive or the `tmp_backup` staging directory behind.
 - **`DO_GENERATION_BACKUPS`** in `variables.txt` is compared with the string `true`; any other value means hourly backups only.
 - **Private by default.** Archives contain `common/variables.txt` (API key, RCON password, webhook URL) and `api-server-config.json`, so the script runs under `umask 077`: archives and the staging directory are readable by the instance user only. Set `BACKUP_UMASK` (for example `027`) in the environment of the backup job if another account, such as an API wrapper running as a different user, must read the archives. The standard setup runs the wrapper as the same user.
 - **Notifications.** The webhook request is bounded (`--max-time 10`, `-f`), the URL is passed to `curl` on stdin so it never shows in the process list, and the script waits for in-flight notifications before it exits.
+
+## Locks
+
+`maintenance.sh` and `message_onjoin.sh` take a per-instance lock through `acquire_instance_lock` in `src/scripts/common/utils.sh`; a second copy for the same instance exits with a message. The lock file lives in a private directory (mode `700`), chosen in this order: `INSTANCE_LOCK_DIR`, `$XDG_RUNTIME_DIR/minecraft`, then `scripts/.locks`. It is never placed in the world-writable `/tmp`. With `flock` the lock is released by the kernel when the process dies, so a crashed run cannot strand it. Without `flock` the helper falls back to a `mkdir` lock that records the owner's pid and is taken over when that process is gone. Set `INSTANCE_LOCK_DIR` in the environment of the script (for example in the systemd unit) to move the lock directory.
 
 ## Cleanup
 
@@ -43,7 +47,11 @@ How `backup/backup.sh`, `backup/restore.sh` and `rollback.sh` treat your data, a
 
 ## API wrapper
 
-`POST /instances/:id/backups/files/:fileId/restore` answers `409` unless a fresh health probe reports the server `offline`, and `503` if that probe cannot complete. See the wrapper's `openapi.yaml`.
+`POST /instances/:id/backups/files/:fileId/restore` answers `409` unless a fresh health probe reports the server `offline`, and `503` if that probe cannot complete. See the wrapper's `openapi.json`.
+
+## Downloads
+
+The Node update scripts (`src/scripts/update/lib/download.js`) treat everything a remote API names as untrusted. A download goes to `<target>.tmp` first and is renamed into place only after it passed its checks, so a failed or rejected download leaves no partial file behind. `add-mod.js` and `update-mods.js` verify the sha512 that Modrinth publishes, `update-server.js` verifies the sha1 that Mojang publishes. The file name is taken from the URL, percent-decoded and then required to be a single plain name, so a hostile URL cannot write outside `mods/`. Bodies are capped (512 MiB by default) and bounded by a response timeout and an overall deadline.
 
 ## Tests
 
