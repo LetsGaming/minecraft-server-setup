@@ -1,0 +1,91 @@
+# The wrapper this suite ships, against the bot that talks to it.
+#
+# The API wrapper (src/scripts/api-server) is a git submodule, so the suite
+# ships whichever wrapper commit the pointer names. This job builds exactly
+# that commit and runs the bot's contract check against it
+# (minecraft-bot: scripts/e2e-wrapper-contract.mjs). It is the gate for the
+# pointer bump described in docs/wrapper-submodule.md: a pointer that moves to
+# a wrapper the bot cannot use, or stays behind a bot that needs more, is red
+# here instead of on an operator's host.
+#
+# The bot is checked out at its default branch. A bot change that needs a newer
+# wrapper than the pointer names turns this job red until the pointer is bumped,
+# which is the order the contract policy asks for: wrapper, then this pointer,
+# then the bot.
+name: Wrapper contract
+
+on:
+  push:
+    paths:
+      - "src/scripts/api-server"
+      - ".github/workflows/wrapper-contract.yml"
+  pull_request:
+    paths:
+      - "src/scripts/api-server"
+      - ".github/workflows/wrapper-contract.yml"
+  workflow_dispatch:
+    inputs:
+      bot_ref:
+        description: "minecraft-bot ref to test against"
+        required: false
+        default: main
+
+env:
+  BOT_REPO: LetsGaming/minecraft-bot
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out the suite with its pinned wrapper
+        uses: actions/checkout@v4
+        with:
+          path: suite
+          submodules: true
+
+      - name: Check out the bot
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.BOT_REPO }}
+          ref: ${{ inputs.bot_ref || 'main' }}
+          path: bot
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Report the pinned wrapper
+        working-directory: suite/src/scripts/api-server
+        run: |
+          echo "Pinned wrapper: $(git rev-parse HEAD)"
+          git log -1 --format='%s'
+          node -p "'package version ' + require('./package.json').version"
+
+      - name: Build the pinned wrapper
+        working-directory: suite/src/scripts/api-server
+        run: npm ci && npm run build
+
+      - name: Build the bot
+        working-directory: bot
+        run: npm ci && npm run build
+
+      - name: Contract check
+        working-directory: bot
+        env:
+          WRAPPER_DIR: ${{ github.workspace }}/suite/src/scripts/api-server
+          E2E_DUMP_WRAPPER_LOG: "1"
+          # The wrapper runs the suite scripts through sudo; the hosted runner
+          # has passwordless sudo, so every route is exercised for real.
+          E2E_REQUIRE_SUDO: "1"
+        run: |
+          if ! node -e "process.exit(require('./package.json').scripts['e2e:contract'] ? 0 : 1)"; then
+            echo "::error::${BOT_REPO}@${{ inputs.bot_ref || 'main' }} has no 'e2e:contract' script."
+            exit 1
+          fi
+          if ! npm run e2e:contract; then
+            echo "::error::The wrapper pinned by this suite fails the bot's contract check."
+            echo "Either the pointer is behind what the bot now needs (bump it, see"
+            echo "docs/wrapper-submodule.md), or the pinned wrapper has a real regression."
+            exit 1
+          fi

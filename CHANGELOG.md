@@ -7,6 +7,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `.github/workflows/wrapper-contract.yml`: builds the API wrapper commit the `src/scripts/api-server` submodule pins and runs the bot's `e2e:contract` against it, on every pointer change.
+- `docs/wrapper-submodule.md`: the order of a contract change (wrapper, this pointer, bot), the compatibility window, and how to bump the submodule pointer.
 - `tests/shell/`: plain-bash tests for `backup.sh`, `restore.sh` and `rollback.sh` using fake binaries on `PATH`. Run with `bash tests/shell/run.sh`.
 - `docs/backup-restore.md`: restore, rollback and backup semantics.
 
