@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../common/server_control.sh"
 source "$SCRIPT_DIR/../common/archive_restore.sh"
+source "$SCRIPT_DIR/../common/utils.sh"
 
 BASE_BACKUP_DIR="$BACKUPS_PATH"
 BACKUP_DIR="$BASE_BACKUP_DIR"
@@ -105,6 +106,8 @@ while [[ $# -gt 0 ]]; do
         *) echo "$(date +'%F %T') [ERROR] Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
+
+acquire_operation_lock restore || exit 75
 
 if $FROM_ARCHIVE; then
     BACKUP_DIR="$BASE_BACKUP_DIR/archives"

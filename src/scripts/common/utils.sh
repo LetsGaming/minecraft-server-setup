@@ -67,6 +67,67 @@ acquire_instance_lock() {
   return 0
 }
 
+# acquire_operation_lock <kind>
+# The one slot for work that rewrites the server and must not overlap with
+# itself or with other such work: restore, rollback, and the version upgrade.
+# It is separate from the named locks above (own file, own descriptor), so
+# holding it never disturbs them. Whoever holds it exports
+# MC_OPERATION_LOCK_HELD=1, so the scripts it starts (backup, rollback) pass
+# instead of waiting on their parent. Returns 1 when another operation runs.
+acquire_operation_lock() {
+  local kind="${1:-operation}"
+  [[ "${MC_OPERATION_LOCK_HELD:-}" == "1" ]] && return 0
+
+  local dir="${INSTANCE_LOCK_DIR:-}"
+  if [[ -z "$dir" ]]; then
+    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+      dir="$XDG_RUNTIME_DIR/minecraft"
+    else
+      dir="$_UTILS_DIR/../.locks"
+    fi
+  fi
+  mkdir -p "$dir"
+  chmod 700 "$dir" 2> /dev/null || true
+
+  local lock="$dir/operation_${INSTANCE_NAME:-default}.lock"
+
+  if _have_flock; then
+    exec 7> "$lock"
+    if ! flock -n 7; then
+      echo "Another operation ($(cat "$lock.kind" 2> /dev/null || echo unknown)) is running for ${INSTANCE_NAME:-this instance}. Exiting."
+      return 1
+    fi
+  else
+    local held="$lock.d"
+    if ! mkdir "$held" 2> /dev/null; then
+      local other
+      other="$(cat "$held/pid" 2> /dev/null || true)"
+      if [[ -n "$other" ]] && kill -0 "$other" 2> /dev/null; then
+        echo "Another operation ($(cat "$lock.kind" 2> /dev/null || echo unknown)) is running for ${INSTANCE_NAME:-this instance}. Exiting."
+        return 1
+      fi
+      rm -rf "$held"
+      mkdir "$held" 2> /dev/null || return 1
+    fi
+    echo "$$" > "$held/pid"
+    _OPERATION_LOCK_DIR_HELD="$held"
+    # A script that already has an EXIT trap must call release_operation_lock from it.
+    [[ -z "$(trap -p EXIT)" ]] && trap release_operation_lock EXIT
+  fi
+  echo "$kind" > "$lock.kind" 2> /dev/null || true
+  export MC_OPERATION_LOCK_HELD=1
+  return 0
+}
+
+_OPERATION_LOCK_DIR_HELD=""
+
+release_operation_lock() {
+  if [[ -n "$_OPERATION_LOCK_DIR_HELD" ]]; then
+    rm -rf "$_OPERATION_LOCK_DIR_HELD"
+    _OPERATION_LOCK_DIR_HELD=""
+  fi
+}
+
 release_instance_lock() {
   if [[ -n "$_INSTANCE_LOCK_DIR_HELD" ]]; then
     rm -rf "$_INSTANCE_LOCK_DIR_HELD"

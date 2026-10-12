@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common/server_control.sh"
 source "$SCRIPT_DIR/common/archive_restore.sh"
+source "$SCRIPT_DIR/common/utils.sh"
 
 BACKUP_DIR="$BACKUPS_PATH/archives/update"
 SKIP_CONFIRMATION=false
@@ -37,6 +38,8 @@ while [[ $# -gt 0 ]]; do
     *) echo "[ERROR] Unknown argument: $1"; print_help; exit 1 ;;
   esac
 done
+
+acquire_operation_lock rollback || exit 75
 
 # Find the latest update backup
 if [[ ! -d "$BACKUP_DIR" ]]; then
@@ -100,7 +103,7 @@ notify_warning "rollback_start" "Server $INSTANCE_NAME is rolling back to backup
 # Extract next to the server directory and swap, so a failure leaves the
 # current files in place.
 STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
-trap 'rm -rf -- "$STAGING_DIR"' EXIT
+trap 'rm -rf -- "$STAGING_DIR"; release_operation_lock' EXIT
 
 echo "[INFO] Restoring backup..."
 if ! extract_archive "$LATEST_BACKUP" "$STAGING_DIR"; then

@@ -4,6 +4,7 @@ set -e
 # ——— basics ———
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../common/server_control.sh"
+source "$SCRIPT_DIR/../common/utils.sh"
 
 # Track auto-save state so we can always re-enable on exit
 _AUTO_SAVE_DISABLED=false
@@ -13,6 +14,7 @@ TMP_DIR=""
 PARTIAL_ARCHIVE=""
 
 _backup_cleanup() {
+  release_operation_lock
   if [[ -n "$PARTIAL_ARCHIVE" ]]; then
     rm -f -- "$PARTIAL_ARCHIVE"
     PARTIAL_ARCHIVE=""
@@ -120,6 +122,12 @@ fi
 umask "${BACKUP_UMASK:-077}"
 
 mkdir -p "$BACKUP_DIR" "$JAR_STORAGE"
+
+# ——— no backup while a restore, rollback or upgrade is rewriting the server ———
+# The upgrade job runs this script itself and passes (MC_OPERATION_LOCK_HELD).
+if ! $DRY_RUN; then
+  acquire_operation_lock backup || { log WARN "Another operation is running for $INSTANCE_NAME; skipping."; exit 75; }
+fi
 
 # ——— one backup per instance at a time ———
 # Cron and wrapper-triggered runs share the staging directory below, so they
