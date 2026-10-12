@@ -53,8 +53,12 @@ case "$cmd" in
     server_is_running
     exit $?
     ;;
+  notify)
+    notify "${1:-update}" "${2:-}"
+    wait_for_notifications
+    ;;
   *)
-    echo "Usage: $0 announce <message> | stop | halt | start | running" >&2
+    echo "Usage: $0 announce <message> | stop | halt | start | running | notify <event> <message>" >&2
     exit 64
     ;;
 esac

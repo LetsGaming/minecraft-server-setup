@@ -5,6 +5,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `update/upgrade.sh <version>` and `upgrade-server.js`: the whole version upgrade as one job (plan check, countdown, stop, archive backup, install, start and watch). If the first start fails the mods without a build for the target are disabled and it starts again; if that fails too, this job's own backup is restored. Progress is NDJSON. See `docs/upgrade.md`.
+- `update-server.js --plan`, `--apply`, `--json`, `--yes`, `--keep-incompatible`.
+- `start.sh` writes lifecycle events (`jvm_start`, `jvm_exit`, `restart_scheduled`, `crash_loop_gave_up`) to `logs/lifecycle.ndjson` and sends a `server_crash_loop` webhook when it gives up. Restart behaviour is unchanged.
+- `acquire_operation_lock` in `common/utils.sh`: one slot per instance for restore, rollback, backup and upgrade; a refused run exits `75`.
+- `common/instance_ops.sh`: announce, stop, halt, start, running and notify as small commands.
+
+### Changed
+
+- `update-server.js` records the new version after the jar swap instead of before it, and disables incompatible mods (reversible, `mods/disabled/`) instead of deleting jars by filename match.
+- `backup.sh`, `restore.sh` and `rollback.sh` take the operation lock, so they no longer overlap with each other or with an upgrade.
+
 ## [5.0.0] - 2026-10-10
 
 Items marked **BREAKING** change behaviour that scripts, cron jobs or the API wrapper may rely on.
