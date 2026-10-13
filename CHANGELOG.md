@@ -21,6 +21,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `prune-chunks.js` accepts a manual selection (`selection` in the parameters: add/remove rectangles in chunk coordinates, at most 2,500). Chunks chosen by hand are deleted even where a soft rule (in use, buffer) keeps them; with `allowProtected` they also override spawn, player areas and drawn zones; unreadable chunks are never deleted. The summary counts them per dimension (`manualSoft`, `manualHard`, `manualBlocked`) and the map marks them (cell classes 6 and 7). Parameters can be read from stdin (`--params-stdin`). The selection is never saved as a default.
 - `prune-chunks.js --scan` reads regions on worker threads into a per-region record cache and prints NDJSON progress. A repeat scan takes about a tenth of the time, changing a threshold, radius, buffer or zone reads no region file, and `--apply` reads only the regions it deletes from (in parallel). Options `--workers` and `--no-cache`.
 - `update-server.js` records the new version after the jar swap instead of before it, and disables incompatible mods (reversible, `mods/disabled/`) instead of deleting jars by filename match.
 - `backup.sh`, `restore.sh` and `rollback.sh` take the operation lock, so they no longer overlap with each other or with an upgrade.

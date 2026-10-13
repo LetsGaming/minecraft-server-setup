@@ -7,7 +7,7 @@
  * Usage (every mode prints one JSON object per line with --json):
  *   node prune-chunks.js --status
  *   node prune-chunks.js --dimensions             (names and region counts, no chunk is read)
- *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path>] [--profile] [--no-cache] [--workers=<n>]
+ *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path> | --params-stdin] [--profile] [--no-cache] [--workers=<n>]
  *   node prune-chunks.js --apply  --plan=<id> [--workers=<n>] [--time-budget=<seconds>]
  *   node prune-chunks.js --apply  --plan=<id>
  *   node prune-chunks.js --settings=get
@@ -107,7 +107,8 @@ function readParams(args) {
   const inline = args.get("params");
   let raw = null;
   try {
-    if (file) raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (args.bool("params-stdin")) raw = JSON.parse(fs.readFileSync(0, "utf8"));
+    else if (file) raw = JSON.parse(fs.readFileSync(file, "utf8"));
     else if (inline) raw = JSON.parse(inline);
   } catch {
     fail("params", "The parameters are not valid JSON.");
@@ -225,7 +226,7 @@ function workersOf(args) {
 async function main() {
   const args = parseArgs({
     flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null },
-    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions"],
+    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin"],
   });
   const vars = loadVariables(path.join(SCRIPTS_DIR, "common", "variables.txt"), { optional: true });
 
@@ -243,8 +244,10 @@ async function main() {
   if (settingsMode === "set") {
     const params = normalizeParams(readParams(args) ?? {});
     ensureDir();
-    writePrivate(SETTINGS_FILE, JSON.stringify({ version: 1, params }, null, 2));
-    out({ ok: true, params });
+    // A manual selection belongs to one scan, not to the defaults.
+    const { selection: _selection, ...stored } = params;
+    writePrivate(SETTINGS_FILE, JSON.stringify({ version: 1, params: stored }, null, 2));
+    out({ ok: true, params: normalizeParams(stored) });
     return;
   }
 

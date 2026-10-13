@@ -591,3 +591,89 @@ test("inhabitedTime agrees with chunkMeta on both layouts and rejects broken dat
     assert.throws(() => inhabitedTime(Buffer.from([10, 0, 0, type, 0, 1, 0x61, 0xff, 0xff, 0xff, 0xff, 0])), /ended early/);
   }
 });
+
+// ── Manual selection ──
+
+const SEL = (ops, extra = {}) => ({ ...LEAN, selection: { ops, allowProtected: false, ...extra } });
+const add = (x1, z1, x2, z2, mode = "add", dimension = "overworld") => ({ dimension, mode, x1, z1, x2, z2 });
+
+test("a manual selection deletes chunks the rules would keep, and counts them as chosen over a soft rule", withServer((s) => {
+  threeFolders(s, [0, 60, 60, 0]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL([add(1, 0, 2, 0)]) });
+  assert.equal(r.plan.totals.delete, 4);
+  const dim = r.plan.dimensions[0];
+  assert.deepEqual([dim.manualSoft, dim.manualHard, dim.manualBlocked], [2, 0, 0]);
+  const cell = Buffer.from(r.maps.overworld.regions["r.0.0"].cell, "base64");
+  assert.deepEqual([...cell.subarray(0, 4)], [plan.CELL.DELETE, plan.CELL.MANUAL_SOFT, plan.CELL.MANUAL_SOFT, plan.CELL.DELETE]);
+  assert.equal(plan.applyPlan({ serverPath: s.dir, plan: r.plan }).deletedChunks, 4);
+  assert.equal(fs.existsSync(s.regionFile(null, "region", 0, 0)), false, "the emptied region file is gone");
+}));
+
+test("later operations win: remove takes chunks out again", withServer((s) => {
+  threeFolders(s, [60, 60, 60, 60]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 3, 0), add(1, 0, 2, 0, "remove"), add(2, 0, 2, 0)]) });
+  assert.equal(r.plan.totals.delete, 3);
+  const cell = Buffer.from(r.maps.overworld.regions["r.0.0"].cell, "base64");
+  assert.deepEqual([...cell.subarray(0, 4)], [plan.CELL.MANUAL_SOFT, plan.CELL.ACTIVE, plan.CELL.MANUAL_SOFT, plan.CELL.MANUAL_SOFT]);
+}));
+
+test("unreadable chunks are never deleted, even when selected with the override on", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [chunk(0, 0, 60), { ...chunk(1, 0, 0), compression: "corrupt" }]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 1, 0)], { allowProtected: true }) });
+  const dim = r.plan.dimensions[0];
+  assert.equal(dim.delete, 1);
+  assert.equal(dim.manualBlocked, 1);
+}));
+
+test("protected areas stay unless the override is on, and a hard override is counted apart", withServer((s) => {
+  threeFolders(s, [0, 0, 60, 0]);
+  const zone = { name: "base", dimension: "overworld", x1: 0, z1: 0, x2: 2, z2: 0 };
+  const without = plan.scanWorld({ serverPath: s.dir, params: { ...SEL([add(0, 0, 3, 0)]), zones: [zone] } });
+  assert.equal(without.plan.totals.delete, 1, "only chunk 3 lies outside the zone");
+  assert.equal(without.plan.dimensions[0].manualBlocked, 3);
+  const withIt = plan.scanWorld({ serverPath: s.dir, params: { ...SEL([add(0, 0, 3, 0)], { allowProtected: true }), zones: [zone] } });
+  const dim = withIt.plan.dimensions[0];
+  assert.equal(dim.delete, 4);
+  assert.equal(dim.manualHard, 3);
+}));
+
+test("a selection only reaches its own dimension, and rectangles over empty space choose nothing", withServer((s) => {
+  threeFolders(s, [60, 60]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 1, 0, "add", "the_nether"), add(500, 500, 600, 600)]) });
+  assert.equal(r.plan.totals.delete, 0);
+}));
+
+test("the selection is part of the plan: a different one is a different plan id", withServer((s) => {
+  threeFolders(s, [60, 60]);
+  const a = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 0, 0)]) });
+  const b = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 1, 0)]) });
+  const c = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 0, 0)]) });
+  assert.notEqual(a.plan.id, b.plan.id);
+  assert.equal(a.plan.id, c.plan.id);
+}));
+
+test("selection parameters are normalised and capped", () => {
+  const n = plan.normalizeParams({ selection: { ops: [add(5, 5, 1, 1), { dimension: 3 }, add(0, 0, 9e9, 0), { ...add(0, 0, 1, 1), mode: "xor" }], allowProtected: "yes" } });
+  assert.deepEqual(n.selection, { ops: [{ dimension: "overworld", mode: "add", x1: 1, z1: 1, x2: 5, z2: 5 }], allowProtected: false });
+  const many = plan.normalizeParams({ selection: { ops: new Array(5000).fill(add(0, 0, 1, 1)) } });
+  assert.equal(many.selection.ops.length, 2500);
+});
+
+test("selected chunks agree with a brute-force reading of the operations", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  const list = [];
+  for (let i = 0; i < 1024; i++) list.push(chunk(i & 31, i >> 5, 60));
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, list);
+  let seed = 3;
+  const rand = (n) => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n);
+  const ops = [];
+  for (let i = 0; i < 40; i++) {
+    const x = rand(32), z = rand(32);
+    ops.push(add(x, z, Math.min(31, x + rand(8)), Math.min(31, z + rand(8)), rand(3) === 0 ? "remove" : "add"));
+  }
+  const expected = new Set();
+  for (const o of ops) for (let z = o.z1; z <= o.z2; z++) for (let x = o.x1; x <= o.x2; x++) o.mode === "add" ? expected.add(z * 32 + x) : expected.delete(z * 32 + x);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL(ops) });
+  assert.equal(r.plan.totals.delete, expected.size);
+}));

@@ -32,7 +32,18 @@ const CELL = {
   PROTECTED: 3,
   BUFFER: 4,
   UNREADABLE: 5,
+  /** Chosen by hand, overriding a soft rule (in use, buffer). */
+  MANUAL_SOFT: 6,
+  /** Chosen by hand, overriding a hard protection (needs `selection.allowProtected`). */
+  MANUAL_HARD: 7,
 };
+
+/** Cells that go: what the rules found and what was chosen by hand. */
+const isDeletion = (c) => c === CELL.DELETE || c === CELL.MANUAL_SOFT || c === CELL.MANUAL_HARD;
+
+/** Operations in a manual selection; past this the parameters would not fit on a command line. */
+const MAX_SELECTION_OPS = 2500;
+const MAX_COORD = 2_000_000;
 
 const DEFAULT_PARAMS = Object.freeze({
   thresholdMinutes: 5,
@@ -41,7 +52,36 @@ const DEFAULT_PARAMS = Object.freeze({
   bufferChunks: 2,
   zones: [],
   dimensions: null,
+  selection: Object.freeze({ ops: [], allowProtected: false }),
 });
+
+/**
+ * A manual selection as an ordered list of rectangles in chunk coordinates:
+ * "add" puts chunks in, "remove" takes them out again, later operations win.
+ * Never-deletable chunks (unreadable ones) and, unless `allowProtected`, hard
+ * protections (spawn, players, drawn zones) stay whatever the selection says.
+ */
+function normalizeSelection(input) {
+  const out = { ops: [], allowProtected: false };
+  if (!input || typeof input !== "object") return out;
+  out.allowProtected = input.allowProtected === true;
+  if (!Array.isArray(input.ops)) return out;
+  for (const op of input.ops) {
+    if (out.ops.length >= MAX_SELECTION_OPS) break;
+    if (!op || typeof op.dimension !== "string" || (op.mode !== "add" && op.mode !== "remove")) continue;
+    const c = [op.x1, op.z1, op.x2, op.z2].map((v) => Math.trunc(v));
+    if (!c.every((v) => Number.isFinite(v) && Math.abs(v) <= MAX_COORD)) continue;
+    out.ops.push({
+      dimension: op.dimension,
+      mode: op.mode,
+      x1: Math.min(c[0], c[2]),
+      z1: Math.min(c[1], c[3]),
+      x2: Math.max(c[0], c[2]),
+      z2: Math.max(c[1], c[3]),
+    });
+  }
+  return out;
+}
 
 function normalizeParams(input = {}) {
   const num = (v, d, min, max) => {
@@ -68,6 +108,7 @@ function normalizeParams(input = {}) {
     bufferChunks: num(input.bufferChunks, DEFAULT_PARAMS.bufferChunks, 0, 32),
     zones,
     dimensions: Array.isArray(input.dimensions) ? input.dimensions.filter((d) => typeof d === "string") : null,
+    selection: normalizeSelection(input.selection),
   };
 }
 
@@ -183,7 +224,7 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profil
   }
   if (cacheDir) cache.prune(cacheDir, dimId, live);
 
-  if (cells.size === 0) return { cells, regions: 0 };
+  if (cells.size === 0) return { cells, regions: 0, manual: { soft: 0, hard: 0, blocked: 0 } };
 
   // Protected zones first: they turn a would-be deletion into a keep.
   const rects = protectedRects(dimId, params, spawn, players);
@@ -209,7 +250,73 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profil
     timed(profile, "buffer", () => applyBuffer(cells, params.bufferChunks));
   }
 
-  return { cells, regions: cells.size };
+  const manual = timed(profile, "selection", () => applySelection(dimId, cells, params.selection, rects));
+  return { cells, regions: cells.size, manual };
+}
+
+const inRects = (rects, cx, cz) => rects.some((r) => cx >= r.x1 && cx <= r.x2 && cz >= r.z1 && cz <= r.z2);
+
+/**
+ * Turn the chunks chosen by hand into deletions where the rules allow it.
+ * Returns how many were chosen over a soft rule, over a hard protection, and
+ * how many could not be honoured (unreadable, or protected without the override).
+ */
+function applySelection(dimId, cells, selection, rects) {
+  const result = { soft: 0, hard: 0, blocked: 0 };
+  const ops = selection.ops.filter((o) => o.dimension === dimId);
+  if (ops.length === 0) return result;
+
+  const chosen = new Map(); // "rx,rz" -> Uint8Array(1024) of 0/1
+  const bitsOf = (rx, rz) => {
+    const key = `${rx},${rz}`;
+    let bits = chosen.get(key);
+    if (!bits) {
+      bits = new Uint8Array(region.CHUNKS);
+      chosen.set(key, bits);
+    }
+    return bits;
+  };
+  for (const op of ops) {
+    const value = op.mode === "add" ? 1 : 0;
+    // Only regions that exist matter; a rectangle over empty space chooses nothing.
+    for (let rz = Math.floor(op.z1 / 32); rz <= Math.floor(op.z2 / 32); rz++) {
+      for (let rx = Math.floor(op.x1 / 32); rx <= Math.floor(op.x2 / 32); rx++) {
+        if (!cells.has(`${rx},${rz}`)) continue;
+        const bits = bitsOf(rx, rz);
+        const xa = Math.max(op.x1, rx * 32) - rx * 32;
+        const xb = Math.min(op.x2, rx * 32 + 31) - rx * 32;
+        const za = Math.max(op.z1, rz * 32) - rz * 32;
+        const zb = Math.min(op.z2, rz * 32 + 31) - rz * 32;
+        for (let z = za; z <= zb; z++) for (let x = xa; x <= xb; x++) bits[z * 32 + x] = value;
+      }
+    }
+  }
+
+  for (const [key, bits] of chosen) {
+    const entry = cells.get(key);
+    for (let slot = 0; slot < region.CHUNKS; slot++) {
+      if (!bits[slot]) continue;
+      const c = entry.cell[slot];
+      if (c === CELL.EMPTY || c === CELL.DELETE) continue;
+      if (c === CELL.UNREADABLE) {
+        result.blocked++;
+        continue;
+      }
+      const hard = inRects(rects, entry.rx * 32 + region.slotX(slot), entry.rz * 32 + region.slotZ(slot));
+      if (hard) {
+        if (!selection.allowProtected) {
+          result.blocked++;
+          continue;
+        }
+        entry.cell[slot] = CELL.MANUAL_HARD;
+        result.hard++;
+      } else {
+        entry.cell[slot] = CELL.MANUAL_SOFT;
+        result.soft++;
+      }
+    }
+  }
+  return result;
 }
 
 const isKeep = (c) => c === CELL.ACTIVE || c === CELL.PROTECTED || c === CELL.UNREADABLE;
@@ -279,7 +386,7 @@ function deletionBitmap(cell) {
   const bits = new Uint8Array(region.CHUNKS / 8);
   let count = 0;
   for (let slot = 0; slot < region.CHUNKS; slot++) {
-    if (cell[slot] === CELL.DELETE) {
+    if (isDeletion(cell[slot])) {
       bits[slot >> 3] |= 1 << (slot & 7);
       count++;
     }
@@ -323,7 +430,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDi
   const maps = {};
 
   for (const dim of dims) {
-    const { cells } = scanDimension({
+    const { cells, manual } = scanDimension({
       dimId: dim.id,
       dimDir: dim.dir,
       params,
@@ -335,7 +442,17 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDi
       fresh,
     });
 
-    const counts = { chunks: 0, delete: 0, active: 0, protected: 0, buffer: 0, unreadable: 0 };
+    const counts = {
+      chunks: 0,
+      delete: 0,
+      active: 0,
+      protected: 0,
+      buffer: 0,
+      unreadable: 0,
+      manualSoft: manual?.soft ?? 0,
+      manualHard: manual?.hard ?? 0,
+      manualBlocked: manual?.blocked ?? 0,
+    };
     const deletions = {};
     const mapRegions = {};
     let bytes = 0;
@@ -362,7 +479,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDi
         else if (c === CELL.PROTECTED) counts.protected++;
         else if (c === CELL.BUFFER) counts.buffer++;
         else if (c === CELL.UNREADABLE) counts.unreadable++;
-        if (c === CELL.DELETE) {
+        if (isDeletion(c)) {
           bytes += entry.bytes[slot] + (siblings ? siblings[0][slot] + siblings[1][slot] : 0);
         }
       }
@@ -578,6 +695,7 @@ function isInside(parent, child) {
 
 module.exports = {
   CELL,
+  isDeletion,
   DEFAULT_PARAMS,
   TICKS_PER_MINUTE,
   normalizeParams,
