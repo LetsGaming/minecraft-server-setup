@@ -119,16 +119,8 @@ test_stale_temp_dir_from_a_killed_run_is_discarded() {
 
 test_busy_lock_skips_the_run() {
   setup
-  local holder=""
-  if [[ -n "$REAL_FLOCK" ]]; then
-    ( exec 9>"$T/backups/.backup.lock"; flock -n 9; command sleep 30 ) &
-    holder=$!
-    command sleep 1
-  else
-    export FLOCK_SHIM_BUSY=1 MC_OPERATION_LOCK_HELD=1
-  fi
+  export FLOCK_SHIM_BUSY=1 MC_OPERATION_LOCK_HELD=1
   run_script "$BACKUP"
-  [[ -n "$holder" ]] && kill "$holder" 2>/dev/null
   assert_rc 75 "$RC" "exit 75 when another backup holds the lock"
   assert_contains "$OUT" "Another backup is already running" "says why"
   assert_eq "" "$(first_archive "$T/backups")" "nothing written"
@@ -136,14 +128,10 @@ test_busy_lock_skips_the_run() {
 
 test_backup_uses_a_per_instance_lock_file() {
   setup
-  if [[ -n "$REAL_FLOCK" ]]; then
-    skip "lock file via shim log" "a real flock is installed, so the shim is not used"
-  else
-    run_script "$BACKUP"
-    assert_rc 0 "$RC" "backup exits 0 when the lock is free"
-    assert_logged "flock -n 9" "non-blocking lock requested"
-  fi
-  assert_exists "$T/backups/.backup.lock" "lock file lives in the instance backups root"
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "backup exits 0 when the lock is free"
+  assert_logged "flock -n 9" "non-blocking lock requested"
+  [[ -n "$REAL_FLOCK" ]] && assert_exists "$T/backups/.backup.lock" "lock file lives in the instance backups root"
 }
 
 test_two_real_concurrent_backups_do_not_interleave() {
@@ -178,10 +166,6 @@ test_run_backup_never_executes_the_generation_flag() {
 
 test_run_backup_skips_quietly_when_locked() {
   setup
-  if [[ -n "$REAL_FLOCK" ]]; then
-    skip "run_backup lock skip" "uses the shim-only busy switch; real flock path covered by test_busy_lock_skips_the_run"
-    return
-  fi
   export FLOCK_SHIM_BUSY=1 MC_OPERATION_LOCK_HELD=1
   run_script "$RUN_BACKUP"
   assert_rc 0 "$RC" "cron run exits 0 when another backup is active"

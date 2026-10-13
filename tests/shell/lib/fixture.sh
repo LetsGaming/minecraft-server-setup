@@ -10,6 +10,7 @@ SCRIPTS_SRC="$(cd "$SHELL_TEST_DIR/../../src/scripts" && pwd)"
 export REAL_TAR="${REAL_TAR:-$(command -v tar)}"
 export REAL_DU="${REAL_DU:-$(command -v du)}"
 REAL_FLOCK="$(command -v flock || true)"
+export REAL_FLOCK
 
 make_fixture() {
   T="$(mktemp -d "${TMPDIR:-/tmp}/mcsetup-shelltest.XXXXXX")"
@@ -37,7 +38,6 @@ VARS
 
   local f
   for f in "$SHELL_TEST_DIR"/shims/*; do
-    [[ "$(basename "$f")" == flock && -n "$REAL_FLOCK" ]] && continue
     cp "$f" "$T/bin/"
   done
   chmod +x "$T"/bin/*

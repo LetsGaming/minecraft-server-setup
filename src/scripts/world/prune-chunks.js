@@ -6,6 +6,7 @@
  *
  * Usage (every mode prints one JSON object per line with --json):
  *   node prune-chunks.js --status
+ *   node prune-chunks.js --tile --dimension=<id> --rx=<n> --rz=<n>    draw one region from above
  *   node prune-chunks.js --inspect --plan=<id> --dimension=<id> --cx=<n> --cz=<n>   one chunk, in full
  *   node prune-chunks.js --dimensions             (names and region counts, no chunk is read)
  *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path> | --params-stdin] [--profile] [--no-cache] [--workers=<n>]
@@ -29,10 +30,12 @@ const { parseArgs } = require("../update/lib/args");
 const { loadVariables } = require("../update/lib/variables");
 const { inspectChunk, listDimensions, scanWorld, listScanJobs, newProfile, applyPlan, normalizeParams, touchedKeys } = require("./lib/plan");
 const { warmCache, defaultWorkers } = require("./lib/pool");
+const { tileFor } = require("./lib/tiles");
 
 const SCRIPTS_DIR = path.resolve(__dirname, "..");
 const PRUNE_DIR = path.join(SCRIPTS_DIR, "common", "prune");
 const CACHE_DIR = path.join(PRUNE_DIR, "cache");
+const TILES_DIR = path.join(PRUNE_DIR, "tiles");
 const JOURNAL_FILE = path.join(PRUNE_DIR, "prune-apply.journal");
 const DEFAULT_TIME_BUDGET_SECONDS = 45 * 60;
 const SETTINGS_FILE = path.join(PRUNE_DIR, "settings.json");
@@ -226,8 +229,8 @@ function workersOf(args) {
 
 async function main() {
   const args = parseArgs({
-    flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null, dimension: null, cx: null, cz: null },
-    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin", "inspect"],
+    flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null, dimension: null, cx: null, cz: null, rx: null, rz: null },
+    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin", "inspect", "tile"],
   });
   const vars = loadVariables(path.join(SCRIPTS_DIR, "common", "variables.txt"), { optional: true });
 
@@ -254,6 +257,23 @@ async function main() {
 
   const serverPath = vars.SERVER_PATH;
   if (!serverPath || !fs.existsSync(serverPath)) fail("server_path", "SERVER_PATH does not exist.");
+
+  if (args.bool("tile")) {
+    const rx = Number(args.get("rx"));
+    const rz = Number(args.get("rz"));
+    const dimension = args.get("dimension");
+    if (!dimension || !Number.isInteger(rx) || !Number.isInteger(rz)) fail("params", "--tile needs --dimension, --rx and --rz.");
+    let tile;
+    try {
+      ensureDir();
+      tile = tileFor({ serverPath, dimension, rx, rz, tilesDir: TILES_DIR });
+    } catch (err) {
+      fail("tile_failed", err.message);
+    }
+    if (!tile) fail("no_region", "That dimension has no such region.");
+    out({ ok: true, tile: tile.relative, cached: tile.cached, chunks: tile.chunks, bytes: tile.bytes });
+    return;
+  }
 
   if (args.bool("inspect")) {
     const id = args.get("plan");

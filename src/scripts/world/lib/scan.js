@@ -8,7 +8,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { inhabitedTime, chunkSignals } = require("./nbt");
+const { inhabitedTime, chunkSignalsFast } = require("./nbt");
 const region = require("./region");
 
 /** Per-slot state of a chunk in a record. */
@@ -59,7 +59,7 @@ function readRegionRecord(file, rx, rz, timed = (_n, fn) => fn(), onChunk = () =
     let inhabited;
     try {
       if (signals) {
-        const found = timed("nbt", () => chunkSignals(res.data));
+        const found = timed("nbt", () => chunkSignalsFast(res.data));
         inhabited = found.inhabited;
         flags[slot] = found.flags;
       } else {

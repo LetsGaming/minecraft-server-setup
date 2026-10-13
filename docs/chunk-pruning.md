@@ -39,6 +39,20 @@ status, data version, time in use, size on disk, block entities by id, structure
 references, the signals above, whether it is in the plan, and which protections (spawn, player,
 named zone) cover it.
 
+## Terrain tiles
+
+`--tile --dimension=<id> --rx=<n> --rz=<n>` draws one region from above as a 512 x 512 PNG, one
+pixel per block, for the dashboard's terrain view. Each column is the top block of the
+`WORLD_SURFACE` height map, looked up in the section's packed palette, coloured from a table
+(`world/lib/blockColors.js`: common blocks, shapes of a material, dye families, a neutral grey for
+modded or new blocks), water darker the deeper it is, and a hint of relief against the column to the
+north. There is no biome tint and no shading beyond that: it is for orientation, not a renderer.
+Tiles are written under `common/prune/tiles/<dimension>/r.<x>.<z>.<fingerprint>.png`; the region
+file's fingerprint is part of the name, so an edited region can never show an old picture, and the
+folder is trimmed oldest first past 500 MB. Chunks that cannot be read, or that predate the 1.18
+layout, are left transparent. `tests/bench/render-tile.cjs` draws one region of a real world to a file
+so you can look at it.
+
 ## Choosing chunks by hand
 
 `params.selection` is an ordered list of rectangles in chunk coordinates (at most 2,500):
