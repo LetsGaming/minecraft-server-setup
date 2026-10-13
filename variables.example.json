@@ -15,7 +15,8 @@
   "API_SERVER": {
     "ENABLED": false,
     "PORT": 3030,
-    "API_KEY": "replace-with-a-long-random-secret"
+    "API_KEY": "replace-with-a-long-random-secret",
+    "SERVICE_USER": ""
   },
   "SERVER_CONTROL": {
     "USE_RCON": false,

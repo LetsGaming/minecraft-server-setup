@@ -1,5 +1,7 @@
 # Sudoers Configuration
 
+> The suite can create the application user and write these rules for you: see [service-user.md](service-user.md). The hand-written rules below remain valid for installs that run the wrapper as another existing user.
+
 The setup and management scripts run as a non-root application user (e.g. `mcbot`) but need to execute commands as the Minecraft server user (e.g. `minecraft`) and manage the systemd service.
 
 ## Required sudoers entries
