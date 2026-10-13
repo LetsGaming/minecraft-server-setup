@@ -677,3 +677,120 @@ test("selected chunks agree with a brute-force reading of the operations", withS
   const r = plan.scanWorld({ serverPath: s.dir, params: SEL(ops) });
   assert.equal(r.plan.totals.delete, expected.size);
 }));
+
+// ── Fault injection ──
+
+/** Run `fn` with fs.renameSync failing from the Nth call on. */
+function failRenamesFrom(n, fn) {
+  const real = fs.renameSync;
+  let calls = 0;
+  fs.renameSync = (...args) => {
+    calls++;
+    if (calls >= n) throw Object.assign(new Error("injected rename failure"), { code: "EIO" });
+    return real(...args);
+  };
+  try {
+    return fn();
+  } finally {
+    fs.renameSync = real;
+  }
+}
+
+function snapshotFolders(s) {
+  const out = {};
+  for (const folder of ["region", "entities", "poi"]) {
+    const file = s.regionFile(null, folder, 0, 0);
+    out[folder] = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  }
+  return out;
+}
+
+test("a failure after any rename leaves every file either as it was or fully rewritten, and a retry finishes", withServer((s) => {
+  for (const failAt of [1, 2, 3]) {
+    threeFolders(s, [0, 60, 0, 60]);
+    const before = snapshotFolders(s);
+    const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+    assert.throws(() => failRenamesFrom(failAt, () => plan.applyPlan({ serverPath: s.dir, plan: p })), /injected/);
+
+    for (const folder of ["region", "entities", "poi"]) {
+      const file = s.regionFile(null, folder, 0, 0);
+      const now = fs.readFileSync(file);
+      const header = region.readHeader(now);
+      assert.ok(header, `${folder} still has a header`);
+      const slots = region.occupiedSlots(header);
+      assert.ok(
+        now.equals(before[folder]) || JSON.stringify(slots) === JSON.stringify([1, 3]),
+        `${folder} is the original or fully pruned, never in between (failed at rename ${failAt})`,
+      );
+      for (const slot of slots) assert.equal(region.readChunk(now, header, slot, path.dirname(file), 0, 0).ok, true);
+    }
+
+    // The retry cleans up and completes.
+    const again = plan.applyPlan({ serverPath: s.dir, plan: p });
+    assert.ok(again.deletedChunks >= 0);
+    for (const folder of ["region", "entities", "poi"]) assert.deepEqual(slotsIn(s, folder), [1, 3], folder);
+    const leftovers = fs.readdirSync(path.dirname(s.regionFile(null, "region", 0, 0))).filter((n) => n.endsWith(".tmp"));
+    assert.deepEqual(leftovers, []);
+    fs.rmSync(path.join(s.worldDir, "region"), { recursive: true, force: true });
+    fs.rmSync(path.join(s.worldDir, "entities"), { recursive: true, force: true });
+    fs.rmSync(path.join(s.worldDir, "poi"), { recursive: true, force: true });
+  }
+}));
+
+test("a write that fails mid-file leaves no temp file and does not touch the region", withServer((s) => {
+  threeFolders(s, [0, 60]);
+  const file = s.regionFile(null, "region", 0, 0);
+  const before = fs.readFileSync(file);
+  const real = fs.writeSync;
+  fs.writeSync = () => {
+    throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+  };
+  try {
+    assert.throws(() => region.removeChunks(file, [0]), /no space/);
+  } finally {
+    fs.writeSync = real;
+  }
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((n) => n.endsWith(".tmp")), []);
+}));
+
+test("a region that changed between scan and apply keeps its busy chunk and reports it", withServer((s) => {
+  threeFolders(s, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  for (const folder of ["region"]) {
+    fx.writeRegion(s.regionFile(null, folder, 0, 0), 0, 0, [0, 0, 0, 0, 0, 0, 0, 0, 0, 90].map((m, i) => chunk(i, 0, m)));
+  }
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+  assert.equal(res.deletedChunks, 9);
+  assert.deepEqual(slotsIn(s, "region"), [9]);
+}));
+
+test("random worlds and selections never delete an unreadable chunk", () => {
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const server = fx.makeServer();
+    try {
+      fx.writeLevelDat(server.worldDir, 0, 0);
+      let a = seed;
+      const rand = () => ((a = (a * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+      const list = [];
+      const unreadable = new Set();
+      for (let i = 0; i < 200; i++) {
+        const bad = rand() < 0.15;
+        if (bad) unreadable.add(i);
+        list.push({ ...chunk(i & 31, i >> 5, rand() < 0.5 ? 0 : 90), ...(bad ? { compression: "corrupt" } : {}) });
+      }
+      fx.writeRegion(server.regionFile(null, "region", 0, 0), 0, 0, list);
+      const params = {
+        ...LEAN,
+        selection: { ops: [{ dimension: "overworld", mode: "add", x1: 0, z1: 0, x2: 31, z2: 31 }], allowProtected: true },
+      };
+      const { plan: p } = plan.scanWorld({ serverPath: server.dir, params });
+      plan.applyPlan({ serverPath: server.dir, plan: p, tolerance: 1 });
+      const file = server.regionFile(null, "region", 0, 0);
+      const left = new Set(region.occupiedSlots(region.readHeader(fs.readFileSync(file))));
+      for (const slot of unreadable) assert.ok(left.has(slot), `seed ${seed}: unreadable chunk ${slot} must remain`);
+    } finally {
+      server.cleanup();
+    }
+  }
+});

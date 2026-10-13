@@ -196,8 +196,14 @@ function removeChunks(file, slotsToRemove) {
   const result = Buffer.concat([out, ...parts]);
 
   const tmp = `${file}.prune-${process.pid}.tmp`;
-  writeDurably(tmp, result);
-  fs.renameSync(tmp, file);
+  try {
+    writeDurably(tmp, result);
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    // A full disk or a failed rename must not leave a half-written copy behind.
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
   syncDirectory(path.dirname(file));
   return {
     kept: keep.length,
