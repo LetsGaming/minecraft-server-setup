@@ -21,7 +21,7 @@ const cache = require("./cache");
 const scan = require("./scan");
 const region = require("./region");
 const world = require("./world");
-const { SIGNAL } = require("./nbt");
+const { SIGNAL, chunkSignals, parseNbt } = require("./nbt");
 
 const TICKS_PER_MINUTE = 20 * 60;
 
@@ -142,7 +142,7 @@ function protectedRects(dimId, params, spawn, players) {
     const cx = blockToChunk(spawn?.x ?? 0);
     const cz = blockToChunk(spawn?.z ?? 0);
     const r = params.spawnRadiusChunks;
-    rects.push({ x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
+    rects.push({ kind: "spawn", x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
   }
   if (params.playerRadiusChunks > 0) {
     for (const p of players) {
@@ -150,11 +150,11 @@ function protectedRects(dimId, params, spawn, players) {
       const cx = blockToChunk(p.x);
       const cz = blockToChunk(p.z);
       const r = params.playerRadiusChunks;
-      rects.push({ x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
+      rects.push({ kind: "player", x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
     }
   }
   for (const z of params.zones) {
-    if (z.dimension === dimId) rects.push({ x1: z.x1, z1: z.z1, x2: z.x2, z2: z.z2 });
+    if (z.dimension === dimId) rects.push({ kind: "zone", name: z.name, x1: z.x1, z1: z.z1, x2: z.x2, z2: z.z2 });
   }
   return rects;
 }
@@ -569,6 +569,99 @@ function listDimensions({ serverPath }) {
   });
 }
 
+const SIGNAL_NAMES = Object.entries(SIGNAL).map(([name, bit]) => [bit, name.toLowerCase()]);
+
+/**
+ * Everything the engine can tell about one chunk of a plan, read from the world
+ * right now: what it contains, why a rule would keep or delete it, and how much
+ * space it takes. The chunk is read and decoded in full (it is one chunk), so
+ * this is the place for detail that would be too heavy to keep for every chunk.
+ */
+function inspectChunk({ serverPath, plan, dimension, cx, cz }) {
+  const dim = plan.dimensions.find((d) => d.id === dimension);
+  if (!dim) {
+    const err = new Error("That plan has no such dimension.");
+    err.code = "dimension";
+    throw err;
+  }
+  const worldDir = world.worldDirOf(serverPath);
+  const dimDir = path.join(serverPath, ...dim.dir.split("/").filter(Boolean));
+  if (!isInside(worldDir, dimDir)) throw new Error("A plan names a folder outside the world.");
+
+  const rx = Math.floor(cx / 32);
+  const rz = Math.floor(cz / 32);
+  const slot = region.slotOf(cx, cz);
+  const file = path.join(dimDir, "region", region.regionName(rx, rz));
+  const out = { chunk: { dimension, cx, cz, rx, rz, slot }, thresholdMinutes: plan.params.thresholdMinutes };
+
+  let buf;
+  try {
+    buf = fs.readFileSync(file);
+  } catch {
+    return { ...out, present: false };
+  }
+  const header = region.readHeader(buf);
+  if (!header || header.locations[slot] === 0) return { ...out, present: false };
+
+  out.present = true;
+  out.bytes = {
+    region: region.sectorCount(header.locations[slot]) * region.SECTOR,
+    entities: scan.siblingSectorBytes(path.join(dimDir, "entities", region.regionName(rx, rz)))[slot],
+    poi: scan.siblingSectorBytes(path.join(dimDir, "poi", region.regionName(rx, rz)))[slot],
+  };
+  const sets = new Set(slotsOfBitmap(dim.deletions[`r.${rx}.${rz}`] ?? ""));
+  out.plannedForDeletion = sets.has(slot);
+
+  const res = region.readChunk(buf, header, slot, path.dirname(file), rx, rz);
+  if (!res.ok) return { ...out, readable: false, unreadableReason: res.reason };
+
+  let nbt;
+  try {
+    nbt = parseNbt(res.data);
+  } catch {
+    return { ...out, readable: false, unreadableReason: "corrupt" };
+  }
+  const source = nbt.Level && typeof nbt.Level === "object" ? nbt.Level : nbt;
+  const ticks = typeof source.InhabitedTime === "number" ? source.InhabitedTime : null;
+  const counts = new Map();
+  for (const be of Array.isArray(source.block_entities) ? source.block_entities : []) {
+    const id = typeof be?.id === "string" ? be.id : "unknown";
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const keysOf = (v) => (v && typeof v === "object" ? Object.keys(v).sort() : []);
+  const flags = fastFlags(res.data);
+
+  const spawn = world.readSpawn(worldDir);
+  const players = world.readPlayerPositions(worldDir);
+  const protectedBy = protectedRects(dimension, plan.params, spawn, players)
+    .filter((r) => cx >= r.x1 && cx <= r.x2 && cz >= r.z1 && cz <= r.z2)
+    .map((r) => ({ kind: r.kind, ...(r.name ? { name: r.name } : {}) }));
+
+  return {
+    ...out,
+    readable: true,
+    dataVersion: typeof nbt.DataVersion === "number" ? nbt.DataVersion : null,
+    status: typeof (source.Status ?? source.status) === "string" ? source.Status ?? source.status : null,
+    lastUpdate: typeof source.LastUpdate === "number" ? source.LastUpdate : null,
+    inhabitedTicks: ticks,
+    inhabitedMinutes: ticks === null ? null : Math.round((ticks / TICKS_PER_MINUTE) * 10) / 10,
+    blockEntities: [...counts].map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
+    structureStarts: keysOf(source.structures?.starts),
+    structureReferences: keysOf(source.structures?.References),
+    signals: SIGNAL_NAMES.filter(([bit]) => flags & bit).map(([, name]) => name),
+    unexplained: isUnexplained(flags),
+    protectedBy,
+  };
+}
+
+function fastFlags(data) {
+  try {
+    return chunkSignals(data).flags;
+  } catch {
+    return 0;
+  }
+}
+
 /** "dimension:rx,rz" of every region a plan deletes from. */
 function touchedKeys(plan) {
   const keys = new Set();
@@ -728,6 +821,7 @@ module.exports = {
   TICKS_PER_MINUTE,
   normalizeParams,
   scanWorld,
+  inspectChunk,
   listScanJobs,
   listDimensions,
   touchedKeys,

@@ -22,6 +22,23 @@ Region, entities and poi folders are pruned together, so no entity or point of
 interest is left pointing at a chunk that no longer exists. Dimensions are discovered
 (overworld, `DIM-1`, `DIM1`, and `dimensions/<namespace>/<name>`), not assumed.
 
+## Build protection
+
+With `params.buildProtection` at `likely` (the default) a chunk the rules would delete is kept as
+**uncertain** (cell class 8, counted as `uncertain`) when it holds block entities that nothing
+natural explains: chests, barrels, signs, furnaces, beds, hoppers or any modded block entity, in a
+chunk with no generated structure (start or reference) and no spawner. Villages, mineshafts and
+ruins hold such blocks by themselves, and a dungeon is a spawner and a chest, so those do not count.
+It keeps data where a player may have built, and acts like the buffer: a manual selection may still
+choose such a chunk. It is advisory and can be wrong in both directions, which is why it only ever
+keeps a chunk. `off` ignores what chunks contain and is cheaper to scan; the record cache keeps
+records read with and without these signals apart. Only 1.18 and newer chunks carry the tags it reads.
+
+`--inspect --plan=<id> --dimension=<id> --cx=<n> --cz=<n>` reads one chunk in full and reports its
+status, data version, time in use, size on disk, block entities by id, structure starts and
+references, the signals above, whether it is in the plan, and which protections (spawn, player,
+named zone) cover it.
+
 ## Choosing chunks by hand
 
 `params.selection` is an ordered list of rectangles in chunk coordinates (at most 2,500):

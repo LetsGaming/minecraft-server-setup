@@ -6,6 +6,7 @@
  *
  * Usage (every mode prints one JSON object per line with --json):
  *   node prune-chunks.js --status
+ *   node prune-chunks.js --inspect --plan=<id> --dimension=<id> --cx=<n> --cz=<n>   one chunk, in full
  *   node prune-chunks.js --dimensions             (names and region counts, no chunk is read)
  *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path> | --params-stdin] [--profile] [--no-cache] [--workers=<n>]
  *   node prune-chunks.js --apply  --plan=<id> [--workers=<n>] [--time-budget=<seconds>]
@@ -26,7 +27,7 @@ const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("../update/lib/args");
 const { loadVariables } = require("../update/lib/variables");
-const { listDimensions, scanWorld, listScanJobs, newProfile, applyPlan, normalizeParams, touchedKeys } = require("./lib/plan");
+const { inspectChunk, listDimensions, scanWorld, listScanJobs, newProfile, applyPlan, normalizeParams, touchedKeys } = require("./lib/plan");
 const { warmCache, defaultWorkers } = require("./lib/pool");
 
 const SCRIPTS_DIR = path.resolve(__dirname, "..");
@@ -225,8 +226,8 @@ function workersOf(args) {
 
 async function main() {
   const args = parseArgs({
-    flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null },
-    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin"],
+    flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null, dimension: null, cx: null, cz: null },
+    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin", "inspect"],
   });
   const vars = loadVariables(path.join(SCRIPTS_DIR, "common", "variables.txt"), { optional: true });
 
@@ -253,6 +254,28 @@ async function main() {
 
   const serverPath = vars.SERVER_PATH;
   if (!serverPath || !fs.existsSync(serverPath)) fail("server_path", "SERVER_PATH does not exist.");
+
+  if (args.bool("inspect")) {
+    const id = args.get("plan");
+    const cx = Number(args.get("cx"));
+    const cz = Number(args.get("cz"));
+    const dimension = args.get("dimension");
+    if (!id || !PLAN_ID_RE.test(id) || !dimension || !Number.isInteger(cx) || !Number.isInteger(cz)) {
+      fail("params", "--inspect needs --plan, --dimension, --cx and --cz.");
+    }
+    let plan;
+    try {
+      plan = JSON.parse(fs.readFileSync(planFile(id), "utf8"));
+    } catch {
+      fail("plan_missing", "That plan does not exist any more. Scan again.");
+    }
+    try {
+      out({ ok: true, ...inspectChunk({ serverPath, plan, dimension, cx, cz }) });
+    } catch (err) {
+      fail(err.code === "dimension" ? "dimension" : "inspect_failed", err.message);
+    }
+    return;
+  }
 
   if (args.bool("dimensions")) {
     // A directory listing, so the dashboard can offer a choice without reading any chunk.

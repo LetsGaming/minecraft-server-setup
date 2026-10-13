@@ -218,3 +218,50 @@ test("a scan limited to one dimension reads only that dimension", withSetup((s) 
   const cached = path.join(s.scripts, "common", "prune", "cache");
   assert.deepEqual(fs.readdirSync(cached), ["the_nether"]);
 }));
+
+test("--inspect describes one chunk of a plan", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const used = s.run(["--inspect", `--plan=${scan.id}`, "--dimension=overworld", "--cx=2", "--cz=0"]).last;
+  assert.equal(used.ok, true);
+  assert.equal(used.present, true);
+  assert.equal(used.readable, true);
+  assert.equal(used.plannedForDeletion, false);
+  assert.equal(used.inhabitedMinutes, 60);
+  assert.equal(used.status, "minecraft:full");
+  assert.equal(used.dataVersion, 3955);
+  assert.ok(used.bytes.region >= 4096);
+  assert.equal(used.bytes.entities >= 4096, true);
+
+  const idle = s.run(["--inspect", `--plan=${scan.id}`, "--dimension=overworld", "--cx=0", "--cz=0"]).last;
+  assert.equal(idle.plannedForDeletion, true);
+  assert.deepEqual(idle.blockEntities, []);
+
+  assert.equal(s.run(["--inspect", `--plan=${scan.id}`, "--dimension=overworld", "--cx=9", "--cz=0"]).last.present, false);
+  assert.equal(s.run(["--inspect", `--plan=${scan.id}`, "--dimension=overworld", "--cx=-40", "--cz=-1"]).last.present, false);
+}));
+
+test("--inspect refuses a bad request and names what holds a chunk", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify({ ...LEAN, zones: [{ name: "base", dimension: "overworld", x1: 0, z1: 0, x2: 1, z2: 0 }] })}`]);
+  const held = s.run(["--inspect", `--plan=${scan.id}`, "--dimension=overworld", "--cx=0", "--cz=0"]).last;
+  assert.deepEqual(held.protectedBy, [{ kind: "zone", name: "base" }]);
+  assert.equal(held.plannedForDeletion, false);
+  assert.equal(s.run(["--inspect", `--plan=${scan.id}`, "--dimension=nether", "--cx=0", "--cz=0"]).last.code, "dimension");
+  assert.equal(s.run(["--inspect", `--plan=${scan.id}`, "--cx=0", "--cz=0"]).last.code, "params");
+  assert.equal(s.run(["--inspect", "--plan=0123456789abcdef", "--dimension=overworld", "--cx=0", "--cz=0"]).last.code, "plan_missing");
+}));
+
+test("--inspect lists block entities and structures", withSetup((s) => {
+  fx.writeRegion(
+    s.server.regionFile(null, "region", 0, 0),
+    0,
+    0,
+    [{ x: 0, z: 0, nbt: fx.chunkModern({ x: 0, z: 0, inhabited: 0, blockEntities: ["minecraft:chest", "minecraft:chest", "minecraft:sign"], structureStarts: ["minecraft:village"], structureRefs: ["minecraft:village", "minecraft:mineshaft"] }) }],
+  );
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const r = s.run(["--inspect", `--plan=${scan.id}`, "--dimension=overworld", "--cx=0", "--cz=0"]).last;
+  assert.deepEqual(r.blockEntities, [{ id: "minecraft:chest", count: 2 }, { id: "minecraft:sign", count: 1 }]);
+  assert.deepEqual(r.structureStarts, ["minecraft:village"]);
+  assert.deepEqual(r.structureReferences, ["minecraft:mineshaft", "minecraft:village"]);
+  assert.ok(r.signals.includes("container") && r.signals.includes("structure_start"));
+  assert.equal(r.unexplained, false);
+}));
