@@ -501,4 +501,104 @@ function chunkSignals(buf) {
   return { inhabited, flags, blockEntities };
 }
 
-module.exports = { TAG, NbtError, parseNbt, chunkMeta, inhabitedTime, chunkSignals, SIGNAL, blockEntityKind };
+// ── Signals by search instead of by walk ──
+
+/** A tag header as it sits in the file: type, name length, name. */
+const header = (type, name) => Buffer.concat([Buffer.from([type, name.length >> 8, name.length & 255]), Buffer.from(name)]);
+const FIND = {
+  inhabited: header(TAG.LONG, "InhabitedTime"),
+  status: header(TAG.STRING, "Status"),
+  statusLower: header(TAG.STRING, "status"),
+  blockEntities: header(TAG.LIST, "block_entities"),
+  structures: header(TAG.COMPOUND, "structures"),
+};
+
+/** Block entity ids and their kinds, from the list whose payload starts at `pos`. Returns the flags and the count. */
+function readBlockEntities(buf, pos) {
+  const inner = buf[pos];
+  const count = buf.readInt32BE(pos + 1);
+  pos += 5;
+  let flags = 0;
+  if (inner !== TAG.COMPOUND || count <= 0) return { flags, count: 0 };
+  for (let i = 0; i < count; i++) {
+    let kind = SIGNAL.OTHER_BLOCK_ENTITY;
+    pos = walkCompound(buf, pos, (an, al, at, vp) => {
+      if (at === TAG.STRING && eq(buf, an, al, NAME.id)) {
+        const len = buf.readUInt16BE(vp);
+        kind = blockEntityKind(buf.toString("utf8", vp + 2, vp + 2 + len));
+        return vp + 2 + len;
+      }
+      return skipAt(buf, vp, at);
+    });
+    flags |= kind;
+  }
+  return { flags, count };
+}
+
+/** Structure start and reference bits, from the compound whose payload starts at `pos`. */
+function readStructures(buf, pos) {
+  let flags = 0;
+  walkCompound(buf, pos, (an, al, at, vp) => {
+    if (at === TAG.COMPOUND && eq(buf, an, al, NAME.starts)) {
+      const { n, after } = countEntries(buf, vp);
+      if (n > 0) flags |= SIGNAL.STRUCTURE_START;
+      return after;
+    }
+    if (at === TAG.COMPOUND && eq(buf, an, al, NAME.references)) {
+      const { n, after } = countEntries(buf, vp);
+      if (n > 0) flags |= SIGNAL.STRUCTURE_REFERENCE;
+      return after;
+    }
+    return skipAt(buf, vp, at);
+  });
+  return flags;
+}
+
+/**
+ * The same answer as chunkSignals, found by searching for the few tags it wants
+ * instead of walking past the sections, which are most of the document and hold
+ * nothing it needs. A tag header (type byte, name length, name) is long enough
+ * that a false hit inside block data is not a practical concern, and each hit is
+ * parsed from there, so a damaged document still throws.
+ *
+ * @returns {{inhabited: number|undefined, flags: number, blockEntities: number}}
+ */
+function chunkSignalsFast(buf) {
+  if (buf.length < 3 || buf[0] !== TAG.COMPOUND) throw new NbtError("Chunk root is not a compound");
+  let inhabited;
+  let flags = 0;
+  let blockEntities = 0;
+
+  let at = buf.indexOf(FIND.inhabited);
+  if (at >= 0) {
+    const pos = at + FIND.inhabited.length;
+    if (pos + 8 > buf.length) throw overrun();
+    inhabited = buf.readInt32BE(pos) * 4294967296 + buf.readUInt32BE(pos + 4);
+  }
+
+  at = buf.indexOf(FIND.status);
+  if (at < 0) at = buf.indexOf(FIND.statusLower);
+  if (at >= 0) {
+    const pos = at + FIND.status.length;
+    if (pos + 2 > buf.length) throw overrun();
+    const len = buf.readUInt16BE(pos);
+    if (pos + 2 + len > buf.length) throw overrun();
+    if (!FULL.includes(buf.toString("utf8", pos + 2, pos + 2 + len))) flags |= SIGNAL.NOT_FULL;
+  }
+
+  at = buf.indexOf(FIND.blockEntities);
+  if (at >= 0) {
+    const pos = at + FIND.blockEntities.length;
+    if (pos + 5 > buf.length) throw overrun();
+    const found = readBlockEntities(buf, pos);
+    flags |= found.flags;
+    blockEntities = found.count;
+  }
+
+  at = buf.indexOf(FIND.structures);
+  if (at >= 0) flags |= readStructures(buf, at + FIND.structures.length);
+
+  return { inhabited, flags, blockEntities };
+}
+
+module.exports = { TAG, NbtError, parseNbt, chunkMeta, inhabitedTime, chunkSignals, chunkSignalsFast, SIGNAL, blockEntityKind };

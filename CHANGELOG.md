@@ -29,6 +29,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The shell tests for the backup, operation and instance locks passed only on hosts without `flock`: with a real one the busy-lock shim was never installed, and the held-lock helper slept through the sleep shim. The shim is now always installed and hands over to the real `flock` unless a test asks for a busy lock.
 - A world with regions very far apart no longer fails a prune scan with a buffer; the buffer is computed per region.
 - `prune-chunks.js --apply`: a chunk that was already corrupt no longer makes the post-prune check fail and roll the whole job back; the check now compares kept chunks byte for byte instead of re-reading them.
 - `prune-chunks.js --apply` refuses to run when `instance_ops.sh` is missing (it used to assume the server was stopped), takes the operation lock when run by hand, rejects a plan whose content does not match its hash, and deletes only in folders found by the fresh scan.

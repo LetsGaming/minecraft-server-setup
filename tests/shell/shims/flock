@@ -1,5 +1,7 @@
 #!/bin/bash
-# Non-blocking lock stand-in. FLOCK_SHIM_BUSY=1 simulates another holder.
+# Non-blocking lock stand-in. FLOCK_SHIM_BUSY=1 simulates another holder; otherwise
+# the real flock does the work when the host has one, so a test can use both.
 echo "flock $*" >> "$SHIM_LOG"
 [[ "${FLOCK_SHIM_BUSY:-}" == 1 ]] && exit 1
+[[ -n "${REAL_FLOCK:-}" ]] && exec "$REAL_FLOCK" "$@"
 exit 0
