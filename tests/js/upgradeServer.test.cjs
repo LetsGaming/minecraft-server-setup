@@ -68,7 +68,7 @@ function world({ plan = PLAN, startResults = ["ready"], apply, backup, restore, 
   return deps;
 }
 
-const OPTS = { version: "1.21.5", expectUnavailable: null, countdown: 0, startTimeout: 60, prune: false };
+const OPTS = { version: "1.21.5", expectUnavailable: null, countdown: 0, startTimeout: 60, prunePlan: null };
 const phases = (w) => w.emitted.filter((e) => e.phase).map((e) => `${e.phase}:${e.status}`);
 const result = (w) => w.emitted.at(-1);
 const count = (w, kind, first) => w.calls.filter((c) => c[0] === kind && (first === undefined || c[1] === first)).length;
@@ -167,13 +167,67 @@ test("the mod set the user saw must be the one that runs", () => {
   assert.equal(count(w, "ops", "stop"), 0, "nothing was touched");
 });
 
-test("a failed prune rolls the whole upgrade back", () => {
+const PLAN_ID = "0123456789abcdef";
+const pruneWorld = (prune) => {
   const w = world();
   const orig = w.run;
-  w.run = (kind, args) => (kind === "prune" ? FAIL : orig(kind, args));
-  const r = runUpgrade(w, { ...OPTS, prune: true });
+  w.run = (kind, args) => {
+    if (kind !== "prune") return orig(kind, args);
+    w.calls.push([kind, ...args]);
+    return prune(args);
+  };
+  return w;
+};
+const PRUNE_OK = { code: 0, stdout: json({ ok: true, deletedChunks: 120, bytesFreed: 4096 }), stderr: "" };
+
+test("a failed prune rolls the whole upgrade back", () => {
+  const w = pruneWorld(() => FAIL);
+  const r = runUpgrade(w, { ...OPTS, prunePlan: PLAN_ID });
   assert.equal(r.reason, "prune_failed");
   assert.equal(r.rolledBack, true);
+});
+
+test("a prune plan that went stale rolls back with its own reason", () => {
+  const w = pruneWorld(() => ({ code: 1, stdout: json({ ok: false, code: "plan_stale", error: "x" }), stderr: "" }));
+  const r = runUpgrade(w, { ...OPTS, prunePlan: PLAN_ID });
+  assert.equal(r.reason, "prune_stale");
+});
+
+test("the prune runs after the install and before the first start, and is reported", () => {
+  const w = pruneWorld(() => PRUNE_OK);
+  const r = runUpgrade(w, { ...OPTS, prunePlan: PLAN_ID });
+  assert.equal(r.ok, true);
+  assert.equal(r.prunedChunks, 120);
+  assert.equal(r.bytesFreed, 4096);
+  const order = w.calls.map((c) => c[0] + ":" + (c.includes("--apply") ? "apply" : c[1] ?? ""));
+  const apply = order.indexOf("update:apply");
+  const prune = order.indexOf("prune:apply");
+  const start = order.indexOf("ops:start");
+  assert.ok(apply >= 0 && prune > apply && start > prune, order.join(" "));
+  assert.deepEqual(w.calls.find((c) => c[0] === "prune"), ["prune", "--apply", "--plan=" + PLAN_ID, "--json"]);
+});
+
+test("a prune-only job has no install and no version, and still has the backup and the fallback", () => {
+  const w = pruneWorld(() => PRUNE_OK);
+  const r = runUpgrade(w, { ...OPTS, version: null, prunePlan: PLAN_ID });
+  assert.equal(r.ok, true);
+  assert.equal(r.target, null);
+  assert.equal(w.calls.some((c) => c[0] === "update"), false, "the update script is never run");
+  assert.equal(count(w, "backup"), 1);
+  assert.equal(count(w, "prune"), 1);
+});
+
+test("a prune-only job whose start fails restores the backup", () => {
+  const w = world({ startResults: ["crash", "ready"] });
+  const orig = w.run;
+  w.run = (kind, args) => {
+    if (kind !== "prune") return orig(kind, args);
+    w.calls.push([kind, ...args]);
+    return PRUNE_OK;
+  };
+  const r = runUpgrade(w, { ...OPTS, version: null, prunePlan: PLAN_ID });
+  assert.equal(r.rolledBack, true);
+  assert.equal(count(w, "restore"), 1);
 });
 
 test("progress lines are numbered and the last one is the result", () => {

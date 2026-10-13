@@ -21,7 +21,14 @@
  *
  * Usage: node upgrade-server.js <version> [--expect-unavailable=a,b]
  *          [--countdown=<seconds>] [--start-timeout=<seconds>]
- *          [--prune-plan=<file>]
+ *          [--prune-plan=<id>]
+ *        node upgrade-server.js --prune-only --prune-plan=<id>
+ *          [--countdown=<seconds>] [--start-timeout=<seconds>]
+ *
+ * With --prune-plan the chunk prune runs after the install and before the
+ * first start of the new version, under the same backup, so a failed prune
+ * rolls the whole job back. --prune-only is the same job without the version
+ * change: stop, back up, prune, start.
  */
 
 const fs = require("fs");
@@ -95,8 +102,9 @@ function parseLines(text) {
  * returned result (also emitted as the last NDJSON line).
  *
  * @param {Deps} deps
- * @param {{version: string, expectUnavailable: string[]|null, countdown: number,
- *          startTimeout: number, prune: boolean}} opts
+ * @param {{version: string|null, expectUnavailable: string[]|null, countdown: number,
+ *          startTimeout: number, prunePlan: string|null}} opts  `version` null
+ *   means a prune-only job: no install, no mod handling.
  */
 function runUpgrade(deps, opts) {
   let seq = 0;
@@ -141,35 +149,48 @@ function runUpgrade(deps, opts) {
   };
 
   // ── plan check ──
-  say("plan", "running", `Checking ${opts.version}`);
-  const planRun = deps.run("update", [opts.version, "--plan", "--json"]);
-  const plan = parseLines(planRun.stdout).find((l) => "ok" in l);
-  if (planRun.code !== 0 || !plan || !plan.ok) {
-    say("plan", "error", plan?.error ?? "The plan check failed");
-    return finish({ ok: false, rolledBack: false, reason: "plan_failed", detail: plan?.error ?? planRun.stderr });
-  }
-  const unavailable = [...plan.unavailable].sort();
-  if (opts.expectUnavailable) {
-    const expected = [...opts.expectUnavailable].sort();
-    if (JSON.stringify(expected) !== JSON.stringify(unavailable)) {
-      say("plan", "error", "The installed mods changed since the compatibility check. Run the check again.");
-      return finish({
-        ok: false,
-        rolledBack: false,
-        reason: "mods_changed",
-        expected,
-        found: unavailable,
-      });
+  let plan;
+  let unavailable = [];
+  if (opts.version) {
+    say("plan", "running", `Checking ${opts.version}`);
+    const planRun = deps.run("update", [opts.version, "--plan", "--json"]);
+    plan = parseLines(planRun.stdout).find((l) => "ok" in l);
+    if (planRun.code !== 0 || !plan || !plan.ok) {
+      say("plan", "error", plan?.error ?? "The plan check failed");
+      return finish({ ok: false, rolledBack: false, reason: "plan_failed", detail: plan?.error ?? planRun.stderr });
     }
+    unavailable = [...plan.unavailable].sort();
+    if (opts.expectUnavailable) {
+      const expected = [...opts.expectUnavailable].sort();
+      if (JSON.stringify(expected) !== JSON.stringify(unavailable)) {
+        say("plan", "error", "The installed mods changed since the compatibility check. Run the check again.");
+        return finish({
+          ok: false,
+          rolledBack: false,
+          reason: "mods_changed",
+          expected,
+          found: unavailable,
+        });
+      }
+    }
+    say("plan", "done", `${plan.current ?? "?"} to ${plan.target}`, { unavailable, java: plan.java });
+  } else {
+    plan = { ok: true, current: null, target: null, unavailable: [], java: null };
+    say("plan", "done", "Chunk prune only");
   }
-  say("plan", "done", `${plan.current ?? "?"} to ${plan.target}`, { unavailable, java: plan.java });
+  const what = plan.target ? `Upgrading to ${plan.target}` : "Pruning unused chunks";
 
-  deps.run("ops", ["notify", "update_start", `Upgrading to ${plan.target}`]);
+  deps.run("ops", ["notify", "update_start", what]);
 
   // ── countdown ──
   if (opts.countdown > 0) {
     say("countdown", "running", `Players are warned, ${opts.countdown}s`);
-    deps.run("ops", ["announce", `The server restarts in ${opts.countdown} seconds for an upgrade to ${plan.target}.`]);
+    deps.run("ops", [
+      "announce",
+      plan.target
+        ? `The server restarts in ${opts.countdown} seconds for an upgrade to ${plan.target}.`
+        : `The server restarts in ${opts.countdown} seconds to clean up unused chunks.`,
+    ]);
     deps.sleep(opts.countdown);
   }
 
@@ -195,35 +216,48 @@ function runUpgrade(deps, opts) {
   say("backup", "done", archive, { archive });
 
   // ── apply ──
-  say("apply", "running", "Installing the new version");
-  const applied = deps.run("update", [opts.version, "--apply", "--json"]);
-  const applyLines = parseLines(applied.stdout);
-  for (const line of applyLines) {
-    if (line.phase) say(`apply.${line.phase}`, "running", line.msg ?? "");
-  }
-  const applyEnd = applyLines.find((l) => "ok" in l);
-  if (applied.code !== 0 || !applyEnd || !applyEnd.ok) {
-    say("apply", "error", applyEnd?.error ?? "The install failed");
-    return rollback("apply_failed");
-  }
-  say("apply", "done", `Installed ${plan.target}`);
-
-  if (opts.prune) {
-    say("prune", "running", "Pruning unused chunks");
-    const pruned = deps.run("prune", ["--apply"]);
-    if (pruned.code !== 0) {
-      say("prune", "error", "The prune failed. The whole upgrade is rolled back.");
-      return rollback("prune_failed");
+  if (opts.version) {
+    say("apply", "running", "Installing the new version");
+    const applied = deps.run("update", [opts.version, "--apply", "--json"]);
+    const applyLines = parseLines(applied.stdout);
+    for (const line of applyLines) {
+      if (line.phase) say(`apply.${line.phase}`, "running", line.msg ?? "");
     }
-    say("prune", "done", "Chunks pruned");
+    const applyEnd = applyLines.find((l) => "ok" in l);
+    if (applied.code !== 0 || !applyEnd || !applyEnd.ok) {
+      say("apply", "error", applyEnd?.error ?? "The install failed");
+      return rollback("apply_failed");
+    }
+    say("apply", "done", `Installed ${plan.target}`);
   }
+
+  // Pruning sits after the install and before the first start: the new version
+  // never spends time upgrading chunks that are about to go, and one backup
+  // covers the jar, the mods and the prune.
+  let pruneResult = null;
+  if (opts.prunePlan) {
+    say("prune", "running", "Deleting unused chunks");
+    const pruned = deps.run("prune", ["--apply", `--plan=${opts.prunePlan}`, "--json"]);
+    pruneResult = parseLines(pruned.stdout).find((l) => "ok" in l) ?? null;
+    if (pruned.code !== 0 || !pruneResult || !pruneResult.ok) {
+      say("prune", "error", pruneResult?.error ?? "The prune failed. The whole job is rolled back.");
+      return rollback(pruneResult?.code === "plan_stale" ? "prune_stale" : "prune_failed");
+    }
+    say("prune", "done", `${pruneResult.deletedChunks} chunks deleted`, {
+      deletedChunks: pruneResult.deletedChunks,
+      bytesFreed: pruneResult.bytesFreed,
+    });
+  }
+  const pruned = pruneResult
+    ? { prunedChunks: pruneResult.deletedChunks, bytesFreed: pruneResult.bytesFreed }
+    : {};
 
   // ── start, first try: every mod as it is ──
   say("start", "running", "Starting the new version");
   let outcome = startAndWatch(deps, opts.startTimeout);
   if (outcome.ok) {
     say("start", "done", "The server is up");
-    deps.run("ops", ["notify", "update_complete", `Server upgraded to ${plan.target}`]);
+    deps.run("ops", ["notify", "update_complete", plan.target ? `Server upgraded to ${plan.target}` : "Unused chunks pruned"]);
     return finish({
       ok: true,
       branch: "clean",
@@ -231,6 +265,7 @@ function runUpgrade(deps, opts) {
       archive,
       disabled: [],
       keptOnOldBuild: unavailable,
+      ...pruned,
     });
   }
   say("start", "error", `The server did not come up (${outcome.reason})`);
@@ -257,6 +292,7 @@ function runUpgrade(deps, opts) {
         archive,
         disabled,
         keptOnOldBuild: unavailable.filter((s) => !disabled.includes(s)),
+        ...pruned,
       });
     }
     say("start", "error", `Still not up (${outcome.reason})`);
@@ -264,7 +300,7 @@ function runUpgrade(deps, opts) {
   }
 
   // ── last resort: the old version, from this job's own backup ──
-  deps.run("ops", ["notify", "update_failed", `Upgrade to ${plan.target} failed; rolling back`]);
+  deps.run("ops", ["notify", "update_failed", `${what} failed; rolling back`]);
   return rollback(outcome.reason);
 }
 
@@ -277,7 +313,7 @@ function realDeps({ scriptsDir, serverPath, backupsPath, statusFile }) {
     restore: ["bash", path.join(scriptsDir, "backup", "restore.sh")],
     toggle: ["node", path.join(scriptsDir, "update", "toggle-mod.js")],
     update: ["node", path.join(scriptsDir, "update", "update-server.js")],
-    prune: ["node", path.join(scriptsDir, "update", "prune-chunks.js")],
+    prune: ["node", path.join(scriptsDir, "world", "prune-chunks.js")],
   };
   const archivesDir = path.join(backupsPath, "archives", "update");
   const versionsFile = path.join(scriptsDir, "common", "downloaded_versions.json");
@@ -345,11 +381,18 @@ function realDeps({ scriptsDir, serverPath, backupsPath, statusFile }) {
 function main() {
   const args = parseArgs({
     flags: { version: null, "expect-unavailable": null, countdown: null, "start-timeout": null, "prune-plan": null },
+    boolFlags: ["prune-only"],
     positional: ["version"],
   });
-  const version = args.get("version");
-  if (!version) {
-    console.error("Usage: node upgrade-server.js <version> [--expect-unavailable=a,b] [--countdown=s] [--start-timeout=s]");
+  const pruneOnly = args.bool("prune-only");
+  const prunePlan = args.get("prune-plan");
+  const version = pruneOnly ? null : args.get("version");
+  if (!version && !(pruneOnly && prunePlan)) {
+    console.error("Usage: node upgrade-server.js <version> [--prune-plan=id] | --prune-only --prune-plan=id");
+    process.exit(64);
+  }
+  if (prunePlan && !/^[a-f0-9]{16}$/.test(prunePlan)) {
+    console.error("--prune-plan must be a plan id.");
     process.exit(64);
   }
   const scriptsDir = path.resolve(__dirname, "..");
@@ -368,7 +411,7 @@ function main() {
     expectUnavailable: expect === null ? null : expect.split(",").filter(Boolean),
     countdown: num(args.get("countdown"), DEFAULT_COUNTDOWN_SECONDS),
     startTimeout: num(args.get("start-timeout"), DEFAULT_START_TIMEOUT_SECONDS),
-    prune: args.get("prune-plan") !== null,
+    prunePlan: prunePlan ?? null,
   });
   process.exit(result.ok ? 0 : 1);
 }

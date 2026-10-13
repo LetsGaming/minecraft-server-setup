@@ -13,6 +13,8 @@ All notable changes to this project are documented here. The format follows
 - `acquire_operation_lock` in `common/utils.sh`: one slot per instance for restore, rollback, backup and upgrade; a refused run exits `75`.
 - `common/instance_ops.sh`: announce, stop, halt, start, running and notify as small commands.
 
+- `world/prune-chunks.js`: delete generated chunks nobody has used (InhabitedTime below a threshold) so a new Minecraft version regenerates them. Spawn, player positions, drawn zones and a buffer are never touched; region, entities and poi are pruned together; `--scan` is read only, `--apply` re-scans and deletes only what both scans agree on. `upgrade.sh --prune-plan=<id>` runs it inside an upgrade; `--prune-only` runs it alone, both under one backup. See `docs/chunk-pruning.md`.
+
 ### Changed
 
 - `update-server.js` records the new version after the jar swap instead of before it, and disables incompatible mods (reversible, `mods/disabled/`) instead of deleting jars by filename match.
