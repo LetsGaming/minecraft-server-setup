@@ -3,7 +3,7 @@
 # reports a combined result.
 # Usage: bash tests/shell/run.sh [test_file.sh ...]
 set -u
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
 
 files=("$@")
 run_js=false

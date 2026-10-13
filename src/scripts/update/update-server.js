@@ -6,26 +6,35 @@
  * Updates the Minecraft server (vanilla or Fabric) and all mods to the
  * specified version (or latest).
  *
- * Usage: node update-server.js [version]
+ * Usage: node update-server.js [version] [--plan | --apply] [--json] [--yes]
+ *                              [--keep-incompatible]
  *
- * Self-contained — no dependency on the setup project directory.
+ *   (no mode)  Interactive update for a person at a terminal: checks mods,
+ *              asks, takes the backup, swaps the jar, updates the mods.
+ *              Does NOT stop or start the server; stop it first.
+ *   --plan     Changes nothing. Reports target version, the Java it needs and
+ *              each installed mod's verdict. With --json, one JSON object.
+ *   --apply    The jar swap and the mod update only, no prompts and no
+ *              backup. For upgrade-server.js, which stops the server and
+ *              takes the backup itself. With --json, NDJSON progress lines
+ *              and a final {"ok":...} line on stdout.
+ *   --yes      Interactive mode: answer "update anyway" yes, never remove mods.
+ *   --keep-incompatible  Do not disable mods that have no build for the
+ *              target. (--apply never disables them; the caller decides.)
+ *
+ * Self-contained: no dependency on the setup project directory.
  * All paths are resolved relative to this script's location.
  */
 
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
-const { spawn, execFile, execSync } = require("child_process");
+const { spawn, execFile, execSync, execFileSync } = require("child_process");
 const axios = require("axios");
 const { parseArgs } = require("./lib/args");
 const { loadVariables: readVariables } = require("./lib/variables");
 const { downloadVerified } = require("./lib/download");
-
-// Usage:
-//   node update-server.js [version] [--version=<ver>]
-//
-//   version  Target MC version — positional or --version=.
-//            Defaults to "latest" when omitted.
+const { createJsonMode } = require("./lib/json-mode");
 
 // ── Paths ─────────────────────────────────────────────────────────────────
 
@@ -44,10 +53,21 @@ const DOWNLOADED_VERSIONS_PATH = path.resolve(
 );
 const UPDATE_MODS_SCRIPT = path.resolve(SCRIPT_DIR, "update-mods.js");
 const CHECK_UPDATES_SCRIPT = path.resolve(SCRIPT_DIR, "check-updates.js");
+const TOGGLE_MOD_SCRIPT = path.resolve(SCRIPT_DIR, "toggle-mod.js");
 const BACKUP_SCRIPT = path.resolve(SCRIPT_DIR, "..", "backup", "backup.sh");
 
 const MOJANG_MANIFEST_URL =
   "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+
+/** Statuses from check-updates.js that mean "no build for the target". */
+const UNAVAILABLE_STATUSES = ["no_versions", "no_matching_version", "error"];
+
+// In --json mode stdout carries only our own JSON lines, so child processes
+// write to stderr instead of inheriting stdout.
+let JSON_MODE = false;
+function childStdio() {
+  return JSON_MODE ? ["ignore", 2, 2] : "inherit";
+}
 
 // ── Config loading ────────────────────────────────────────────────────────
 
@@ -182,6 +202,12 @@ function runCheckUpdatesJSON(version) {
   });
 }
 
+function unavailableMods(updateInfo) {
+  return updateInfo.results.filter((m) =>
+    UNAVAILABLE_STATUSES.includes(m.status),
+  );
+}
+
 // ── Backup ────────────────────────────────────────────────────────────────
 
 function backupServer() {
@@ -226,7 +252,7 @@ function installJabbaVerified() {
     // -f: fail on HTTP error, --proto =https / --tlsv1.2: refuse downgrades.
     execSync(
       `curl -fsSL --proto '=https' --tlsv1.2 ${JSON.stringify(installUrl)} -o ${JSON.stringify(tmp)}`,
-      { stdio: "inherit" },
+      { stdio: childStdio() },
     );
     const actualSha = crypto
       .createHash("sha256")
@@ -234,14 +260,14 @@ function installJabbaVerified() {
       .digest("hex");
     if (actualSha !== expectedSha) {
       throw new Error(
-        `Jabba installer checksum mismatch — refusing to run.\n` +
+        `Jabba installer checksum mismatch, refusing to run.\n` +
           `  expected: ${expectedSha}\n  actual:   ${actualSha}\n` +
           `  If you bumped the installer, update the pinned hash ` +
           `(or set JABBA_INSTALL_SHA256).`,
       );
     }
-    console.log("[update-server] Jabba installer checksum OK — running.");
-    execSync(`bash ${JSON.stringify(tmp)}`, { stdio: "inherit" });
+    console.log("[update-server] Jabba installer checksum OK, running.");
+    execSync(`bash ${JSON.stringify(tmp)}`, { stdio: childStdio() });
   } finally {
     try {
       fs.rmSync(tmp, { force: true });
@@ -251,19 +277,29 @@ function installJabbaVerified() {
   }
 }
 
+function jabbaJdkDir() {
+  return path.join(process.env.HOME, ".jabba", "jdk");
+}
+
+/** The installed Jabba JDK directory name for a Java major version, or null. */
+function findInstalledJava(requiredJava) {
+  const jabbaDir = jabbaJdkDir();
+  return fs.existsSync(jabbaDir)
+    ? (fs.readdirSync(jabbaDir).find((n) => n.includes(`@${requiredJava}.`)) ??
+        null)
+    : null;
+}
+
 async function ensureJavaVersion(mcVersion) {
   const requiredJava = await getJavaVersionFor(mcVersion);
   console.log(`Minecraft ${mcVersion} requires Java ${requiredJava}`);
 
-  const jabbaDir = path.join(process.env.HOME, ".jabba", "jdk");
-  if (!fs.existsSync(jabbaDir)) {
+  if (!fs.existsSync(jabbaJdkDir())) {
     console.log("Jabba not found. Installing via Jabba...");
     installJabbaVerified();
   }
 
-  const installed = fs.existsSync(jabbaDir)
-    ? fs.readdirSync(jabbaDir).find((n) => n.includes(`@${requiredJava}.`))
-    : null;
+  const installed = findInstalledJava(requiredJava);
 
   if (installed) {
     console.log(`Java ${requiredJava} already installed (${installed}).`);
@@ -294,7 +330,7 @@ async function ensureJavaVersion(mcVersion) {
     console.log(`Installing ${candidate}...`);
     execSync(
       `bash -c '. ~/.jabba/jabba.sh && jabba install ${candidate} && jabba use ${candidate}'`,
-      { stdio: "inherit" },
+      { stdio: childStdio() },
     );
     console.log(`Java ${requiredJava} installed.`);
   } catch (err) {
@@ -341,13 +377,10 @@ async function updateFabric(versionId, serverPath) {
     writer.on("error", rej);
   });
   const javaVersion = await getJavaVersionFor(versionId);
-  const jabbaDir = path.join(process.env.HOME, ".jabba", "jdk");
-  const javaInstall = fs
-    .readdirSync(jabbaDir)
-    .find((n) => n.includes(`@${javaVersion}.`));
+  const javaInstall = findInstalledJava(javaVersion);
   if (!javaInstall)
     throw new Error(`Java ${javaVersion} not found after install attempt.`);
-  const javaBin = path.join(jabbaDir, javaInstall, "bin", "java");
+  const javaBin = path.join(jabbaJdkDir(), javaInstall, "bin", "java");
   await new Promise((resolve, reject) => {
     const proc = spawn(
       javaBin,
@@ -359,7 +392,7 @@ async function updateFabric(versionId, serverPath) {
         versionId,
         "-downloadMinecraft",
       ],
-      { cwd: serverPath, stdio: "inherit" },
+      { cwd: serverPath, stdio: childStdio() },
     );
     proc.on("exit", (code) => {
       try {
@@ -371,6 +404,7 @@ async function updateFabric(versionId, serverPath) {
         ? resolve()
         : reject(new Error(`Fabric installer exit ${code}`));
     });
+    proc.on("error", reject);
   });
   console.log("Fabric updated.");
 }
@@ -378,125 +412,227 @@ async function updateFabric(versionId, serverPath) {
 function runModUpdate(version) {
   return new Promise((resolve, reject) => {
     const child = spawn("node", [UPDATE_MODS_SCRIPT, version], {
-      stdio: "inherit",
+      stdio: childStdio(),
     });
     child.on("exit", (code) =>
       code === 0 ? resolve() : reject(new Error("update-mods.js failed")),
     );
+    child.on("error", reject);
   });
 }
 
-async function removeIncompatibleMods(serverPath, incompatible) {
-  const modsDir = path.join(serverPath, "mods");
-  if (!fs.existsSync(modsDir)) return;
-  const files = fs.readdirSync(modsDir);
+/**
+ * Disable (not delete) mods with no build for the target. toggle-mod.js moves
+ * the jar to mods/disabled/ by the manifest's recorded filename, so the move is
+ * exact and reversible. Returns the slugs that could not be disabled.
+ */
+function disableMods(incompatible) {
+  const failed = [];
   for (const m of incompatible) {
-    const slug = m.slug.toLowerCase();
-    for (const file of files) {
-      if (file.toLowerCase().includes(slug)) {
-        console.log(`Removing incompatible mod: ${file}`);
-        fs.unlinkSync(path.join(modsDir, file));
-      }
+    try {
+      execFileSync("node", [TOGGLE_MOD_SCRIPT, m.slug, "--disable", "--json"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      console.log(`Disabled incompatible mod: ${m.slug}`);
+    } catch {
+      console.warn(`Could not disable ${m.slug}.`);
+      failed.push(m.slug);
     }
   }
+  return failed;
+}
+
+/** Swap the server jar for the target, THEN record the new version. */
+async function swapServer({ modLoader, versionId, metadataUrl, serverPath }) {
+  if (modLoader === "fabric") {
+    await updateFabric(versionId, serverPath);
+  } else {
+    await updateVanilla(versionId, metadataUrl, serverPath);
+  }
+  saveGameVersion(versionId);
+  saveModLoader(modLoader);
+}
+
+// ── Modes ─────────────────────────────────────────────────────────────────
+
+function requireServerSetup(serverPath) {
+  if (!fs.existsSync(serverPath)) {
+    throw new Error(`SERVER_PATH does not exist: ${serverPath}`);
+  }
+  if (!fs.existsSync(DOWNLOADED_VERSIONS_PATH)) {
+    throw new Error("downloaded_versions.json missing!");
+  }
+}
+
+/** --plan: look, never touch. */
+async function planMode({ serverPath, targetVersionArg, emit }) {
+  requireServerSetup(serverPath);
+  const installed = readDownloadedVersions();
+  const { versionId } = await getVersionInfo(targetVersionArg || "latest");
+  const requiredJava = await getJavaVersionFor(versionId);
+  const updateInfo = await runCheckUpdatesJSON(versionId);
+  emit({
+    ok: true,
+    current: installed.gameVersion ?? null,
+    target: versionId,
+    modLoader: installed.modLoader ?? null,
+    java: {
+      required: requiredJava,
+      installed: findInstalledJava(requiredJava) !== null,
+    },
+    mods: updateInfo.results.map((m) => ({
+      slug: m.slug,
+      status: m.status,
+      message: m.message ?? null,
+    })),
+    unavailable: unavailableMods(updateInfo).map((m) => m.slug),
+  });
+}
+
+/** --apply: jar swap and mod update for a caller that already stopped and backed up. */
+async function applyMode({ serverPath, targetVersionArg, emit }) {
+  requireServerSetup(serverPath);
+  const installed = readDownloadedVersions();
+  const { versionId, metadataUrl } = await getVersionInfo(
+    targetVersionArg || "latest",
+  );
+  emit({ phase: "java", msg: `Ensuring Java for ${versionId}` });
+  await ensureJavaVersion(versionId);
+  emit({ phase: "jar", msg: `Installing the ${versionId} server` });
+  await swapServer({
+    modLoader: installed.modLoader,
+    versionId,
+    metadataUrl,
+    serverPath,
+  });
+  emit({ phase: "mods", msg: "Updating mods" });
+  await runModUpdate(versionId);
+  emit({ ok: true, version: versionId });
+}
+
+/** The interactive flow for a person at a terminal. */
+async function interactiveMode({ vars, serverPath, args }) {
+  requireServerSetup(serverPath);
+  const installed = readDownloadedVersions();
+  const modLoader = installed.modLoader;
+  const { versionId, metadataUrl } = await getVersionInfo(
+    args.get("version") || "latest",
+  );
+  console.log(`Target version: ${versionId}`);
+  console.log(`Mod loader: ${modLoader}`);
+
+  await ensureJavaVersion(versionId);
+
+  console.log("\nChecking mod compatibility...");
+  const updateInfo = await runCheckUpdatesJSON(versionId);
+  const incompatible = unavailableMods(updateInfo);
+
+  let disableIncompatible = false;
+
+  if (incompatible.length > 0) {
+    console.log("\nSome mods are not available for this version:");
+    incompatible.forEach((m) =>
+      console.log(` - ${m.slug}: ${m.message || m.status}`),
+    );
+    const proceed = args.bool("yes") || (await askYesNo("\nUpdate anyway?"));
+    if (!proceed) {
+      console.log("Aborted.");
+      process.exit(0);
+    }
+    disableIncompatible =
+      !args.bool("yes") &&
+      !args.bool("keep-incompatible") &&
+      (await askYesNo(
+        "Disable incompatible mods (moved to mods/disabled, reversible)?",
+      ));
+  }
+
+  try {
+    await backupServer();
+  } catch {
+    console.error("Backup failed. Aborting update.");
+    sendWebhook(
+      vars,
+      "update_failed",
+      `Update to ${versionId} aborted: backup failed.`,
+    );
+    process.exit(1);
+  }
+
+  await swapServer({ modLoader, versionId, metadataUrl, serverPath });
+  await runModUpdate(versionId);
+
+  if (incompatible.length > 0 && disableIncompatible) {
+    disableMods(incompatible);
+    console.log("\nUpdate completed with incompatible mods disabled.");
+  } else if (incompatible.length > 0) {
+    console.log("\nUpdate completed with incompatible mods retained.");
+  } else {
+    console.log("\nServer fully updated.");
+  }
+
+  sendWebhook(
+    vars,
+    "update_complete",
+    `Server updated to ${versionId} successfully.`,
+  );
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────
 
-(async () => {
+async function main() {
+  const args = parseArgs({
+    flags: { version: null },
+    boolFlags: ["plan", "apply", "json", "yes", "keep-incompatible"],
+    positional: ["version"],
+  });
+  JSON_MODE = args.bool("json");
+  const jsonMode = createJsonMode(JSON_MODE, {
+    captureErrors: true,
+    silenceWarn: true,
+    silenceStdoutWrite: true,
+  });
+  const emit = (obj) => {
+    if (JSON_MODE) jsonMode.emit(obj);
+  };
+
+  if (args.bool("plan") && args.bool("apply")) {
+    emit({ ok: false, error: "Use either --plan or --apply, not both." });
+    console.error("Use either --plan or --apply, not both.");
+    process.exit(2);
+  }
+
   const vars = loadVariables();
+  const serverPath = vars.SERVER_PATH;
+  const ctx = {
+    vars,
+    serverPath,
+    args,
+    targetVersionArg: args.get("version"),
+    emit,
+  };
 
   try {
-    const serverPath = vars.SERVER_PATH;
-    const args = parseArgs({
-      flags: { version: null },
-      positional: ["version"],
-    });
-
-    const targetVersionArg = args.get("version");
-
-    if (!fs.existsSync(serverPath)) {
-      console.error("SERVER_PATH does not exist:", serverPath);
-      process.exit(1);
-    }
-    if (!fs.existsSync(DOWNLOADED_VERSIONS_PATH)) {
-      throw new Error("downloaded_versions.json missing!");
-    }
-
-    const installed = readDownloadedVersions();
-    const modLoader = installed.modLoader;
-    const { versionId, metadataUrl } = await getVersionInfo(
-      targetVersionArg || "latest",
-    );
-    console.log(`Target version: ${versionId}`);
-    console.log(`Mod loader: ${modLoader}`);
-
-    await ensureJavaVersion(versionId);
-
-    console.log("\nChecking mod compatibility...");
-    const updateInfo = await runCheckUpdatesJSON(versionId);
-    const incompatible = updateInfo.results.filter((m) =>
-      ["no_versions", "no_matching_version", "error"].includes(m.status),
-    );
-
-    let removeIncompatibleModsFlag = false;
-
-    if (incompatible.length > 0) {
-      console.log("\nSome mods are not available for this version:");
-      incompatible.forEach((m) =>
-        console.log(` - ${m.slug}: ${m.message || m.status}`),
-      );
-      const proceed = await askYesNo("\nUpdate anyway?");
-      if (!proceed) {
-        console.log("Aborted.");
-        process.exit(0);
-      }
-      removeIncompatibleModsFlag = await askYesNo(
-        "Remove incompatible mods from the server?",
-      );
-    }
-
-    try {
-      await backupServer();
-    } catch {
-      console.error("Backup failed. Aborting update.");
-      sendWebhook(
-        vars,
-        "update_failed",
-        `Update to ${versionId} aborted: backup failed.`,
-      );
-      process.exit(1);
-    }
-
-    saveGameVersion(versionId);
-    saveModLoader(modLoader);
-
-    if (modLoader === "fabric") {
-      await updateFabric(versionId, serverPath);
+    if (args.bool("plan")) {
+      await planMode(ctx);
+    } else if (args.bool("apply")) {
+      await applyMode(ctx);
     } else {
-      await updateVanilla(versionId, metadataUrl, serverPath);
+      await interactiveMode(ctx);
     }
-
-    await runModUpdate(versionId);
-
-    if (incompatible.length > 0 && removeIncompatibleModsFlag) {
-      await removeIncompatibleMods(serverPath, incompatible);
-      console.log("\nUpdate completed with incompatible mods removed.");
-    } else if (incompatible.length > 0) {
-      console.log("\nUpdate completed with incompatible mods retained.");
-    } else {
-      console.log("\nServer fully updated.");
-    }
-
-    sendWebhook(
-      vars,
-      "update_complete",
-      `Server updated to ${versionId} successfully.`,
-    );
     process.exit(0);
   } catch (err) {
+    emit({ ok: false, error: err.message });
     console.error("\nUpdate failed:", err.message);
-    sendWebhook(vars, "update_failed", `Update failed: ${err.message}`);
+    if (!args.bool("plan") && !args.bool("apply")) {
+      sendWebhook(vars, "update_failed", `Update failed: ${err.message}`);
+    }
     process.exit(1);
   }
-})();
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = { unavailableMods, UNAVAILABLE_STATUSES };

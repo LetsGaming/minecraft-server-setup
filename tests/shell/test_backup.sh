@@ -125,7 +125,7 @@ test_busy_lock_skips_the_run() {
     holder=$!
     command sleep 1
   else
-    export FLOCK_SHIM_BUSY=1
+    export FLOCK_SHIM_BUSY=1 MC_OPERATION_LOCK_HELD=1
   fi
   run_script "$BACKUP"
   [[ -n "$holder" ]] && kill "$holder" 2>/dev/null
@@ -182,10 +182,27 @@ test_run_backup_skips_quietly_when_locked() {
     skip "run_backup lock skip" "uses the shim-only busy switch; real flock path covered by test_busy_lock_skips_the_run"
     return
   fi
-  export FLOCK_SHIM_BUSY=1
+  export FLOCK_SHIM_BUSY=1 MC_OPERATION_LOCK_HELD=1
   run_script "$RUN_BACKUP"
   assert_rc 0 "$RC" "cron run exits 0 when another backup is active"
   assert_contains "$OUT" "Another backup is running" "logs the skip"
+}
+
+test_backup_yields_to_a_running_operation() {
+  setup
+  export FLOCK_SHIM_BUSY=1
+  unset MC_OPERATION_LOCK_HELD
+  run_script "$BACKUP"
+  assert_rc 75 "$RC" "exit 75 while a restore, rollback or upgrade holds the operation lock"
+  assert_contains "$OUT" "Another operation" "says why"
+  assert_eq "" "$(first_archive "$T/backups")" "nothing written"
+}
+
+test_backup_started_by_an_operation_does_not_wait_on_it() {
+  setup
+  export MC_OPERATION_LOCK_HELD=1
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "the upgrade job can run backup under its own lock"
 }
 
 test_backup_creates_archives_private_by_default() {

@@ -64,6 +64,68 @@ runJavaCommand() {
 
 setup_server_run_command
 
+# ── Lifecycle events ─────────────────────────────────────────────────────────
+# One JSON object per line in logs/lifecycle.ndjson, for anything that wants to
+# know how the JVM is doing without scraping the console (the API wrapper
+# serves it; the update job reads it). Values are numbers or short strings,
+# never log content. Restart behaviour below is unchanged by this.
+EVENTS_FILE="${LIFECYCLE_EVENTS_FILE:-$SCRIPT_DIR/logs/lifecycle.ndjson}"
+EVENTS_MAX_BYTES=1048576
+
+_json_string() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/ }"
+  s="${s//$'\r'/ }"
+  s="${s//$'\t'/ }"
+  printf '"%s"' "$s"
+}
+
+# emit_event <type> [key=value ...]
+emit_event() {
+  local type="$1"; shift
+  local line pair key value
+  line="{\"ts\":$(date +%s),\"type\":$(_json_string "$type")"
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    if [[ "$value" =~ ^-?[0-9]+$ ]]; then
+      line+=",$(_json_string "$key"):$value"
+    else
+      line+=",$(_json_string "$key"):$(_json_string "$value")"
+    fi
+  done
+  line+="}"
+  {
+    mkdir -p "$(dirname "$EVENTS_FILE")"
+    if [[ -f "$EVENTS_FILE" ]] && (( $(wc -c < "$EVENTS_FILE") > EVENTS_MAX_BYTES )); then
+      mv -f "$EVENTS_FILE" "$EVENTS_FILE.1"
+    fi
+    printf '%s\n' "$line" >> "$EVENTS_FILE"
+  } 2> /dev/null || true
+}
+
+# Best effort: the scripts dir sits next to instances/ and holds the webhook helper.
+notify_crash_loop() {
+  local instance webhook
+  instance="$(basename "$SCRIPT_DIR")"
+  webhook="$SCRIPT_DIR/../../scripts/$instance/common/webhook.sh"
+  [[ -f "$webhook" ]] || return 0
+  (
+    export INSTANCE_NAME="$instance"
+    # shellcheck source=/dev/null
+    source "$webhook" && notify server_crash_loop "$1" "$instance" 15158332 && wait_for_notifications
+  ) > /dev/null 2>&1 || true
+}
+
+newest_crash_report() {
+  local dir="$SCRIPT_DIR/crash-reports"
+  [[ -d "$dir" ]] || return 0
+  # shellcheck disable=SC2012
+  ls -1t "$dir" 2> /dev/null | head -n 1
+}
+
 # A crash within this many seconds of starting is "the JVM never really came
 # up" (a bad jar, an incompatible mod, a corrupt config) rather than "it ran
 # for a while and then something went wrong" — and unlike the latter, retrying
@@ -78,6 +140,7 @@ rapid_crashes=0
 while true
 do
   start_ts=$(date +%s)
+  emit_event jvm_start "rapid_crashes=$rapid_crashes"
   runJavaCommand "${ADDITIONAL_ARGS} ${SERVER_RUN_COMMAND}"
   exit_code=$?
   uptime=$(( $(date +%s) - start_ts ))
@@ -96,7 +159,11 @@ do
     rapid_crashes=0
   fi
 
+  emit_event jvm_exit "exit_code=$exit_code" "uptime_seconds=$uptime" "rapid_crashes=$rapid_crashes"
+
   if (( rapid_crashes >= MAX_RAPID_CRASHES )); then
+    emit_event crash_loop_gave_up "rapid_crashes=$rapid_crashes" "window_seconds=$CRASH_LOOP_WINDOW_SECONDS" "exit_code=$exit_code" "crash_report=$(newest_crash_report)"
+    notify_crash_loop "The server crashed ${rapid_crashes} times within ${CRASH_LOOP_WINDOW_SECONDS}s of starting and the restart loop gave up."
     echo "Server crashed ${rapid_crashes} times, each within ${CRASH_LOOP_WINDOW_SECONDS}s of starting — giving up rather than retrying forever." >&2
     echo "This is a startup-time failure (an incompatible mod, a corrupted config/world file, a missing dependency) that will not fix itself on retry. Check the log above, fix the cause, then restart the service." >&2
     if [[ "${WAIT_FOR_USER_INPUT}" == "true" ]]; then
@@ -106,5 +173,6 @@ do
   fi
 
   echo "Automatically restarting server in 15 seconds. Press CTRL + C to abort and exit."
+  emit_event restart_scheduled "seconds=15"
   sleep 15
 done

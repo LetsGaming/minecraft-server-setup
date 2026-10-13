@@ -19,7 +19,7 @@ test_session_running_is_anchored_to_the_session_name() {
   server_running
   export SCREEN_SHIM_SESSION=testinst
   in_scripts session_running; assert_rc 0 "$?" "matches the exact session name"
-  ( cd "$T/scripts" && source common/server_control.sh && INSTANCE_NAME=test && session_running )
+  ( cd "$T/scripts" && source common/server_control.sh && INSTANCE_NAME="test" && session_running )
   assert_nonzero "$?" "a name that is only a prefix of the running session does not match"
   ( cd "$T/scripts" && source common/server_control.sh && INSTANCE_NAME=inst && session_running )
   assert_nonzero "$?" "a name that is only a suffix does not match"
