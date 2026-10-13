@@ -17,7 +17,8 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { chunkMeta } = require("./nbt");
+const cache = require("./cache");
+const scan = require("./scan");
 const region = require("./region");
 const world = require("./world");
 
@@ -41,9 +42,6 @@ const DEFAULT_PARAMS = Object.freeze({
   zones: [],
   dimensions: null,
 });
-
-/** More cells than this and the world is too spread out to hold as a grid. */
-const MAX_GRID_CELLS = 250_000_000;
 
 function normalizeParams(input = {}) {
   const num = (v, d, min, max) => {
@@ -110,23 +108,6 @@ function listRegions(dimDir) {
   return out;
 }
 
-/** Sector bytes a slot occupies in a sibling folder's file, 0 when absent. */
-function slotBytes(file, slot) {
-  try {
-    const fd = fs.openSync(file, "r");
-    try {
-      const head = Buffer.alloc(region.HEADER);
-      const n = fs.readSync(fd, head, 0, region.HEADER, 0);
-      if (n < region.HEADER) return 0;
-      return region.sectorCount(head.readUInt32BE(slot * 4)) * region.SECTOR;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Phase timer for --profile. Without a profile object every call is a plain
  * pass-through, so the scan pays nothing when nobody asked.
@@ -152,65 +133,55 @@ function heatLevel(minutes) {
  * Read one dimension and classify every chunk. Returns the grid of cells with
  * enough per-chunk data to build the plan and the map.
  */
-function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profile }) {
+function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profile, cacheDir, fresh }) {
   const thresholdTicks = params.thresholdMinutes * TICKS_PER_MINUTE;
   const regions = listRegions(dimDir);
   const cells = new Map(); // "rx,rz" -> {cell:Uint8Array(1024), heat:Uint8Array(1024), bytes:Uint32Array(1024)}
 
-  let minX = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxZ = -Infinity;
-
+  const live = new Set();
   for (const r of regions) {
-    let buf;
-    try {
-      buf = timed(profile, "read", () => fs.readFileSync(r.file));
-    } catch {
-      continue;
+    const key = `${dimId}:${r.x},${r.z}`;
+    let record = null;
+    let fp = null;
+    if (cacheDir && !fresh.has(key)) {
+      fp = timed(profile, "fingerprint", () => cache.fingerprint(r.file));
+      record = timed(profile, "cacheLoad", () => cache.load(cacheDir, dimId, r.x, r.z, fp));
+      if (profile) profile.counts[record ? "cacheHits" : "cacheMisses"]++;
     }
-    const header = timed(profile, "header", () => region.readHeader(buf));
-    if (!header) continue;
+    if (!record) {
+      record = scan.readRegionRecord(
+        r.file,
+        r.x,
+        r.z,
+        (name, fn) => timed(profile, name, fn),
+        profile ? () => profile.counts.chunks++ : undefined,
+      );
+      if (cacheDir && record) {
+        fp = fp ?? cache.fingerprint(r.file);
+        cache.store(cacheDir, dimId, r.x, r.z, fp, record);
+      }
+    }
+    if (!record) continue;
+    live.add(`${r.x},${r.z}`);
+
     const cell = new Uint8Array(region.CHUNKS);
     const heat = new Uint8Array(region.CHUNKS);
-    const bytes = new Uint32Array(region.CHUNKS);
-    let any = false;
-
-    for (const slot of region.occupiedSlots(header)) {
-      any = true;
-      const loc = header.locations[slot];
-      bytes[slot] = region.sectorCount(loc) * region.SECTOR;
-      if (profile) profile.counts.chunks++;
-      const res = timed(profile, "inflate", () => region.readChunk(buf, header, slot, path.dirname(r.file), r.x, r.z));
-      if (!res.ok) {
+    for (let slot = 0; slot < region.CHUNKS; slot++) {
+      const st = record.state[slot];
+      if (st === scan.STATE.EMPTY) continue;
+      if (st === scan.STATE.UNREADABLE) {
         cell[slot] = CELL.UNREADABLE;
         continue;
       }
-      let meta;
-      try {
-        meta = timed(profile, "nbt", () => chunkMeta(res.data));
-      } catch {
-        cell[slot] = CELL.UNREADABLE;
-        continue;
-      }
-      // A chunk with no InhabitedTime at all is not known to be unused.
-      if (typeof meta.InhabitedTime !== "number") {
-        cell[slot] = CELL.UNREADABLE;
-        continue;
-      }
-      heat[slot] = heatLevel(meta.InhabitedTime / TICKS_PER_MINUTE);
-      cell[slot] = meta.InhabitedTime < thresholdTicks ? CELL.DELETE : CELL.ACTIVE;
+      heat[slot] = heatLevel(record.ticks[slot] / TICKS_PER_MINUTE);
+      cell[slot] = record.ticks[slot] < thresholdTicks ? CELL.DELETE : CELL.ACTIVE;
     }
 
-    if (!any) continue;
+    cells.set(`${r.x},${r.z}`, { rx: r.x, rz: r.z, cell, heat, bytes: record.bytes, file: r.file });
     if (profile) profile.counts.regions++;
-    cells.set(`${r.x},${r.z}`, { rx: r.x, rz: r.z, cell, heat, bytes, file: r.file });
-    minX = Math.min(minX, r.x * 32);
-    minZ = Math.min(minZ, r.z * 32);
-    maxX = Math.max(maxX, r.x * 32 + 31);
-    maxZ = Math.max(maxZ, r.z * 32 + 31);
     if (onRegion) onRegion();
   }
+  if (cacheDir) cache.prune(cacheDir, dimId, live);
 
   if (cells.size === 0) return { cells, regions: 0 };
 
@@ -235,7 +206,7 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profil
 
   // Buffer: a deletion candidate within N chunks of anything that stays is kept.
   if (params.bufferChunks > 0) {
-    timed(profile, "buffer", () => applyBuffer(cells, { minX, minZ, maxX, maxZ }, params.bufferChunks));
+    timed(profile, "buffer", () => applyBuffer(cells, params.bufferChunks));
   }
 
   return { cells, regions: cells.size };
@@ -243,55 +214,61 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profil
 
 const isKeep = (c) => c === CELL.ACTIVE || c === CELL.PROTECTED || c === CELL.UNREADABLE;
 
-function applyBuffer(cells, box, n) {
-  const w = box.maxX - box.minX + 1;
-  const h = box.maxZ - box.minZ + 1;
-  if (w * h > MAX_GRID_CELLS) {
-    throw new Error("The world is spread over too large an area to prune with a buffer.");
-  }
-  const keep = new Uint8Array(w * h);
+/**
+ * A deletion candidate within `n` chunks (Chebyshev distance) of anything that
+ * stays becomes BUFFER. Each region is decided from a local grid of its own
+ * chunks plus an `n` chunk halo taken from its neighbours (n is at most 32, so
+ * only the eight adjacent regions can matter), so memory is bounded per region
+ * and a far-away region cannot make the whole scan fail.
+ */
+function applyBuffer(cells, n) {
+  const side = region.CHUNKS ** 0.5; // 32
+  const w = side + 2 * n;
+  const keep = new Uint8Array(w * w);
+  const sum = new Int32Array((w + 1) * (w + 1));
+
   for (const entry of cells.values()) {
+    let any = false;
     for (let slot = 0; slot < region.CHUNKS; slot++) {
-      if (!isKeep(entry.cell[slot])) continue;
-      const x = entry.rx * 32 + region.slotX(slot) - box.minX;
-      const z = entry.rz * 32 + region.slotZ(slot) - box.minZ;
-      keep[z * w + x] = 1;
+      if (entry.cell[slot] === CELL.DELETE) {
+        any = true;
+        break;
+      }
     }
-  }
-  // Chebyshev distance <= n is a box dilation: one pass along x, one along z.
-  const tmp = new Uint8Array(w * h);
-  for (let z = 0; z < h; z++) {
-    const row = z * w;
-    let last = -Infinity;
-    for (let x = 0; x < w; x++) {
-      if (keep[row + x]) last = x;
-      if (x - last <= n) tmp[row + x] = 1;
+    if (!any) continue;
+
+    keep.fill(0);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const other = cells.get(`${entry.rx + dx},${entry.rz + dz}`);
+        if (!other) continue;
+        for (let slot = 0; slot < region.CHUNKS; slot++) {
+          if (!isKeep(other.cell[slot])) continue;
+          // Local coordinates: the region's own chunks start at (n, n).
+          const x = dx * side + region.slotX(slot) + n;
+          const z = dz * side + region.slotZ(slot) + n;
+          if (x >= 0 && x < w && z >= 0 && z < w) keep[z * w + x] = 1;
+        }
+      }
     }
-    last = Infinity;
-    for (let x = w - 1; x >= 0; x--) {
-      if (keep[row + x]) last = x;
-      if (last - x <= n) tmp[row + x] = 1;
+    // Summed-area table: a window count is four lookups.
+    for (let z = 0; z < w; z++) {
+      let row = 0;
+      for (let x = 0; x < w; x++) {
+        row += keep[z * w + x];
+        sum[(z + 1) * (w + 1) + x + 1] = sum[z * (w + 1) + x + 1] + row;
+      }
     }
-  }
-  const out = new Uint8Array(w * h);
-  for (let x = 0; x < w; x++) {
-    let last = -Infinity;
-    for (let z = 0; z < h; z++) {
-      if (tmp[z * w + x]) last = z;
-      if (z - last <= n) out[z * w + x] = 1;
-    }
-    last = Infinity;
-    for (let z = h - 1; z >= 0; z--) {
-      if (tmp[z * w + x]) last = z;
-      if (last - z <= n) out[z * w + x] = 1;
-    }
-  }
-  for (const entry of cells.values()) {
     for (let slot = 0; slot < region.CHUNKS; slot++) {
       if (entry.cell[slot] !== CELL.DELETE) continue;
-      const x = entry.rx * 32 + region.slotX(slot) - box.minX;
-      const z = entry.rz * 32 + region.slotZ(slot) - box.minZ;
-      if (out[z * w + x]) entry.cell[slot] = CELL.BUFFER;
+      const x = region.slotX(slot) + n;
+      const z = region.slotZ(slot) + n;
+      const x0 = x - n;
+      const z0 = z - n;
+      const x1 = x + n + 1;
+      const z1 = z + n + 1;
+      const count = sum[z1 * (w + 1) + x1] - sum[z0 * (w + 1) + x1] - sum[z1 * (w + 1) + x0] + sum[z0 * (w + 1) + x0];
+      if (count > 0) entry.cell[slot] = CELL.BUFFER;
     }
   }
 }
@@ -323,7 +300,7 @@ function slotsOfBitmap(base64) {
  * @returns {{plan: object, maps: Record<string, object>}} `plan` carries the
  *   deletions and totals; `maps` is one cell/heat map per dimension for the UI.
  */
-function scanWorld({ serverPath, params: rawParams, onProgress, profile }) {
+function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDir = null, fresh = new Set() }) {
   const params = normalizeParams(rawParams);
   const worldDir = world.worldDirOf(serverPath);
   const spawn = world.readSpawn(worldDir);
@@ -354,6 +331,8 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile }) {
       players,
       onRegion: onProgress,
       profile,
+      cacheDir,
+      fresh,
     });
 
     const counts = { chunks: 0, delete: 0, active: 0, protected: 0, buffer: 0, unreadable: 0 };
@@ -367,6 +346,13 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile }) {
       const key = `r.${entry.rx}.${entry.rz}`;
       mapRegions[key] = { cell: b64(entry.cell), heat: b64(entry.heat) };
       const { bits, count } = deletionBitmap(entry.cell);
+      // Sibling headers are read once per region file, and only when something goes.
+      const siblings =
+        count > 0
+          ? timed(profile, "slotBytes", () =>
+              ["entities", "poi"].map((folder) => scan.siblingSectorBytes(path.join(dim.dir, folder, region.regionName(entry.rx, entry.rz)))),
+            )
+          : null;
       let occupied = 0;
       for (let slot = 0; slot < region.CHUNKS; slot++) {
         const c = entry.cell[slot];
@@ -377,10 +363,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile }) {
         else if (c === CELL.BUFFER) counts.buffer++;
         else if (c === CELL.UNREADABLE) counts.unreadable++;
         if (c === CELL.DELETE) {
-          bytes += entry.bytes[slot];
-          for (const folder of ["entities", "poi"]) {
-            bytes += timed(profile, "slotBytes", () => slotBytes(path.join(dim.dir, folder, region.regionName(entry.rx, entry.rz)), slot));
-          }
+          bytes += entry.bytes[slot] + (siblings ? siblings[0][slot] + siblings[1][slot] : 0);
         }
       }
       counts.chunks += occupied;
@@ -416,7 +399,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile }) {
 
 /** An empty profile for scanWorld; see summarizeProfile in prune-chunks.js. */
 function newProfile() {
-  return { phases: {}, counts: { chunks: 0, regions: 0 } };
+  return { phases: {}, counts: { chunks: 0, regions: 0, cacheHits: 0, cacheMisses: 0 } };
 }
 
 /** A hash of what a plan would delete, independent of when it was made. */
@@ -437,13 +420,22 @@ function planHash(plan) {
  *
  * @param {{serverPath: string, plan: object, tolerance?: number, onProgress?: Function}} args
  */
-function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
+function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = null }) {
   if (!plan || typeof plan.hash !== "string" || planHash(plan) !== plan.hash) {
     const err = new Error("The plan does not match its own hash.");
     err.code = "plan_invalid";
     throw err;
   }
-  const fresh = scanWorld({ serverPath, params: plan.params });
+  // Regions the plan touches are always re-read; the cache only stands in for the rest,
+  // which can matter only as neighbours for the buffer.
+  const reread = new Set();
+  for (const dim of plan.dimensions) {
+    for (const key of Object.keys(dim.deletions)) {
+      const m = /^r.(-?d+).(-?d+)$/.exec(key);
+      if (m) reread.add(`${dim.id}:${m[1]},${m[2]}`);
+    }
+  }
+  const fresh = scanWorld({ serverPath, params: plan.params, cacheDir, fresh: reread });
   const freshDims = new Map(fresh.plan.dimensions.map((d) => [d.id, d]));
 
   // What both scans want gone.

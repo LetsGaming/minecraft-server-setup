@@ -432,3 +432,134 @@ test("a negative NBT array length is an error, not a loop", () => {
   const doc = (type) => Buffer.from([10, 0, 0, type, 0, 1, 0x61, 0xff, 0xff, 0xff, 0xff, 0]);
   for (const type of [7, 11, 12]) assert.throws(() => chunkMeta(doc(type)), /ended early/);
 });
+
+// ── Record cache ──
+
+const withCache = (fn) =>
+  withServer((s) => {
+    const cacheDir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "mcsetup-prunecache-"));
+    try {
+      fn(s, cacheDir);
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+function scanCounts(s, cacheDir, params = LEAN) {
+  const profile = plan.newProfile();
+  const r = plan.scanWorld({ serverPath: s.dir, params, profile, cacheDir });
+  return { r, hits: profile.counts.cacheHits, misses: profile.counts.cacheMisses, chunks: profile.counts.chunks };
+}
+
+test("a second scan reads nothing and decides the same", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 60, 0, 60]);
+  const first = scanCounts(s, cacheDir);
+  assert.deepEqual([first.hits, first.misses, first.chunks], [0, 1, 4]);
+  const second = scanCounts(s, cacheDir);
+  assert.deepEqual([second.hits, second.misses, second.chunks], [1, 0, 0]);
+  assert.equal(second.r.plan.hash, first.r.plan.hash);
+}));
+
+test("a changed parameter is a recompute over the cache, not a rescan", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 60, 0, 60]);
+  scanCounts(s, cacheDir);
+  const stricter = scanCounts(s, cacheDir, { ...LEAN, thresholdMinutes: 100 });
+  assert.equal(stricter.chunks, 0);
+  assert.equal(stricter.r.plan.totals.delete, 4);
+  const uncached = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, thresholdMinutes: 100 } });
+  assert.equal(stricter.r.plan.hash, uncached.plan.hash);
+}));
+
+test("a rewritten region file is read again", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 0, 0, 0]);
+  assert.equal(scanCounts(s, cacheDir).r.plan.totals.delete, 4);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [0, 1, 2, 3].map((i) => chunk(i, 0, i === 1 ? 90 : 0)));
+  const again = scanCounts(s, cacheDir);
+  assert.equal(again.misses, 1);
+  assert.equal(again.r.plan.totals.delete, 3);
+}));
+
+test("a damaged or foreign cache entry is a miss", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 0]);
+  scanCounts(s, cacheDir);
+  const entry = path.join(cacheDir, "overworld", "r.0.0.meta");
+  fs.writeFileSync(entry, Buffer.from("garbage"));
+  const again = scanCounts(s, cacheDir);
+  assert.equal(again.misses, 1);
+  assert.equal(again.r.plan.totals.delete, 2);
+  const bumped = fs.readFileSync(entry);
+  bumped.writeUInt32BE(999, 4);
+  fs.writeFileSync(entry, bumped);
+  assert.equal(scanCounts(s, cacheDir).misses, 1);
+}));
+
+test("apply reads the regions it touches fresh, even when the cache says otherwise", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 0, 0, 0]);
+  const { r } = scanCounts(s, cacheDir);
+  // Poison the cached record: it claims every chunk is idle, the file says chunk 1 is busy
+  // and keeps the same size and mtime would not be enough to fool the fingerprint, so
+  // rewrite the file and put the old mtime back.
+  const file = s.regionFile(null, "region", 0, 0);
+  const before = fs.statSync(file);
+  fx.writeRegion(file, 0, 0, [0, 1, 2, 3].map((i) => chunk(i, 0, i === 1 ? 90 : 0)));
+  fs.utimesSync(file, before.atimeMs / 1000, before.mtimeMs / 1000);
+  const res = plan.applyPlan({ serverPath: s.dir, plan: r.plan, cacheDir, tolerance: 0.5 });
+  assert.equal(res.deletedChunks, 3);
+  assert.deepEqual(slotsIn(s, "region"), [1]);
+}));
+
+test("the cache forgets regions that no longer exist", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 0]);
+  scanCounts(s, cacheDir);
+  fs.rmSync(s.regionFile(null, "region", 0, 0));
+  fx.writeRegion(s.regionFile(null, "region", 1, 0), 1, 0, [chunk(32, 0, 0)]);
+  scanCounts(s, cacheDir);
+  assert.deepEqual(fs.readdirSync(path.join(cacheDir, "overworld")), ["r.1.0.meta"]);
+}));
+
+// ── Buffer ──
+
+test("regions a million chunks apart no longer fail the scan", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 0, 0);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [chunk(0, 0, 0), chunk(1, 0, 90)]);
+  fx.writeRegion(s.regionFile(null, "region", 40000, -40000), 40000, -40000, [chunk(40000 * 32, -40000 * 32, 0)]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, bufferChunks: 2 } });
+  assert.equal(r.plan.totals.chunks, 3);
+}));
+
+test("the buffer matches a brute-force Chebyshev distance across region borders", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 0, 0);
+  let seed = 7;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const busy = new Map();
+  for (const [rx, rz] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
+    const list = [];
+    for (let i = 0; i < 1024; i++) {
+      const x = rx * 32 + (i & 31);
+      const z = rz * 32 + (i >> 5);
+      const isBusy = rand() < 0.02;
+      busy.set(`${x},${z}`, isBusy);
+      list.push(chunk(x, z, isBusy ? 90 : 0));
+    }
+    fx.writeRegion(s.regionFile(null, "region", rx, rz), rx, rz, list);
+  }
+  for (const n of [1, 3, 32]) {
+    const r = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, bufferChunks: n } });
+    let expected = 0;
+    for (const [key, isBusy] of busy) {
+      if (isBusy) continue;
+      const [x, z] = key.split(",").map(Number);
+      let near = false;
+      for (let dz = -n; dz <= n && !near; dz++) {
+        for (let dx = -n; dx <= n; dx++) {
+          if (busy.get(`${x + dx},${z + dz}`)) {
+            near = true;
+            break;
+          }
+        }
+      }
+      if (!near) expected++;
+    }
+    assert.equal(r.plan.totals.delete, expected, `buffer ${n}`);
+  }
+}));

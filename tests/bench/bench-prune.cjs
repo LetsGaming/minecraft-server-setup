@@ -6,11 +6,13 @@
  *   node tests/bench/bench-prune.cjs --chunks=100000            synthetic world
  *   node tests/bench/bench-prune.cjs --world=/path/to/server    real server, read only
  *
+ * --cache scans twice and reports the repeat scan (cache warm).
  * Options: --padding=<longs per chunk> (chunk size, default 400), --keep to
  * leave the synthetic world on disk, --seed=<n>. It only ever calls scan, never
  * apply, so pointing it at a real world is safe. Prints one JSON object.
  */
 
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
@@ -76,10 +78,16 @@ function main() {
     serverPath = server.dir;
   }
 
-  const profile = newProfile();
-  const t0 = process.hrtime.bigint();
-  const { plan } = scanWorld({ serverPath, params: {}, profile });
-  const totalMs = Number(process.hrtime.bigint() - t0) / 1e6;
+  const cacheDir = arg("cache", false) ? fs.mkdtempSync(path.join(os.tmpdir(), "prune-bench-cache-")) : null;
+  const runScan = () => {
+    const profile = newProfile();
+    const t0 = process.hrtime.bigint();
+    const { plan } = scanWorld({ serverPath, params: {}, profile, cacheDir });
+    return { profile, plan, totalMs: Number(process.hrtime.bigint() - t0) / 1e6 };
+  };
+  // With --cache the first scan fills the cache and the second is the repeat scan that is reported.
+  if (cacheDir) runScan();
+  const { profile, plan, totalMs } = runScan();
 
   const report = {
     source: worldArg ? "real" : "synthetic",
@@ -89,12 +97,13 @@ function main() {
     scanMs: Math.round(totalMs),
     phasesMs: Object.fromEntries(Object.entries(profile.phases).map(([k, v]) => [k, Math.round(v)])),
     counts: profile.counts,
-    chunksPerSecond: Math.round((profile.counts.chunks / totalMs) * 1000),
+    chunksPerSecond: Math.round((plan.totals.chunks / totalMs) * 1000),
     peakRssMb: Math.round(process.resourceUsage().maxRSS / 1024),
     totals: plan.totals,
   };
   process.stdout.write(JSON.stringify(report, null, 2) + "\n");
 
+  if (cacheDir) fs.rmSync(cacheDir, { recursive: true, force: true });
   if (server && !arg("keep", false)) server.cleanup();
   else if (server) process.stderr.write(`kept ${path.resolve(server.dir)}\n`);
 }

@@ -6,7 +6,7 @@
  *
  * Usage (every mode prints one JSON object per line with --json):
  *   node prune-chunks.js --status
- *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path>] [--profile]
+ *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path>] [--profile] [--no-cache]
  *   node prune-chunks.js --apply  --plan=<id>
  *   node prune-chunks.js --settings=get
  *   node prune-chunks.js --settings=set --params=<json>
@@ -28,6 +28,7 @@ const { scanWorld, newProfile, applyPlan, normalizeParams } = require("./lib/pla
 
 const SCRIPTS_DIR = path.resolve(__dirname, "..");
 const PRUNE_DIR = path.join(SCRIPTS_DIR, "common", "prune");
+const CACHE_DIR = path.join(PRUNE_DIR, "cache");
 const SETTINGS_FILE = path.join(PRUNE_DIR, "settings.json");
 const PLANS_KEPT = 5;
 const PLAN_ID_RE = /^[a-f0-9]{16}$/;
@@ -155,7 +156,7 @@ function reenterLocked() {
 function main() {
   const args = parseArgs({
     flags: { params: null, "params-file": null, plan: null, settings: null },
-    boolFlags: ["status", "scan", "apply", "json", "profile"],
+    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache"],
   });
   const vars = loadVariables(path.join(SCRIPTS_DIR, "common", "variables.txt"), { optional: true });
 
@@ -185,7 +186,7 @@ function main() {
     const profile = args.bool("profile") ? newProfile() : null;
     const started = process.hrtime.bigint();
     try {
-      result = scanWorld({ serverPath, params: scanParams(readParams(args)), profile });
+      result = scanWorld({ serverPath, params: scanParams(readParams(args)), profile, cacheDir: args.bool("no-cache") ? null : CACHE_DIR });
     } catch (err) {
       fail("scan_failed", err.message);
     }
@@ -212,7 +213,7 @@ function main() {
     if (serverIsRunning(vars)) fail("server_running", "The server must be stopped before chunks are deleted.");
     out({ phase: "prune", msg: "Deleting unused chunks" });
     try {
-      const res = applyPlan({ serverPath, plan });
+      const res = applyPlan({ serverPath, plan, cacheDir: CACHE_DIR });
       out({ ok: true, ...res });
     } catch (err) {
       fail(["plan_stale", "plan_invalid"].includes(err.code) ? err.code : "apply_failed", err.message);
