@@ -40,7 +40,16 @@ both scans agree on, so a preview made while players were online can remove less
 it promised and never more. If fewer than 90 % of the planned chunks are still unused
 it deletes nothing and reports `plan_stale`. Each rewritten region file is compacted
 (the space really comes back), written beside the original and renamed over it, and
-every chunk left in it is read back before the job counts as done.
+every chunk kept in it is compared byte for byte with what was copied before the job counts
+as done. A chunk that was already unreadable is kept as it was. A region file whose header
+cannot be trusted (a chunk with no sectors, or two chunks sharing sectors) is left untouched
+and reported as skipped. The plan must match its own hash, and the folder to delete in comes
+from the fresh scan, never from the stored plan. Without `common/instance_ops.sh` the
+server counts as running and `--apply` refuses; a hand-run `--apply` takes the operation lock.
+
+`--scan --profile` adds phase timings, counts and peak memory to the summary.
+`tests/bench/bench-prune.cjs` builds a synthetic world (or scans a real one, read only)
+and prints the same numbers; see `docs/prune-benchmarks.md`.
 
 ## Run it safely
 

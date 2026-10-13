@@ -127,6 +127,21 @@ function slotBytes(file, slot) {
   }
 }
 
+/**
+ * Phase timer for --profile. Without a profile object every call is a plain
+ * pass-through, so the scan pays nothing when nobody asked.
+ */
+function timed(profile, name, fn) {
+  if (!profile) return fn();
+  const t0 = process.hrtime.bigint();
+  try {
+    return fn();
+  } finally {
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    profile.phases[name] = (profile.phases[name] ?? 0) + ms;
+  }
+}
+
 /** Log-ish 0..255 level of an InhabitedTime in minutes, for the heat map. */
 function heatLevel(minutes) {
   if (!(minutes > 0)) return 0;
@@ -137,7 +152,7 @@ function heatLevel(minutes) {
  * Read one dimension and classify every chunk. Returns the grid of cells with
  * enough per-chunk data to build the plan and the map.
  */
-function scanDimension({ dimId, dimDir, params, spawn, players, onRegion }) {
+function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profile }) {
   const thresholdTicks = params.thresholdMinutes * TICKS_PER_MINUTE;
   const regions = listRegions(dimDir);
   const cells = new Map(); // "rx,rz" -> {cell:Uint8Array(1024), heat:Uint8Array(1024), bytes:Uint32Array(1024)}
@@ -150,11 +165,11 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion }) {
   for (const r of regions) {
     let buf;
     try {
-      buf = fs.readFileSync(r.file);
+      buf = timed(profile, "read", () => fs.readFileSync(r.file));
     } catch {
       continue;
     }
-    const header = region.readHeader(buf);
+    const header = timed(profile, "header", () => region.readHeader(buf));
     if (!header) continue;
     const cell = new Uint8Array(region.CHUNKS);
     const heat = new Uint8Array(region.CHUNKS);
@@ -165,14 +180,15 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion }) {
       any = true;
       const loc = header.locations[slot];
       bytes[slot] = region.sectorCount(loc) * region.SECTOR;
-      const res = region.readChunk(buf, header, slot, path.dirname(r.file), r.x, r.z);
+      if (profile) profile.counts.chunks++;
+      const res = timed(profile, "inflate", () => region.readChunk(buf, header, slot, path.dirname(r.file), r.x, r.z));
       if (!res.ok) {
         cell[slot] = CELL.UNREADABLE;
         continue;
       }
       let meta;
       try {
-        meta = chunkMeta(res.data);
+        meta = timed(profile, "nbt", () => chunkMeta(res.data));
       } catch {
         cell[slot] = CELL.UNREADABLE;
         continue;
@@ -187,6 +203,7 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion }) {
     }
 
     if (!any) continue;
+    if (profile) profile.counts.regions++;
     cells.set(`${r.x},${r.z}`, { rx: r.x, rz: r.z, cell, heat, bytes, file: r.file });
     minX = Math.min(minX, r.x * 32);
     minZ = Math.min(minZ, r.z * 32);
@@ -199,6 +216,7 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion }) {
 
   // Protected zones first: they turn a would-be deletion into a keep.
   const rects = protectedRects(dimId, params, spawn, players);
+  const tClassify = profile ? process.hrtime.bigint() : 0n;
   for (const entry of cells.values()) {
     for (const rect of rects) {
       const rx0 = entry.rx * 32;
@@ -213,8 +231,12 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion }) {
     }
   }
 
+  if (profile) profile.phases.classify = (profile.phases.classify ?? 0) + Number(process.hrtime.bigint() - tClassify) / 1e6;
+
   // Buffer: a deletion candidate within N chunks of anything that stays is kept.
-  if (params.bufferChunks > 0) applyBuffer(cells, { minX, minZ, maxX, maxZ }, params.bufferChunks);
+  if (params.bufferChunks > 0) {
+    timed(profile, "buffer", () => applyBuffer(cells, { minX, minZ, maxX, maxZ }, params.bufferChunks));
+  }
 
   return { cells, regions: cells.size };
 }
@@ -301,7 +323,7 @@ function slotsOfBitmap(base64) {
  * @returns {{plan: object, maps: Record<string, object>}} `plan` carries the
  *   deletions and totals; `maps` is one cell/heat map per dimension for the UI.
  */
-function scanWorld({ serverPath, params: rawParams, onProgress }) {
+function scanWorld({ serverPath, params: rawParams, onProgress, profile }) {
   const params = normalizeParams(rawParams);
   const worldDir = world.worldDirOf(serverPath);
   const spawn = world.readSpawn(worldDir);
@@ -331,6 +353,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
       spawn,
       players,
       onRegion: onProgress,
+      profile,
     });
 
     const counts = { chunks: 0, delete: 0, active: 0, protected: 0, buffer: 0, unreadable: 0 };
@@ -339,6 +362,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
     let bytes = 0;
     let regionsEmptied = 0;
 
+    const tAssemble = profile ? process.hrtime.bigint() : 0n;
     for (const entry of [...cells.values()].sort((a, b) => a.rx - b.rx || a.rz - b.rz)) {
       const key = `r.${entry.rx}.${entry.rz}`;
       mapRegions[key] = { cell: b64(entry.cell), heat: b64(entry.heat) };
@@ -355,7 +379,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
         if (c === CELL.DELETE) {
           bytes += entry.bytes[slot];
           for (const folder of ["entities", "poi"]) {
-            bytes += slotBytes(path.join(dim.dir, folder, region.regionName(entry.rx, entry.rz)), slot);
+            bytes += timed(profile, "slotBytes", () => slotBytes(path.join(dim.dir, folder, region.regionName(entry.rx, entry.rz)), slot));
           }
         }
       }
@@ -367,6 +391,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
       }
     }
 
+    if (profile) profile.phases.assemble = (profile.phases.assemble ?? 0) + Number(process.hrtime.bigint() - tAssemble) / 1e6;
     plan.dimensions.push({
       id: dim.id,
       dir: path.relative(serverPath, dim.dir).split(path.sep).join("/"),
@@ -387,6 +412,11 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
   plan.hash = planHash(plan);
   plan.id = plan.hash.slice(0, 16);
   return { plan, maps };
+}
+
+/** An empty profile for scanWorld; see summarizeProfile in prune-chunks.js. */
+function newProfile() {
+  return { phases: {}, counts: { chunks: 0, regions: 0 } };
 }
 
 /** A hash of what a plan would delete, independent of when it was made. */
@@ -511,6 +541,7 @@ module.exports = {
   TICKS_PER_MINUTE,
   normalizeParams,
   scanWorld,
+  newProfile,
   applyPlan,
   planHash,
   slotsOfBitmap,

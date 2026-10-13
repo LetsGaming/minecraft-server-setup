@@ -162,3 +162,14 @@ test("--scan with an empty parameter object uses the saved settings", withSetup(
   assert.equal(empty.last.params.thresholdMinutes, 1000);
   assert.equal(empty.last.totals.delete, 4);
 }));
+
+test("--scan --profile reports phase timings and counts", withSetup((s) => {
+  const r = s.run(["--scan", "--profile", `--params=${JSON.stringify(LEAN)}`]);
+  assert.equal(r.last.ok, true);
+  const p = r.last.profile;
+  assert.equal(p.counts.chunks, 4);
+  assert.equal(p.counts.regions, 1);
+  for (const phase of ["read", "inflate", "nbt", "classify", "assemble"]) assert.ok(phase in p.phases, phase);
+  assert.ok(p.peakRssMb > 0);
+  assert.equal("profile" in s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]).last, false);
+}));

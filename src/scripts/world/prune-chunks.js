@@ -6,7 +6,7 @@
  *
  * Usage (every mode prints one JSON object per line with --json):
  *   node prune-chunks.js --status
- *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path>]
+ *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path>] [--profile]
  *   node prune-chunks.js --apply  --plan=<id>
  *   node prune-chunks.js --settings=get
  *   node prune-chunks.js --settings=set --params=<json>
@@ -24,7 +24,7 @@ const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("../update/lib/args");
 const { loadVariables } = require("../update/lib/variables");
-const { scanWorld, applyPlan, normalizeParams } = require("./lib/plan");
+const { scanWorld, newProfile, applyPlan, normalizeParams } = require("./lib/plan");
 
 const SCRIPTS_DIR = path.resolve(__dirname, "..");
 const PRUNE_DIR = path.join(SCRIPTS_DIR, "common", "prune");
@@ -114,6 +114,19 @@ function summarize(plan) {
   };
 }
 
+/** Phase timings in ms, counts, throughput and peak memory for a --profile scan. */
+function summarizeProfile(profile, started) {
+  const totalMs = Number(process.hrtime.bigint() - started) / 1e6;
+  const phases = Object.fromEntries(Object.entries(profile.phases).map(([k, v]) => [k, Math.round(v)]));
+  return {
+    totalMs: Math.round(totalMs),
+    phases,
+    counts: profile.counts,
+    chunksPerSecond: totalMs > 0 ? Math.round((profile.counts.chunks / totalMs) * 1000) : 0,
+    peakRssMb: Math.round(process.resourceUsage().maxRSS / 1024),
+  };
+}
+
 function serverIsRunning(vars) {
   // The setup suite's own check: RCON, screen session or systemd, whichever answers.
   const { spawnSync } = require("child_process");
@@ -142,7 +155,7 @@ function reenterLocked() {
 function main() {
   const args = parseArgs({
     flags: { params: null, "params-file": null, plan: null, settings: null },
-    boolFlags: ["status", "scan", "apply", "json"],
+    boolFlags: ["status", "scan", "apply", "json", "profile"],
   });
   const vars = loadVariables(path.join(SCRIPTS_DIR, "common", "variables.txt"), { optional: true });
 
@@ -169,8 +182,10 @@ function main() {
 
   if (args.bool("scan")) {
     let result;
+    const profile = args.bool("profile") ? newProfile() : null;
+    const started = process.hrtime.bigint();
     try {
-      result = scanWorld({ serverPath, params: scanParams(readParams(args)) });
+      result = scanWorld({ serverPath, params: scanParams(readParams(args)), profile });
     } catch (err) {
       fail("scan_failed", err.message);
     }
@@ -180,7 +195,7 @@ function main() {
     writePrivate(planFile(plan.id), JSON.stringify(plan));
     dims.forEach((d, n) => writePrivate(mapFile(plan.id, n), JSON.stringify({ dimension: d.id, ...maps[d.id] })));
     prunePlans(plan.id);
-    out({ ok: true, ...summarize(plan) });
+    out({ ok: true, ...summarize(plan), ...(profile ? { profile: summarizeProfile(profile, started) } : {}) });
     return;
   }
 

@@ -22,6 +22,15 @@ All notable changes to this project are documented here. The format follows
 - `update-server.js` records the new version after the jar swap instead of before it, and disables incompatible mods (reversible, `mods/disabled/`) instead of deleting jars by filename match.
 - `backup.sh`, `restore.sh` and `rollback.sh` take the operation lock, so they no longer overlap with each other or with an upgrade.
 
+### Fixed
+
+- `prune-chunks.js --apply`: a chunk that was already corrupt no longer makes the post-prune check fail and roll the whole job back; the check now compares kept chunks byte for byte instead of re-reading them.
+- `prune-chunks.js --apply` refuses to run when `instance_ops.sh` is missing (it used to assume the server was stopped), takes the operation lock when run by hand, rejects a plan whose content does not match its hash, and deletes only in folders found by the fresh scan.
+- Region files with a chunk entry of zero sectors or overlapping sectors are left untouched by a prune instead of being rewritten.
+- A negative array length in chunk data is rejected instead of looping.
+- `prune-chunks.js --scan --params={}` uses the saved settings, as the dashboard expects.
+- `prune-chunks.js --scan --profile` and `tests/bench/bench-prune.cjs` report where scan time goes.
+
 ## [5.0.0] - 2026-10-10
 
 Items marked **BREAKING** change behaviour that scripts, cron jobs or the API wrapper may rely on.
