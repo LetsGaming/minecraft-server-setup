@@ -47,3 +47,16 @@ The repeat scan is about 10 % of a full scan. `--workers=<n>` on `prune-chunks.j
 the bench sets the thread count; the default is the core count minus one, at most 4.
 Changing a threshold, radius, buffer or zone recomputes over the cached records and reads
 no region file.
+
+## Real world (1,502 regions with chunks, 1.01M chunks, 4 cores, Node 20)
+
+| run | time |
+|---|---|
+| baseline, single thread, no cache (before engine v2) | 268 s (nbt 142 s, inflate 75 s, slotBytes 36 s, read 12 s) |
+| engine v2, 3 worker threads, cold cache | 27.7 s (9.7x faster), peak RSS 452 MB |
+
+Sampled chunks: 2.7 KB compressed, 30 KB inflated, inflate 80 us, old NBT walk 178 us,
+fast walk 9 us (20x). `InhabitedTime` sits at 0.3 % of the document, so a partial inflate
+would find it after about 19 % of the compressed bytes. It is not used: a full inflate is
+what proves a chunk is readable, and a chunk that cannot be proven readable must never be
+deleted. The scan is now bound by inflate (about 27 s of CPU spread over the workers).
