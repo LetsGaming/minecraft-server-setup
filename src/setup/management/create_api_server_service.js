@@ -47,6 +47,21 @@ const API_SERVER_SRC = path.join(
 );
 
 const currentUser = process.env.USER;
+// A dedicated, unprivileged user for the wrapper (see docs/service-user.md). Without
+// it the wrapper runs as the setup user, as before.
+const serviceUser = apiServer.SERVICE_USER || "";
+if (serviceUser && !/^[a-z_][a-z0-9_-]{0,31}$/.test(serviceUser)) {
+  console.error(`[api-server] API_SERVER.SERVICE_USER "${serviceUser}" is not a valid user name.`);
+  process.exit(1);
+}
+const runAs = serviceUser || currentUser;
+// The wrapper runs scripts through sudo, and the sudoers rules name exact interpreters.
+// Pin the wrapper to the same ones service_user.sh was given (setup.sh passes both).
+const pinnedInterpreters = serviceUser
+  ? `
+Environment="MC_BASH_PATH=${execSync("command -v bash").toString().trim()}"
+Environment="MC_NODE_PATH=${process.execPath}"`
+  : "";
 const serviceName = `${TARGET_DIR_NAME}-api-server.service`;
 const serviceFile = `/etc/systemd/system/${serviceName}`;
 
@@ -148,6 +163,15 @@ fs.writeFileSync(API_SERVER_CONFIG, JSON.stringify(config, null, 2), {
 });
 // Re-assert mode in case the file pre-existed with looser permissions.
 fs.chmodSync(API_SERVER_CONFIG, 0o600);
+if (serviceUser) {
+  // chmod above resets the ACL mask, so the service user's read grant is set after it.
+  try {
+    execSync(`setfacl -m u:${serviceUser}:r ${JSON.stringify(API_SERVER_CONFIG)}`);
+  } catch (err) {
+    console.error(`[api-server] Could not let ${serviceUser} read the config (${err.message}). Run service_user.sh first.`);
+    process.exit(1);
+  }
+}
 console.log(`[api-server] Config updated: ${API_SERVER_CONFIG}`);
 console.log(
   `[api-server] Instances: [${Object.keys(config.instances).join(", ")}]`,
@@ -164,16 +188,16 @@ After=network.target
 
 [Service]
 Type=simple
-User=${currentUser}
-Group=${currentUser}
+User=${runAs}
+Group=${runAs}
 WorkingDirectory=${API_SERVER_DIR}
-Environment="CONFIG_FILE=${API_SERVER_CONFIG}"
+Environment="CONFIG_FILE=${API_SERVER_CONFIG}"${pinnedInterpreters}
 # Default 4 is shared by every fs.readFile/stat/readdir this process makes;
 # a stats/backups/mods fan-out can starve /health's own filesystem read
 # behind it. Bounded server-side concurrency (see instances/*.ts) is the
 # real fix; this is cheap insurance on top of it.
 Environment="UV_THREADPOOL_SIZE=8"
-ExecStart=/usr/bin/node ${API_SERVER_ENTRY}
+ExecStart=${serviceUser ? process.execPath : "/usr/bin/node"} ${API_SERVER_ENTRY}
 Restart=on-failure
 RestartSec=5s
 # Unlike the PM2 deployment path this unit previously had no ceiling at
@@ -195,8 +219,12 @@ WantedBy=multi-user.target
     writeRootFile(serviceFile, serviceContent);
     execSync("sudo systemctl daemon-reload");
     execSync(`sudo systemctl enable ${serviceName}`);
-    execSync(`sudo systemctl start ${serviceName}`);
-    console.log(`[api-server] Service created and started: ${serviceName}`);
+    if (serviceUser) {
+      console.log(`[api-server] Service created: ${serviceName} (started after ${serviceUser} has its grants)`);
+    } else {
+      execSync(`sudo systemctl start ${serviceName}`);
+      console.log(`[api-server] Service created and started: ${serviceName}`);
+    }
   } catch (err) {
     console.error(`[api-server] Failed to create service: ${err.message}`);
     process.exit(1);
@@ -204,8 +232,12 @@ WantedBy=multi-user.target
 } else {
   // Service already exists — just restart it to pick up the new instance
   try {
-    execSync(`sudo systemctl restart ${serviceName}`);
-    console.log(`[api-server] Service restarted: ${serviceName}`);
+    if (serviceUser) {
+      console.log(`[api-server] Service exists: ${serviceName} (restarted after ${serviceUser} has its grants)`);
+    } else {
+      execSync(`sudo systemctl restart ${serviceName}`);
+      console.log(`[api-server] Service restarted: ${serviceName}`);
+    }
   } catch (err) {
     console.error(`[api-server] Failed to restart service: ${err.message}`);
     process.exit(1);

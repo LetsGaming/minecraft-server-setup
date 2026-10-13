@@ -1,12 +1,37 @@
 #!/bin/bash
 set -e
 
+# Deploys the API wrapper. With API_SERVER.SERVICE_USER set the wrapper gets its
+# own unprivileged user (docs/service-user.md): the user and its grants are made
+# before the wrapper is deployed and again after (the wrapper's own folder only
+# exists once it is deployed), and the service starts only when both are done.
+setup_api_wrapper() {
+  local svc scripts_dir node_path bash_path
+  svc=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.SERVICE_USER || '')" 2>/dev/null)
+  if [ -z "$svc" ]; then
+    run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_api_server_service.js\""
+    return
+  fi
+
+  scripts_dir="$MAIN_DIR/$TARGET_DIR_NAME/scripts/$INSTANCE_NAME"
+  node_path=$(command -v node)
+  bash_path=$(command -v bash)
+  local su="sudo bash \"$SCRIPT_DIR/src/setup/management/service_user.sh\" --scripts-dir \"$scripts_dir\" --user \"$svc\" --node-path \"$node_path\" --bash-path \"$bash_path\""
+  log "Creating the wrapper's service user '$svc' and its grants..."
+  run_or_echo "$su"
+  run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_api_server_service.js\""
+  log "Granting '$svc' access to the deployed wrapper..."
+  run_or_echo "$su"
+  run_or_echo "sudo systemctl restart \"${TARGET_DIR_NAME}-api-server.service\""
+}
+
 # Validate variables.json once, up front, and export the two fields the setup
 # steps need (INSTANCE_NAME, TARGET_DIR_NAME). Previously the first call to
 # loadVariables() happened implicitly inside create_directories.js; now that the
 # early steps are bash, we resolve + validate here instead. loadVariables()
 # throws on an invalid config, so a bad variables.json fails fast here rather
 # than after downloading a whole modpack.
+
 resolve_instance_vars() {
   # Already resolved (e.g. both setup flows share run_setup_startup)
   if [[ -n "$INSTANCE_NAME" && -n "$TARGET_DIR_NAME" ]]; then
@@ -116,19 +141,18 @@ run_optional_setup() {
     warn "EULA not accepted. Please do so before launching the server."
   fi
 
+  local api_enabled=false
   if [ "$SETUP_API_SERVER" = true ]; then
-    log "Setting up minecraft-bot API wrapper service..."
-    run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_api_server_service.js\""
+    api_enabled=true
   else
     # Still set up if enabled in variables.json and flag wasn't explicitly suppressed
-    local api_enabled
     api_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.ENABLED || false)" 2>/dev/null)
-    if [ "$api_enabled" = "true" ]; then
-      log "API_SERVER.ENABLED=true — setting up minecraft-bot API wrapper service..."
-      run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_api_server_service.js\""
-    else
-      warn "Skipping API wrapper setup (use --api-server or set API_SERVER.ENABLED=true)."
-    fi
+  fi
+  if [ "$api_enabled" = "true" ]; then
+    log "Setting up minecraft-bot API wrapper service..."
+    setup_api_wrapper
+  else
+    warn "Skipping API wrapper setup (use --api-server or set API_SERVER.ENABLED=true)."
   fi
 
   # The bundled web interface (minecraft-server-manager) was retired: everything
