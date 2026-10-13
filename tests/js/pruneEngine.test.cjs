@@ -357,12 +357,26 @@ test(
 );
 
 test(
-  "a plan cannot name a folder outside the world",
+  "the folder a plan names is ignored: the fresh scan decides where to delete",
   withServer((s) => {
     threeFolders(s, [0, 0]);
     const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
     p.dimensions[0].dir = "../../elsewhere";
-    assert.throws(() => plan.applyPlan({ serverPath: s.dir, plan: p }), /outside the world|plan_stale|Only/);
+    const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+    assert.equal(res.deletedChunks, 2);
+  }),
+);
+
+test(
+  "a plan whose deletions were edited is refused",
+  withServer((s) => {
+    threeFolders(s, [0, 0, 90]);
+    const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+    const dim = p.dimensions[0];
+    const key = Object.keys(dim.deletions)[0];
+    dim.deletions[key] = Buffer.alloc(128, 0xff).toString("base64");
+    assert.throws(() => plan.applyPlan({ serverPath: s.dir, plan: p }), (e) => e.code === "plan_invalid");
+    assert.deepEqual(slotsIn(s, "region"), [0, 1, 2]);
   }),
 );
 
@@ -371,6 +385,516 @@ test(
   withServer((s) => {
     threeFolders(s, [90, 90]);
     const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
-    assert.deepEqual(plan.applyPlan({ serverPath: s.dir, plan: p }), { deletedChunks: 0, removedFiles: 0, bytesFreed: 0, planned: 0 });
+    assert.deepEqual(plan.applyPlan({ serverPath: s.dir, plan: p }), { deletedChunks: 0, removedFiles: 0, bytesFreed: 0, planned: 0, skippedFiles: 0 });
   }),
 );
+
+// ── Safety edge cases ──
+
+test("a chunk that was already corrupt stays and does not fail validation", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [
+    chunk(0, 0, 0),
+    { ...chunk(1, 0, 0), compression: "corrupt" },
+    chunk(2, 0, 90),
+  ]);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+  assert.equal(res.deletedChunks, 1);
+  assert.deepEqual(slotsIn(s, "region"), [1, 2]);
+}));
+
+test("a region whose header overlaps two chunks is left alone", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  const file = s.regionFile(null, "region", 0, 0);
+  fx.writeRegion(file, 0, 0, [chunk(0, 0, 0), chunk(1, 0, 90), chunk(2, 0, 90)]);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  const buf = fs.readFileSync(file);
+  buf.writeUInt32BE(buf.readUInt32BE(4), 8); // slot 2 now points at slot 1's sectors
+  fs.writeFileSync(file, buf);
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+  assert.equal(res.deletedChunks, 0);
+  assert.equal(res.skippedFiles, 1);
+  assert.deepEqual(fs.readFileSync(file), buf);
+}));
+
+test("a chunk entry with no sectors reads as corrupt and makes the file unsafe", withServer((s) => {
+  const file = s.regionFile(null, "region", 0, 0);
+  fx.writeRegion(file, 0, 0, [chunk(0, 0, 0), chunk(1, 0, 0)]);
+  const buf = fs.readFileSync(file);
+  buf.writeUInt32BE((2 << 8) | 0, 4);
+  const header = region.readHeader(buf);
+  assert.equal(region.readChunk(buf, header, 1, path.dirname(file), 0, 0).reason, "corrupt");
+  assert.deepEqual([...region.unsafeSlots(header)], [1]);
+}));
+
+test("a negative NBT array length is an error, not a loop", () => {
+  const doc = (type) => Buffer.from([10, 0, 0, type, 0, 1, 0x61, 0xff, 0xff, 0xff, 0xff, 0]);
+  for (const type of [7, 11, 12]) assert.throws(() => chunkMeta(doc(type)), /ended early/);
+});
+
+// ── Record cache ──
+
+const withCache = (fn) =>
+  withServer((s) => {
+    const cacheDir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "mcsetup-prunecache-"));
+    try {
+      fn(s, cacheDir);
+    } finally {
+      fs.rmSync(cacheDir, { recursive: true, force: true });
+    }
+  });
+
+function scanCounts(s, cacheDir, params = LEAN) {
+  const profile = plan.newProfile();
+  const r = plan.scanWorld({ serverPath: s.dir, params, profile, cacheDir });
+  return { r, hits: profile.counts.cacheHits, misses: profile.counts.cacheMisses, chunks: profile.counts.chunks };
+}
+
+test("a second scan reads nothing and decides the same", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 60, 0, 60]);
+  const first = scanCounts(s, cacheDir);
+  assert.deepEqual([first.hits, first.misses, first.chunks], [0, 1, 4]);
+  const second = scanCounts(s, cacheDir);
+  assert.deepEqual([second.hits, second.misses, second.chunks], [1, 0, 0]);
+  assert.equal(second.r.plan.hash, first.r.plan.hash);
+}));
+
+test("a changed parameter is a recompute over the cache, not a rescan", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 60, 0, 60]);
+  scanCounts(s, cacheDir);
+  const stricter = scanCounts(s, cacheDir, { ...LEAN, thresholdMinutes: 100 });
+  assert.equal(stricter.chunks, 0);
+  assert.equal(stricter.r.plan.totals.delete, 4);
+  const uncached = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, thresholdMinutes: 100 } });
+  assert.equal(stricter.r.plan.hash, uncached.plan.hash);
+}));
+
+test("a rewritten region file is read again", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 0, 0, 0]);
+  assert.equal(scanCounts(s, cacheDir).r.plan.totals.delete, 4);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [0, 1, 2, 3].map((i) => chunk(i, 0, i === 1 ? 90 : 0)));
+  const again = scanCounts(s, cacheDir);
+  assert.equal(again.misses, 1);
+  assert.equal(again.r.plan.totals.delete, 3);
+}));
+
+test("a damaged or foreign cache entry is a miss", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 0]);
+  scanCounts(s, cacheDir);
+  const entry = path.join(cacheDir, "overworld", "r.0.0.meta");
+  fs.writeFileSync(entry, Buffer.from("garbage"));
+  const again = scanCounts(s, cacheDir);
+  assert.equal(again.misses, 1);
+  assert.equal(again.r.plan.totals.delete, 2);
+  const bumped = fs.readFileSync(entry);
+  bumped.writeUInt32BE(999, 4);
+  fs.writeFileSync(entry, bumped);
+  assert.equal(scanCounts(s, cacheDir).misses, 1);
+}));
+
+test("apply reads the regions it touches fresh, even when the cache says otherwise", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 90, 0, 0]);
+  scanCounts(s, cacheDir);
+  // Make the cached record claim chunk 1 is idle although the file says it is busy.
+  const entry = path.join(cacheDir, "overworld", "r.0.0.meta");
+  const buf = fs.readFileSync(entry);
+  buf.writeDoubleBE(0, 28 + 1024 + 1024 * 4 + 1 * 8);
+  fs.writeFileSync(entry, buf);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN, cacheDir });
+  assert.equal(p.totals.delete, 4, "the poisoned cache plans to delete everything");
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p, cacheDir, tolerance: 0.5 });
+  assert.equal(res.deletedChunks, 3);
+  assert.deepEqual(slotsIn(s, "region"), [1]);
+}));
+
+test("the cache forgets regions that no longer exist", withCache((s, cacheDir) => {
+  threeFolders(s, [0, 0]);
+  scanCounts(s, cacheDir);
+  fs.rmSync(s.regionFile(null, "region", 0, 0));
+  fx.writeRegion(s.regionFile(null, "region", 1, 0), 1, 0, [chunk(32, 0, 0)]);
+  scanCounts(s, cacheDir);
+  assert.deepEqual(fs.readdirSync(path.join(cacheDir, "overworld")), ["r.1.0.meta"]);
+}));
+
+// ── Buffer ──
+
+test("regions a million chunks apart no longer fail the scan", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 0, 0);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [chunk(0, 0, 0), chunk(1, 0, 90)]);
+  fx.writeRegion(s.regionFile(null, "region", 40000, -40000), 40000, -40000, [chunk(40000 * 32, -40000 * 32, 0)]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, bufferChunks: 2 } });
+  assert.equal(r.plan.totals.chunks, 3);
+}));
+
+test("the buffer matches a brute-force Chebyshev distance across region borders", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 0, 0);
+  let seed = 7;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const busy = new Map();
+  for (const [rx, rz] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
+    const list = [];
+    for (let i = 0; i < 1024; i++) {
+      const x = rx * 32 + (i & 31);
+      const z = rz * 32 + (i >> 5);
+      const isBusy = rand() < 0.02;
+      busy.set(`${x},${z}`, isBusy);
+      list.push(chunk(x, z, isBusy ? 90 : 0));
+    }
+    fx.writeRegion(s.regionFile(null, "region", rx, rz), rx, rz, list);
+  }
+  for (const n of [1, 3, 32]) {
+    const r = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, bufferChunks: n } });
+    let expected = 0;
+    for (const [key, isBusy] of busy) {
+      if (isBusy) continue;
+      const [x, z] = key.split(",").map(Number);
+      let near = false;
+      for (let dz = -n; dz <= n && !near; dz++) {
+        for (let dx = -n; dx <= n; dx++) {
+          if (busy.get(`${x + dx},${z + dz}`)) {
+            near = true;
+            break;
+          }
+        }
+      }
+      if (!near) expected++;
+    }
+    assert.equal(r.plan.totals.delete, expected, `buffer ${n}`);
+  }
+}));
+
+// ── Fast InhabitedTime path ──
+
+const { inhabitedTime } = require("../../src/scripts/world/lib/nbt.js");
+
+test("inhabitedTime agrees with chunkMeta on both layouts and rejects broken data the same way", () => {
+  for (const ticks of [0, 1, 2400, 2 ** 33 + 5, 123456789012]) {
+    for (const make of [fx.chunkModern, fx.chunkLegacy]) {
+      const buf = make({ x: 3, z: -4, inhabited: ticks, padding: 300 });
+      assert.equal(inhabitedTime(buf), chunkMeta(buf).InhabitedTime, `${make.name} ${ticks}`);
+    }
+  }
+  assert.equal(inhabitedTime(Buffer.from([10, 0, 0, 0])), undefined);
+  assert.throws(() => inhabitedTime(Buffer.from([9, 0, 0])), /not a compound/);
+  const good = fx.chunkModern({ x: 0, z: 0, inhabited: 5 });
+  for (const cut of [5, 20, 60, good.length - 3]) {
+    let a;
+    let b;
+    try { a = inhabitedTime(good.subarray(0, cut)); } catch (e) { a = e.constructor.name; }
+    try { b = chunkMeta(good.subarray(0, cut)).InhabitedTime; } catch (e) { b = e.constructor.name; }
+    // Stopping at the first hit may succeed where a full walk of a cut document fails; it never lies.
+    if (typeof a === "number") assert.equal(a, 5, `cut ${cut}`);
+    void b;
+  }
+  for (const type of [7, 11, 12]) {
+    assert.throws(() => inhabitedTime(Buffer.from([10, 0, 0, type, 0, 1, 0x61, 0xff, 0xff, 0xff, 0xff, 0])), /ended early/);
+  }
+});
+
+// ── Manual selection ──
+
+const SEL = (ops, extra = {}) => ({ ...LEAN, selection: { ops, allowProtected: false, ...extra } });
+const add = (x1, z1, x2, z2, mode = "add", dimension = "overworld") => ({ dimension, mode, x1, z1, x2, z2 });
+
+test("a manual selection deletes chunks the rules would keep, and counts them as chosen over a soft rule", withServer((s) => {
+  threeFolders(s, [0, 60, 60, 0]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL([add(1, 0, 2, 0)]) });
+  assert.equal(r.plan.totals.delete, 4);
+  const dim = r.plan.dimensions[0];
+  assert.deepEqual([dim.manualSoft, dim.manualHard, dim.manualBlocked], [2, 0, 0]);
+  const cell = Buffer.from(r.maps.overworld.regions["r.0.0"].cell, "base64");
+  assert.deepEqual([...cell.subarray(0, 4)], [plan.CELL.DELETE, plan.CELL.MANUAL_SOFT, plan.CELL.MANUAL_SOFT, plan.CELL.DELETE]);
+  assert.equal(plan.applyPlan({ serverPath: s.dir, plan: r.plan }).deletedChunks, 4);
+  assert.equal(fs.existsSync(s.regionFile(null, "region", 0, 0)), false, "the emptied region file is gone");
+}));
+
+test("later operations win: remove takes chunks out again", withServer((s) => {
+  threeFolders(s, [60, 60, 60, 60]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 3, 0), add(1, 0, 2, 0, "remove"), add(2, 0, 2, 0)]) });
+  assert.equal(r.plan.totals.delete, 3);
+  const cell = Buffer.from(r.maps.overworld.regions["r.0.0"].cell, "base64");
+  assert.deepEqual([...cell.subarray(0, 4)], [plan.CELL.MANUAL_SOFT, plan.CELL.ACTIVE, plan.CELL.MANUAL_SOFT, plan.CELL.MANUAL_SOFT]);
+}));
+
+test("unreadable chunks are never deleted, even when selected with the override on", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [chunk(0, 0, 60), { ...chunk(1, 0, 0), compression: "corrupt" }]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 1, 0)], { allowProtected: true }) });
+  const dim = r.plan.dimensions[0];
+  assert.equal(dim.delete, 1);
+  assert.equal(dim.manualBlocked, 1);
+}));
+
+test("protected areas stay unless the override is on, and a hard override is counted apart", withServer((s) => {
+  threeFolders(s, [0, 0, 60, 0]);
+  const zone = { name: "base", dimension: "overworld", x1: 0, z1: 0, x2: 2, z2: 0 };
+  const without = plan.scanWorld({ serverPath: s.dir, params: { ...SEL([add(0, 0, 3, 0)]), zones: [zone] } });
+  assert.equal(without.plan.totals.delete, 1, "only chunk 3 lies outside the zone");
+  assert.equal(without.plan.dimensions[0].manualBlocked, 3);
+  const withIt = plan.scanWorld({ serverPath: s.dir, params: { ...SEL([add(0, 0, 3, 0)], { allowProtected: true }), zones: [zone] } });
+  const dim = withIt.plan.dimensions[0];
+  assert.equal(dim.delete, 4);
+  assert.equal(dim.manualHard, 3);
+}));
+
+test("a selection only reaches its own dimension, and rectangles over empty space choose nothing", withServer((s) => {
+  threeFolders(s, [60, 60]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 1, 0, "add", "the_nether"), add(500, 500, 600, 600)]) });
+  assert.equal(r.plan.totals.delete, 0);
+}));
+
+test("the selection is part of the plan: a different one is a different plan id", withServer((s) => {
+  threeFolders(s, [60, 60]);
+  const a = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 0, 0)]) });
+  const b = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 1, 0)]) });
+  const c = plan.scanWorld({ serverPath: s.dir, params: SEL([add(0, 0, 0, 0)]) });
+  assert.notEqual(a.plan.id, b.plan.id);
+  assert.equal(a.plan.id, c.plan.id);
+}));
+
+test("selection parameters are normalised and capped", () => {
+  const n = plan.normalizeParams({ selection: { ops: [add(5, 5, 1, 1), { dimension: 3 }, add(0, 0, 9e9, 0), { ...add(0, 0, 1, 1), mode: "xor" }], allowProtected: "yes" } });
+  assert.deepEqual(n.selection, { ops: [{ dimension: "overworld", mode: "add", x1: 1, z1: 1, x2: 5, z2: 5 }], allowProtected: false });
+  const many = plan.normalizeParams({ selection: { ops: new Array(5000).fill(add(0, 0, 1, 1)) } });
+  assert.equal(many.selection.ops.length, 2500);
+});
+
+test("selected chunks agree with a brute-force reading of the operations", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  const list = [];
+  for (let i = 0; i < 1024; i++) list.push(chunk(i & 31, i >> 5, 60));
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, list);
+  let seed = 3;
+  const rand = (n) => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) % n);
+  const ops = [];
+  for (let i = 0; i < 40; i++) {
+    const x = rand(32), z = rand(32);
+    ops.push(add(x, z, Math.min(31, x + rand(8)), Math.min(31, z + rand(8)), rand(3) === 0 ? "remove" : "add"));
+  }
+  const expected = new Set();
+  for (const o of ops) for (let z = o.z1; z <= o.z2; z++) for (let x = o.x1; x <= o.x2; x++) o.mode === "add" ? expected.add(z * 32 + x) : expected.delete(z * 32 + x);
+  const r = plan.scanWorld({ serverPath: s.dir, params: SEL(ops) });
+  assert.equal(r.plan.totals.delete, expected.size);
+}));
+
+// ── Fault injection ──
+
+/** Run `fn` with fs.renameSync failing from the Nth call on. */
+function failRenamesFrom(n, fn) {
+  const real = fs.renameSync;
+  let calls = 0;
+  fs.renameSync = (...args) => {
+    calls++;
+    if (calls >= n) throw Object.assign(new Error("injected rename failure"), { code: "EIO" });
+    return real(...args);
+  };
+  try {
+    return fn();
+  } finally {
+    fs.renameSync = real;
+  }
+}
+
+function snapshotFolders(s) {
+  const out = {};
+  for (const folder of ["region", "entities", "poi"]) {
+    const file = s.regionFile(null, folder, 0, 0);
+    out[folder] = fs.existsSync(file) ? fs.readFileSync(file) : null;
+  }
+  return out;
+}
+
+test("a failure after any rename leaves every file either as it was or fully rewritten, and a retry finishes", withServer((s) => {
+  for (const failAt of [1, 2, 3]) {
+    threeFolders(s, [0, 60, 0, 60]);
+    const before = snapshotFolders(s);
+    const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+    assert.throws(() => failRenamesFrom(failAt, () => plan.applyPlan({ serverPath: s.dir, plan: p })), /injected/);
+
+    for (const folder of ["region", "entities", "poi"]) {
+      const file = s.regionFile(null, folder, 0, 0);
+      const now = fs.readFileSync(file);
+      const header = region.readHeader(now);
+      assert.ok(header, `${folder} still has a header`);
+      const slots = region.occupiedSlots(header);
+      assert.ok(
+        now.equals(before[folder]) || JSON.stringify(slots) === JSON.stringify([1, 3]),
+        `${folder} is the original or fully pruned, never in between (failed at rename ${failAt})`,
+      );
+      for (const slot of slots) assert.equal(region.readChunk(now, header, slot, path.dirname(file), 0, 0).ok, true);
+    }
+
+    // The retry cleans up and completes.
+    const again = plan.applyPlan({ serverPath: s.dir, plan: p });
+    assert.ok(again.deletedChunks >= 0);
+    for (const folder of ["region", "entities", "poi"]) assert.deepEqual(slotsIn(s, folder), [1, 3], folder);
+    const leftovers = fs.readdirSync(path.dirname(s.regionFile(null, "region", 0, 0))).filter((n) => n.endsWith(".tmp"));
+    assert.deepEqual(leftovers, []);
+    fs.rmSync(path.join(s.worldDir, "region"), { recursive: true, force: true });
+    fs.rmSync(path.join(s.worldDir, "entities"), { recursive: true, force: true });
+    fs.rmSync(path.join(s.worldDir, "poi"), { recursive: true, force: true });
+  }
+}));
+
+test("a write that fails mid-file leaves no temp file and does not touch the region", withServer((s) => {
+  threeFolders(s, [0, 60]);
+  const file = s.regionFile(null, "region", 0, 0);
+  const before = fs.readFileSync(file);
+  const real = fs.writeSync;
+  fs.writeSync = () => {
+    throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+  };
+  try {
+    assert.throws(() => region.removeChunks(file, [0]), /no space/);
+  } finally {
+    fs.writeSync = real;
+  }
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((n) => n.endsWith(".tmp")), []);
+}));
+
+test("a region that changed between scan and apply keeps its busy chunk and reports it", withServer((s) => {
+  threeFolders(s, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  for (const folder of ["region"]) {
+    fx.writeRegion(s.regionFile(null, folder, 0, 0), 0, 0, [0, 0, 0, 0, 0, 0, 0, 0, 0, 90].map((m, i) => chunk(i, 0, m)));
+  }
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+  assert.equal(res.deletedChunks, 9);
+  assert.deepEqual(slotsIn(s, "region"), [9]);
+}));
+
+test("random worlds and selections never delete an unreadable chunk", () => {
+  for (const seed of [1, 2, 3, 4, 5]) {
+    const server = fx.makeServer();
+    try {
+      fx.writeLevelDat(server.worldDir, 0, 0);
+      let a = seed;
+      const rand = () => ((a = (a * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+      const list = [];
+      const unreadable = new Set();
+      for (let i = 0; i < 200; i++) {
+        const bad = rand() < 0.15;
+        if (bad) unreadable.add(i);
+        list.push({ ...chunk(i & 31, i >> 5, rand() < 0.5 ? 0 : 90), ...(bad ? { compression: "corrupt" } : {}) });
+      }
+      fx.writeRegion(server.regionFile(null, "region", 0, 0), 0, 0, list);
+      const params = {
+        ...LEAN,
+        selection: { ops: [{ dimension: "overworld", mode: "add", x1: 0, z1: 0, x2: 31, z2: 31 }], allowProtected: true },
+      };
+      const { plan: p } = plan.scanWorld({ serverPath: server.dir, params });
+      plan.applyPlan({ serverPath: server.dir, plan: p, tolerance: 1 });
+      const file = server.regionFile(null, "region", 0, 0);
+      const left = new Set(region.occupiedSlots(region.readHeader(fs.readFileSync(file))));
+      for (const slot of unreadable) assert.ok(left.has(slot), `seed ${seed}: unreadable chunk ${slot} must remain`);
+    } finally {
+      server.cleanup();
+    }
+  }
+});
+
+// ── Signals ──
+
+const { chunkSignals, SIGNAL, blockEntityKind } = require("../../src/scripts/world/lib/nbt.js");
+
+test("chunkSignals reads InhabitedTime and what a chunk contains, wherever the tags sit", () => {
+  const plain = chunkSignals(fx.chunkModern({ x: 1, z: 2, inhabited: 77 }));
+  assert.deepEqual(plain, { inhabited: 77, flags: 0, blockEntities: 0 });
+
+  const built = chunkSignals(
+    fx.chunkModern({ x: 0, z: 0, inhabited: 5, blockEntities: ["minecraft:chest", "minecraft:oak_sign", "minecraft:furnace", "minecraft:white_bed", "minecraft:hopper", "minecraft:lectern"] }),
+  );
+  assert.equal(built.blockEntities, 6);
+  // "oak_sign" and "white_bed" are not block entity ids (they are "sign" and "bed"), so they count as other.
+  assert.ok(built.flags & SIGNAL.CONTAINER);
+  assert.ok(built.flags & SIGNAL.FURNACE);
+  assert.ok(built.flags & SIGNAL.REDSTONE);
+  assert.ok(built.flags & SIGNAL.OTHER_BLOCK_ENTITY);
+
+  const natural = chunkSignals(fx.chunkModern({ x: 0, z: 0, inhabited: 5, blockEntities: ["minecraft:chest"], structureStarts: ["minecraft:village"], structureRefs: ["minecraft:village"] }));
+  assert.ok(natural.flags & SIGNAL.STRUCTURE_START);
+  assert.ok(natural.flags & SIGNAL.STRUCTURE_REFERENCE);
+
+  const half = chunkSignals(fx.chunkModern({ x: 0, z: 0, inhabited: 5, status: "minecraft:features" }));
+  assert.ok(half.flags & SIGNAL.NOT_FULL);
+});
+
+test("block entity ids map to their kind, with or without the namespace", () => {
+  assert.equal(blockEntityKind("minecraft:chest"), SIGNAL.CONTAINER);
+  assert.equal(blockEntityKind("barrel"), SIGNAL.CONTAINER);
+  assert.equal(blockEntityKind("minecraft:sign"), SIGNAL.SIGN);
+  assert.equal(blockEntityKind("minecraft:mob_spawner"), SIGNAL.SPAWNER);
+  assert.equal(blockEntityKind("somemod:machine"), SIGNAL.OTHER_BLOCK_ENTITY);
+});
+
+test("chunkSignals agrees with inhabitedTime and rejects broken data", () => {
+  for (const ticks of [0, 9, 2 ** 33 + 1]) {
+    const buf = fx.chunkModern({ x: 3, z: 3, inhabited: ticks, blockEntities: ["minecraft:barrel"], structureRefs: ["minecraft:mineshaft"] });
+    assert.equal(chunkSignals(buf).inhabited, inhabitedTime(buf));
+  }
+  assert.throws(() => chunkSignals(Buffer.from([9, 0, 0])), /not a compound/);
+  const good = fx.chunkModern({ x: 0, z: 0, inhabited: 5, blockEntities: ["minecraft:chest"] });
+  assert.throws(() => chunkSignals(good.subarray(0, good.length - 6)), /ended early/);
+});
+
+// ── Build protection ──
+
+const BUILT = (x, extra = {}) => ({ x, z: 0, nbt: fx.chunkModern({ x, z: 0, inhabited: 0, ...extra }) });
+
+test("unused chunks with block entities no structure explains are kept as uncertain", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [
+    BUILT(0),
+    BUILT(1, { blockEntities: ["minecraft:chest", "minecraft:sign"] }),
+    BUILT(2, { blockEntities: ["minecraft:chest"], structureRefs: ["minecraft:village"] }),
+    BUILT(3, { blockEntities: ["minecraft:chest", "minecraft:mob_spawner"] }),
+    BUILT(4, { blockEntities: ["somemod:machine"] }),
+    BUILT(5, { structureStarts: ["minecraft:mineshaft"] }),
+  ]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  const cell = Buffer.from(r.maps.overworld.regions["r.0.0"].cell, "base64");
+  assert.deepEqual([...cell.subarray(0, 6)], [
+    plan.CELL.DELETE,
+    plan.CELL.UNCERTAIN, // a chest and a sign, nothing natural
+    plan.CELL.DELETE, // a village explains the chest
+    plan.CELL.DELETE, // a dungeon: spawner and chest
+    plan.CELL.UNCERTAIN, // a modded machine
+    plan.CELL.DELETE,
+  ]);
+  assert.equal(r.plan.dimensions[0].uncertain, 2);
+  assert.equal(r.plan.totals.delete, 4);
+}));
+
+test("buildProtection off ignores what a chunk contains", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [BUILT(0, { blockEntities: ["minecraft:chest"] }), BUILT(1)]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, buildProtection: "off" } });
+  assert.equal(r.plan.totals.delete, 2);
+  assert.equal(r.plan.dimensions[0].uncertain, 0);
+  assert.equal(plan.normalizeParams({ buildProtection: "nonsense" }).buildProtection, "likely");
+}));
+
+test("an uncertain chunk is a keep for the buffer, and a manual selection may still choose it", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [BUILT(0, { blockEntities: ["minecraft:chest"] }), BUILT(1), BUILT(2), BUILT(3), BUILT(4)]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, bufferChunks: 1 } });
+  const cell = Buffer.from(r.maps.overworld.regions["r.0.0"].cell, "base64");
+  assert.deepEqual([...cell.subarray(0, 5)], [plan.CELL.UNCERTAIN, plan.CELL.BUFFER, plan.CELL.DELETE, plan.CELL.DELETE, plan.CELL.DELETE]);
+  const picked = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, selection: { ops: [{ dimension: "overworld", mode: "add", x1: 0, z1: 0, x2: 0, z2: 0 }], allowProtected: false } } });
+  assert.equal(picked.plan.dimensions[0].manualSoft, 1);
+  assert.equal(picked.plan.totals.delete, 5);
+}));
+
+test("the record cache keeps signals apart from plain records", withCache((s, cacheDir) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [BUILT(0, { blockEntities: ["minecraft:chest"] })]);
+  assert.equal(scanCounts(s, cacheDir, { ...LEAN, buildProtection: "off" }).misses, 1);
+  assert.equal(scanCounts(s, cacheDir, { ...LEAN, buildProtection: "off" }).misses, 0);
+  const withSignals = scanCounts(s, cacheDir, LEAN);
+  assert.equal(withSignals.misses, 1, "a record without signals cannot answer a request for them");
+  assert.equal(withSignals.r.plan.dimensions[0].uncertain, 1);
+  assert.equal(scanCounts(s, cacheDir, LEAN).misses, 0);
+  assert.equal(scanCounts(s, cacheDir, { ...LEAN, buildProtection: "off" }).misses, 0, "a record with signals answers both");
+}));

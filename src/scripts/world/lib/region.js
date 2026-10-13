@@ -16,6 +16,7 @@
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
+const crypto = require("crypto");
 
 const SECTOR = 4096;
 const HEADER = 2 * SECTOR;
@@ -66,6 +67,7 @@ function readChunk(buf, header, slot, dir, regionX, regionZ) {
   const loc = header.locations[slot];
   if (loc === 0) return { ok: false, reason: "empty" };
   const start = sectorOffset(loc) * SECTOR;
+  if (sectorCount(loc) === 0) return { ok: false, reason: "corrupt" };
   if (start < HEADER || start + 5 > buf.length) return { ok: false, reason: "truncated" };
   const length = buf.readUInt32BE(start);
   if (length < 1 || start + 4 + length > buf.length) return { ok: false, reason: "truncated" };
@@ -103,18 +105,53 @@ function occupiedSlots(header) {
 }
 
 /**
+ * Slots whose header entry cannot be trusted: no sectors, a start inside the
+ * header, or sectors that overlap another chunk's. Rewriting around such a
+ * file could alias or lose data, so callers leave it alone.
+ */
+function unsafeSlots(header) {
+  const bad = new Set();
+  const spans = [];
+  for (const slot of occupiedSlots(header)) {
+    const loc = header.locations[slot];
+    const start = sectorOffset(loc);
+    const count = sectorCount(loc);
+    if (count === 0 || start < 2) bad.add(slot);
+    else spans.push({ slot, start, end: start + count });
+  }
+  spans.sort((a, b) => a.start - b.start);
+  for (let i = 1; i < spans.length; i++) {
+    if (spans[i].start < spans[i - 1].end) {
+      bad.add(spans[i].slot);
+      bad.add(spans[i - 1].slot);
+    }
+  }
+  return bad;
+}
+
+const sha1 = (b) => crypto.createHash("sha1").update(b).digest("hex");
+
+/**
  * Rewrite a region file without the given slots, compacting what is left so the
  * space comes back. Chunk bytes are copied as they are, never re-encoded.
  * Returns the number of chunks kept; 0 means the file holds nothing any more
  * and the caller should delete it. Written beside the original and renamed over
  * it, so a crash leaves either the old file or the new one.
  *
- * @returns {{kept: number, removed: number, removedSlots: number[], bytesBefore: number, bytesAfter: number}}
+ * A file whose header cannot be trusted (see unsafeSlots) is left untouched and
+ * reported with `unsafe: true`. `keptHashes` maps every kept slot to a digest of
+ * the sector bytes written for it, for verifyKept.
+ *
+ * @returns {{kept: number, removed: number, removedSlots: number[], bytesBefore: number, bytesAfter: number, unsafe?: boolean, keptHashes?: Record<number, string>}}
  */
 function removeChunks(file, slotsToRemove) {
   const buf = fs.readFileSync(file);
   const header = readHeader(buf);
   if (!header) return { kept: 0, removed: 0, removedSlots: [], bytesBefore: buf.length, bytesAfter: 0 };
+
+  if (unsafeSlots(header).size > 0) {
+    return { kept: 0, removed: 0, removedSlots: [], bytesBefore: buf.length, bytesAfter: 0, unsafe: true };
+  }
 
   const drop = new Set(slotsToRemove);
   const keep = [];
@@ -133,6 +170,7 @@ function removeChunks(file, slotsToRemove) {
   const parts = [];
   const locations = new Uint32Array(CHUNKS);
   const timestamps = new Uint32Array(CHUNKS);
+  const keptHashes = {};
   let next = 2;
   for (const slot of keep) {
     const loc = header.locations[slot];
@@ -144,6 +182,7 @@ function removeChunks(file, slotsToRemove) {
     const padded = Buffer.alloc(sectors * SECTOR);
     chunk.copy(padded);
     parts.push(padded);
+    keptHashes[slot] = sha1(padded);
     locations[slot] = (next << 8) | sectors;
     timestamps[slot] = header.timestamps[slot];
     next += sectors;
@@ -157,15 +196,100 @@ function removeChunks(file, slotsToRemove) {
   const result = Buffer.concat([out, ...parts]);
 
   const tmp = `${file}.prune-${process.pid}.tmp`;
-  fs.writeFileSync(tmp, result);
-  fs.renameSync(tmp, file);
+  try {
+    writeDurably(tmp, result);
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    // A full disk or a failed rename must not leave a half-written copy behind.
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+  syncDirectory(path.dirname(file));
   return {
     kept: keep.length,
     removed: removedSlots.length,
     removedSlots,
     bytesBefore: buf.length,
     bytesAfter: result.length,
+    keptHashes,
   };
+}
+
+/** Write a file and flush it to disk before it can be renamed over anything. */
+function writeDurably(file, data) {
+  const fd = fs.openSync(file, "w");
+  try {
+    fs.writeSync(fd, data, 0, data.length, 0);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Flush a directory entry (the rename). Not possible on Windows, where it is skipped. */
+function syncDirectory(dir) {
+  let fd;
+  try {
+    fd = fs.openSync(dir, "r");
+    fs.fsyncSync(fd);
+  } catch {
+    /* unsupported here; the rename itself is still atomic */
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/** True when a region file can be compacted without aliasing or losing a chunk. */
+function isSafeToRewrite(file) {
+  try {
+    const header = readHeader(fs.readFileSync(file));
+    return header === null || unsafeSlots(header).size === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove temp files an interrupted rewrite left beside the region files in `dir`. */
+function removeStaleTemps(dir) {
+  let removed = 0;
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (/\.mca\.prune-\d+\.tmp$/.test(name)) {
+      fs.rmSync(path.join(dir, name), { force: true });
+      removed++;
+    }
+  }
+  return removed;
+}
+
+/**
+ * Check a rewritten file against what removeChunks wrote: a header that parses
+ * and every kept chunk's sectors byte for byte as copied. Chunks that were
+ * already unreadable are kept as they were and are not this function's concern.
+ *
+ * @returns {string | null} a description of the first mismatch, or null
+ */
+function verifyKept(file, keptHashes) {
+  const buf = fs.readFileSync(file);
+  const header = readHeader(buf);
+  if (!header) return "no header";
+  const slots = occupiedSlots(header);
+  const expected = Object.keys(keptHashes);
+  if (slots.length !== expected.length) return `${slots.length} chunks instead of ${expected.length}`;
+  for (const slot of slots) {
+    const want = keptHashes[slot];
+    if (!want) return `slot ${slot} was not kept`;
+    const loc = header.locations[slot];
+    const from = sectorOffset(loc) * SECTOR;
+    const chunk = buf.subarray(from, from + sectorCount(loc) * SECTOR);
+    if (sha1(chunk) !== want) return `slot ${slot} differs from the original`;
+  }
+  return null;
 }
 
 module.exports = {
@@ -184,6 +308,10 @@ module.exports = {
   readChunk,
   occupiedSlots,
   removeChunks,
+  verifyKept,
+  unsafeSlots,
+  isSafeToRewrite,
+  removeStaleTemps,
   sectorOffset,
   sectorCount,
 };

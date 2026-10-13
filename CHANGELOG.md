@@ -21,8 +21,21 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **Build protection** for `prune-chunks.js`: with `buildProtection: "likely"` (the default; `"off"` ignores it) a chunk the rules would delete is kept as uncertain when it holds block entities (chests, signs, furnaces, beds, redstone parts, anything modded) that no generated structure or spawner explains. `--inspect` reports everything about one chunk of a plan. The record cache holds the signals and is rebuilt once after this update.
+- `prune-chunks.js` accepts a manual selection (`selection` in the parameters: add/remove rectangles in chunk coordinates, at most 2,500). Chunks chosen by hand are deleted even where a soft rule (in use, buffer) keeps them; with `allowProtected` they also override spawn, player areas and drawn zones; unreadable chunks are never deleted. The summary counts them per dimension (`manualSoft`, `manualHard`, `manualBlocked`) and the map marks them (cell classes 6 and 7). Parameters can be read from stdin (`--params-stdin`). The selection is never saved as a default.
+- `prune-chunks.js --scan` reads regions on worker threads into a per-region record cache and prints NDJSON progress. A repeat scan takes about a tenth of the time, changing a threshold, radius, buffer or zone reads no region file, and `--apply` reads only the regions it deletes from (in parallel). Options `--workers` and `--no-cache`.
 - `update-server.js` records the new version after the jar swap instead of before it, and disables incompatible mods (reversible, `mods/disabled/`) instead of deleting jars by filename match.
 - `backup.sh`, `restore.sh` and `rollback.sh` take the operation lock, so they no longer overlap with each other or with an upgrade.
+
+### Fixed
+
+- A world with regions very far apart no longer fails a prune scan with a buffer; the buffer is computed per region.
+- `prune-chunks.js --apply`: a chunk that was already corrupt no longer makes the post-prune check fail and roll the whole job back; the check now compares kept chunks byte for byte instead of re-reading them.
+- `prune-chunks.js --apply` refuses to run when `instance_ops.sh` is missing (it used to assume the server was stopped), takes the operation lock when run by hand, rejects a plan whose content does not match its hash, and deletes only in folders found by the fresh scan.
+- Region files with a chunk entry of zero sectors or overlapping sectors are left untouched by a prune instead of being rewritten.
+- A negative array length in chunk data is rejected instead of looping.
+- `prune-chunks.js --scan --params={}` uses the saved settings, as the dashboard expects.
+- `prune-chunks.js --scan --profile` and `tests/bench/bench-prune.cjs` report where scan time goes.
 
 ## [5.0.0] - 2026-10-10
 

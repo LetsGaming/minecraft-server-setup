@@ -17,9 +17,11 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { chunkMeta } = require("./nbt");
+const cache = require("./cache");
+const scan = require("./scan");
 const region = require("./region");
 const world = require("./world");
+const { SIGNAL, chunkSignals, parseNbt } = require("./nbt");
 
 const TICKS_PER_MINUTE = 20 * 60;
 
@@ -31,7 +33,33 @@ const CELL = {
   PROTECTED: 3,
   BUFFER: 4,
   UNREADABLE: 5,
+  /** Chosen by hand, overriding a soft rule (in use, buffer). */
+  MANUAL_SOFT: 6,
+  /** Chosen by hand, overriding a hard protection (needs `selection.allowProtected`). */
+  MANUAL_HARD: 7,
+  /** Would be deleted by the rules, but holds things players usually put there (see isUnexplained). */
+  UNCERTAIN: 8,
 };
+
+/**
+ * Block entities (chests, signs, furnaces, beds, redstone parts, anything modded) in a
+ * chunk that has neither a generated structure nor a spawner to account for them.
+ * Villages, mineshafts and ruins hold plenty of these by themselves, and a dungeon is
+ * a spawner and a chest, so those do not count. What is left is mostly built by hand.
+ * Advisory: it can be wrong both ways, which is why it only keeps a chunk, never deletes.
+ */
+function isUnexplained(flags) {
+  const placed = SIGNAL.CONTAINER | SIGNAL.SIGN | SIGNAL.FURNACE | SIGNAL.BED | SIGNAL.REDSTONE | SIGNAL.OTHER_BLOCK_ENTITY;
+  const natural = SIGNAL.STRUCTURE_START | SIGNAL.STRUCTURE_REFERENCE | SIGNAL.SPAWNER;
+  return (flags & placed) !== 0 && (flags & natural) === 0;
+}
+
+/** Cells that go: what the rules found and what was chosen by hand. */
+const isDeletion = (c) => c === CELL.DELETE || c === CELL.MANUAL_SOFT || c === CELL.MANUAL_HARD;
+
+/** Operations in a manual selection; past this the parameters would not fit on a command line. */
+const MAX_SELECTION_OPS = 2500;
+const MAX_COORD = 2_000_000;
 
 const DEFAULT_PARAMS = Object.freeze({
   thresholdMinutes: 5,
@@ -40,10 +68,40 @@ const DEFAULT_PARAMS = Object.freeze({
   bufferChunks: 2,
   zones: [],
   dimensions: null,
+  selection: Object.freeze({ ops: [], allowProtected: false }),
+  buildProtection: "likely",
 });
 
-/** More cells than this and the world is too spread out to hold as a grid. */
-const MAX_GRID_CELLS = 250_000_000;
+/** "off" ignores what a chunk contains; "likely" keeps chunks with block entities no structure explains. */
+const BUILD_PROTECTION = ["off", "likely"];
+
+/**
+ * A manual selection as an ordered list of rectangles in chunk coordinates:
+ * "add" puts chunks in, "remove" takes them out again, later operations win.
+ * Never-deletable chunks (unreadable ones) and, unless `allowProtected`, hard
+ * protections (spawn, players, drawn zones) stay whatever the selection says.
+ */
+function normalizeSelection(input) {
+  const out = { ops: [], allowProtected: false };
+  if (!input || typeof input !== "object") return out;
+  out.allowProtected = input.allowProtected === true;
+  if (!Array.isArray(input.ops)) return out;
+  for (const op of input.ops) {
+    if (out.ops.length >= MAX_SELECTION_OPS) break;
+    if (!op || typeof op.dimension !== "string" || (op.mode !== "add" && op.mode !== "remove")) continue;
+    const c = [op.x1, op.z1, op.x2, op.z2].map((v) => Math.trunc(v));
+    if (!c.every((v) => Number.isFinite(v) && Math.abs(v) <= MAX_COORD)) continue;
+    out.ops.push({
+      dimension: op.dimension,
+      mode: op.mode,
+      x1: Math.min(c[0], c[2]),
+      z1: Math.min(c[1], c[3]),
+      x2: Math.max(c[0], c[2]),
+      z2: Math.max(c[1], c[3]),
+    });
+  }
+  return out;
+}
 
 function normalizeParams(input = {}) {
   const num = (v, d, min, max) => {
@@ -70,6 +128,8 @@ function normalizeParams(input = {}) {
     bufferChunks: num(input.bufferChunks, DEFAULT_PARAMS.bufferChunks, 0, 32),
     zones,
     dimensions: Array.isArray(input.dimensions) ? input.dimensions.filter((d) => typeof d === "string") : null,
+    selection: normalizeSelection(input.selection),
+    buildProtection: BUILD_PROTECTION.includes(input.buildProtection) ? input.buildProtection : DEFAULT_PARAMS.buildProtection,
   };
 }
 
@@ -82,7 +142,7 @@ function protectedRects(dimId, params, spawn, players) {
     const cx = blockToChunk(spawn?.x ?? 0);
     const cz = blockToChunk(spawn?.z ?? 0);
     const r = params.spawnRadiusChunks;
-    rects.push({ x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
+    rects.push({ kind: "spawn", x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
   }
   if (params.playerRadiusChunks > 0) {
     for (const p of players) {
@@ -90,11 +150,11 @@ function protectedRects(dimId, params, spawn, players) {
       const cx = blockToChunk(p.x);
       const cz = blockToChunk(p.z);
       const r = params.playerRadiusChunks;
-      rects.push({ x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
+      rects.push({ kind: "player", x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
     }
   }
   for (const z of params.zones) {
-    if (z.dimension === dimId) rects.push({ x1: z.x1, z1: z.z1, x2: z.x2, z2: z.z2 });
+    if (z.dimension === dimId) rects.push({ kind: "zone", name: z.name, x1: z.x1, z1: z.z1, x2: z.x2, z2: z.z2 });
   }
   return rects;
 }
@@ -110,20 +170,18 @@ function listRegions(dimDir) {
   return out;
 }
 
-/** Sector bytes a slot occupies in a sibling folder's file, 0 when absent. */
-function slotBytes(file, slot) {
+/**
+ * Phase timer for --profile. Without a profile object every call is a plain
+ * pass-through, so the scan pays nothing when nobody asked.
+ */
+function timed(profile, name, fn) {
+  if (!profile) return fn();
+  const t0 = process.hrtime.bigint();
   try {
-    const fd = fs.openSync(file, "r");
-    try {
-      const head = Buffer.alloc(region.HEADER);
-      const n = fs.readSync(fd, head, 0, region.HEADER, 0);
-      if (n < region.HEADER) return 0;
-      return region.sectorCount(head.readUInt32BE(slot * 4)) * region.SECTOR;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return 0;
+    return fn();
+  } finally {
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    profile.phases[name] = (profile.phases[name] ?? 0) + ms;
   }
 }
 
@@ -137,68 +195,65 @@ function heatLevel(minutes) {
  * Read one dimension and classify every chunk. Returns the grid of cells with
  * enough per-chunk data to build the plan and the map.
  */
-function scanDimension({ dimId, dimDir, params, spawn, players, onRegion }) {
+function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profile, cacheDir, fresh }) {
+  const signals = params.buildProtection !== "off";
   const thresholdTicks = params.thresholdMinutes * TICKS_PER_MINUTE;
   const regions = listRegions(dimDir);
   const cells = new Map(); // "rx,rz" -> {cell:Uint8Array(1024), heat:Uint8Array(1024), bytes:Uint32Array(1024)}
 
-  let minX = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxZ = -Infinity;
-
+  const live = new Set();
   for (const r of regions) {
-    let buf;
-    try {
-      buf = fs.readFileSync(r.file);
-    } catch {
-      continue;
+    const key = `${dimId}:${r.x},${r.z}`;
+    let record = null;
+    let fp = null;
+    if (cacheDir && !fresh.has(key)) {
+      fp = timed(profile, "fingerprint", () => cache.fingerprint(r.file));
+      record = timed(profile, "cacheLoad", () => cache.load(cacheDir, dimId, r.x, r.z, fp, signals));
+      if (profile) profile.counts[record ? "cacheHits" : "cacheMisses"]++;
     }
-    const header = region.readHeader(buf);
-    if (!header) continue;
+    if (!record) {
+      record = scan.readRegionRecord(
+        r.file,
+        r.x,
+        r.z,
+        (name, fn) => timed(profile, name, fn),
+        profile ? () => profile.counts.chunks++ : undefined,
+        { signals },
+      );
+      if (cacheDir && record) {
+        fp = fp ?? cache.fingerprint(r.file);
+        cache.store(cacheDir, dimId, r.x, r.z, fp, record);
+      }
+    }
+    if (!record) continue;
+    live.add(`${r.x},${r.z}`);
+
     const cell = new Uint8Array(region.CHUNKS);
     const heat = new Uint8Array(region.CHUNKS);
-    const bytes = new Uint32Array(region.CHUNKS);
-    let any = false;
-
-    for (const slot of region.occupiedSlots(header)) {
-      any = true;
-      const loc = header.locations[slot];
-      bytes[slot] = region.sectorCount(loc) * region.SECTOR;
-      const res = region.readChunk(buf, header, slot, path.dirname(r.file), r.x, r.z);
-      if (!res.ok) {
+    for (let slot = 0; slot < region.CHUNKS; slot++) {
+      const st = record.state[slot];
+      if (st === scan.STATE.EMPTY) continue;
+      if (st === scan.STATE.UNREADABLE) {
         cell[slot] = CELL.UNREADABLE;
         continue;
       }
-      let meta;
-      try {
-        meta = chunkMeta(res.data);
-      } catch {
-        cell[slot] = CELL.UNREADABLE;
-        continue;
-      }
-      // A chunk with no InhabitedTime at all is not known to be unused.
-      if (typeof meta.InhabitedTime !== "number") {
-        cell[slot] = CELL.UNREADABLE;
-        continue;
-      }
-      heat[slot] = heatLevel(meta.InhabitedTime / TICKS_PER_MINUTE);
-      cell[slot] = meta.InhabitedTime < thresholdTicks ? CELL.DELETE : CELL.ACTIVE;
+      heat[slot] = heatLevel(record.ticks[slot] / TICKS_PER_MINUTE);
+      if (record.ticks[slot] >= thresholdTicks) cell[slot] = CELL.ACTIVE;
+      else if (signals && isUnexplained(record.flags[slot])) cell[slot] = CELL.UNCERTAIN;
+      else cell[slot] = CELL.DELETE;
     }
 
-    if (!any) continue;
-    cells.set(`${r.x},${r.z}`, { rx: r.x, rz: r.z, cell, heat, bytes, file: r.file });
-    minX = Math.min(minX, r.x * 32);
-    minZ = Math.min(minZ, r.z * 32);
-    maxX = Math.max(maxX, r.x * 32 + 31);
-    maxZ = Math.max(maxZ, r.z * 32 + 31);
+    cells.set(`${r.x},${r.z}`, { rx: r.x, rz: r.z, cell, heat, bytes: record.bytes, file: r.file });
+    if (profile) profile.counts.regions++;
     if (onRegion) onRegion();
   }
+  if (cacheDir) cache.prune(cacheDir, dimId, live);
 
-  if (cells.size === 0) return { cells, regions: 0 };
+  if (cells.size === 0) return { cells, regions: 0, manual: { soft: 0, hard: 0, blocked: 0 } };
 
   // Protected zones first: they turn a would-be deletion into a keep.
   const rects = protectedRects(dimId, params, spawn, players);
+  const tClassify = profile ? process.hrtime.bigint() : 0n;
   for (const entry of cells.values()) {
     for (const rect of rects) {
       const rx0 = entry.rx * 32;
@@ -213,63 +268,139 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion }) {
     }
   }
 
-  // Buffer: a deletion candidate within N chunks of anything that stays is kept.
-  if (params.bufferChunks > 0) applyBuffer(cells, { minX, minZ, maxX, maxZ }, params.bufferChunks);
+  if (profile) profile.phases.classify = (profile.phases.classify ?? 0) + Number(process.hrtime.bigint() - tClassify) / 1e6;
 
-  return { cells, regions: cells.size };
+  // Buffer: a deletion candidate within N chunks of anything that stays is kept.
+  if (params.bufferChunks > 0) {
+    timed(profile, "buffer", () => applyBuffer(cells, params.bufferChunks));
+  }
+
+  const manual = timed(profile, "selection", () => applySelection(dimId, cells, params.selection, rects));
+  return { cells, regions: cells.size, manual };
 }
 
-const isKeep = (c) => c === CELL.ACTIVE || c === CELL.PROTECTED || c === CELL.UNREADABLE;
+const inRects = (rects, cx, cz) => rects.some((r) => cx >= r.x1 && cx <= r.x2 && cz >= r.z1 && cz <= r.z2);
 
-function applyBuffer(cells, box, n) {
-  const w = box.maxX - box.minX + 1;
-  const h = box.maxZ - box.minZ + 1;
-  if (w * h > MAX_GRID_CELLS) {
-    throw new Error("The world is spread over too large an area to prune with a buffer.");
+/**
+ * Turn the chunks chosen by hand into deletions where the rules allow it.
+ * Returns how many were chosen over a soft rule, over a hard protection, and
+ * how many could not be honoured (unreadable, or protected without the override).
+ */
+function applySelection(dimId, cells, selection, rects) {
+  const result = { soft: 0, hard: 0, blocked: 0 };
+  const ops = selection.ops.filter((o) => o.dimension === dimId);
+  if (ops.length === 0) return result;
+
+  const chosen = new Map(); // "rx,rz" -> Uint8Array(1024) of 0/1
+  const bitsOf = (rx, rz) => {
+    const key = `${rx},${rz}`;
+    let bits = chosen.get(key);
+    if (!bits) {
+      bits = new Uint8Array(region.CHUNKS);
+      chosen.set(key, bits);
+    }
+    return bits;
+  };
+  for (const op of ops) {
+    const value = op.mode === "add" ? 1 : 0;
+    // Only regions that exist matter; a rectangle over empty space chooses nothing.
+    for (let rz = Math.floor(op.z1 / 32); rz <= Math.floor(op.z2 / 32); rz++) {
+      for (let rx = Math.floor(op.x1 / 32); rx <= Math.floor(op.x2 / 32); rx++) {
+        if (!cells.has(`${rx},${rz}`)) continue;
+        const bits = bitsOf(rx, rz);
+        const xa = Math.max(op.x1, rx * 32) - rx * 32;
+        const xb = Math.min(op.x2, rx * 32 + 31) - rx * 32;
+        const za = Math.max(op.z1, rz * 32) - rz * 32;
+        const zb = Math.min(op.z2, rz * 32 + 31) - rz * 32;
+        for (let z = za; z <= zb; z++) for (let x = xa; x <= xb; x++) bits[z * 32 + x] = value;
+      }
+    }
   }
-  const keep = new Uint8Array(w * h);
-  for (const entry of cells.values()) {
+
+  for (const [key, bits] of chosen) {
+    const entry = cells.get(key);
     for (let slot = 0; slot < region.CHUNKS; slot++) {
-      if (!isKeep(entry.cell[slot])) continue;
-      const x = entry.rx * 32 + region.slotX(slot) - box.minX;
-      const z = entry.rz * 32 + region.slotZ(slot) - box.minZ;
-      keep[z * w + x] = 1;
+      if (!bits[slot]) continue;
+      const c = entry.cell[slot];
+      if (c === CELL.EMPTY || c === CELL.DELETE) continue;
+      if (c === CELL.UNREADABLE) {
+        result.blocked++;
+        continue;
+      }
+      const hard = inRects(rects, entry.rx * 32 + region.slotX(slot), entry.rz * 32 + region.slotZ(slot));
+      if (hard) {
+        if (!selection.allowProtected) {
+          result.blocked++;
+          continue;
+        }
+        entry.cell[slot] = CELL.MANUAL_HARD;
+        result.hard++;
+      } else {
+        entry.cell[slot] = CELL.MANUAL_SOFT;
+        result.soft++;
+      }
     }
   }
-  // Chebyshev distance <= n is a box dilation: one pass along x, one along z.
-  const tmp = new Uint8Array(w * h);
-  for (let z = 0; z < h; z++) {
-    const row = z * w;
-    let last = -Infinity;
-    for (let x = 0; x < w; x++) {
-      if (keep[row + x]) last = x;
-      if (x - last <= n) tmp[row + x] = 1;
-    }
-    last = Infinity;
-    for (let x = w - 1; x >= 0; x--) {
-      if (keep[row + x]) last = x;
-      if (last - x <= n) tmp[row + x] = 1;
-    }
-  }
-  const out = new Uint8Array(w * h);
-  for (let x = 0; x < w; x++) {
-    let last = -Infinity;
-    for (let z = 0; z < h; z++) {
-      if (tmp[z * w + x]) last = z;
-      if (z - last <= n) out[z * w + x] = 1;
-    }
-    last = Infinity;
-    for (let z = h - 1; z >= 0; z--) {
-      if (tmp[z * w + x]) last = z;
-      if (last - z <= n) out[z * w + x] = 1;
-    }
-  }
+  return result;
+}
+
+const isKeep = (c) => c === CELL.ACTIVE || c === CELL.PROTECTED || c === CELL.UNREADABLE || c === CELL.UNCERTAIN;
+
+/**
+ * A deletion candidate within `n` chunks (Chebyshev distance) of anything that
+ * stays becomes BUFFER. Each region is decided from a local grid of its own
+ * chunks plus an `n` chunk halo taken from its neighbours (n is at most 32, so
+ * only the eight adjacent regions can matter), so memory is bounded per region
+ * and a far-away region cannot make the whole scan fail.
+ */
+function applyBuffer(cells, n) {
+  const side = region.CHUNKS ** 0.5; // 32
+  const w = side + 2 * n;
+  const keep = new Uint8Array(w * w);
+  const sum = new Int32Array((w + 1) * (w + 1));
+
   for (const entry of cells.values()) {
+    let any = false;
+    for (let slot = 0; slot < region.CHUNKS; slot++) {
+      if (entry.cell[slot] === CELL.DELETE) {
+        any = true;
+        break;
+      }
+    }
+    if (!any) continue;
+
+    keep.fill(0);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const other = cells.get(`${entry.rx + dx},${entry.rz + dz}`);
+        if (!other) continue;
+        for (let slot = 0; slot < region.CHUNKS; slot++) {
+          if (!isKeep(other.cell[slot])) continue;
+          // Local coordinates: the region's own chunks start at (n, n).
+          const x = dx * side + region.slotX(slot) + n;
+          const z = dz * side + region.slotZ(slot) + n;
+          if (x >= 0 && x < w && z >= 0 && z < w) keep[z * w + x] = 1;
+        }
+      }
+    }
+    // Summed-area table: a window count is four lookups.
+    for (let z = 0; z < w; z++) {
+      let row = 0;
+      for (let x = 0; x < w; x++) {
+        row += keep[z * w + x];
+        sum[(z + 1) * (w + 1) + x + 1] = sum[z * (w + 1) + x + 1] + row;
+      }
+    }
     for (let slot = 0; slot < region.CHUNKS; slot++) {
       if (entry.cell[slot] !== CELL.DELETE) continue;
-      const x = entry.rx * 32 + region.slotX(slot) - box.minX;
-      const z = entry.rz * 32 + region.slotZ(slot) - box.minZ;
-      if (out[z * w + x]) entry.cell[slot] = CELL.BUFFER;
+      const x = region.slotX(slot) + n;
+      const z = region.slotZ(slot) + n;
+      const x0 = x - n;
+      const z0 = z - n;
+      const x1 = x + n + 1;
+      const z1 = z + n + 1;
+      const count = sum[z1 * (w + 1) + x1] - sum[z0 * (w + 1) + x1] - sum[z1 * (w + 1) + x0] + sum[z0 * (w + 1) + x0];
+      if (count > 0) entry.cell[slot] = CELL.BUFFER;
     }
   }
 }
@@ -280,7 +411,7 @@ function deletionBitmap(cell) {
   const bits = new Uint8Array(region.CHUNKS / 8);
   let count = 0;
   for (let slot = 0; slot < region.CHUNKS; slot++) {
-    if (cell[slot] === CELL.DELETE) {
+    if (isDeletion(cell[slot])) {
       bits[slot >> 3] |= 1 << (slot & 7);
       count++;
     }
@@ -301,7 +432,7 @@ function slotsOfBitmap(base64) {
  * @returns {{plan: object, maps: Record<string, object>}} `plan` carries the
  *   deletions and totals; `maps` is one cell/heat map per dimension for the UI.
  */
-function scanWorld({ serverPath, params: rawParams, onProgress }) {
+function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDir = null, fresh = new Set() }) {
   const params = normalizeParams(rawParams);
   const worldDir = world.worldDirOf(serverPath);
   const spawn = world.readSpawn(worldDir);
@@ -324,25 +455,47 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
   const maps = {};
 
   for (const dim of dims) {
-    const { cells } = scanDimension({
+    const { cells, manual } = scanDimension({
       dimId: dim.id,
       dimDir: dim.dir,
       params,
       spawn,
       players,
       onRegion: onProgress,
+      profile,
+      cacheDir,
+      fresh,
     });
 
-    const counts = { chunks: 0, delete: 0, active: 0, protected: 0, buffer: 0, unreadable: 0 };
+    const counts = {
+      chunks: 0,
+      delete: 0,
+      active: 0,
+      protected: 0,
+      buffer: 0,
+      unreadable: 0,
+      uncertain: 0,
+      manualSoft: manual?.soft ?? 0,
+      manualHard: manual?.hard ?? 0,
+      manualBlocked: manual?.blocked ?? 0,
+    };
     const deletions = {};
     const mapRegions = {};
     let bytes = 0;
     let regionsEmptied = 0;
 
+    const tAssemble = profile ? process.hrtime.bigint() : 0n;
     for (const entry of [...cells.values()].sort((a, b) => a.rx - b.rx || a.rz - b.rz)) {
       const key = `r.${entry.rx}.${entry.rz}`;
       mapRegions[key] = { cell: b64(entry.cell), heat: b64(entry.heat) };
       const { bits, count } = deletionBitmap(entry.cell);
+      // Sibling headers are read once per region file, and only when something goes.
+      const siblings =
+        count > 0
+          ? timed(profile, "slotBytes", () =>
+              ["entities", "poi"].map((folder) => scan.siblingSectorBytes(path.join(dim.dir, folder, region.regionName(entry.rx, entry.rz)))),
+            )
+          : null;
       let occupied = 0;
       for (let slot = 0; slot < region.CHUNKS; slot++) {
         const c = entry.cell[slot];
@@ -352,11 +505,9 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
         else if (c === CELL.PROTECTED) counts.protected++;
         else if (c === CELL.BUFFER) counts.buffer++;
         else if (c === CELL.UNREADABLE) counts.unreadable++;
-        if (c === CELL.DELETE) {
-          bytes += entry.bytes[slot];
-          for (const folder of ["entities", "poi"]) {
-            bytes += slotBytes(path.join(dim.dir, folder, region.regionName(entry.rx, entry.rz)), slot);
-          }
+        else if (c === CELL.UNCERTAIN) counts.uncertain++;
+        if (isDeletion(c)) {
+          bytes += entry.bytes[slot] + (siblings ? siblings[0][slot] + siblings[1][slot] : 0);
         }
       }
       counts.chunks += occupied;
@@ -367,6 +518,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
       }
     }
 
+    if (profile) profile.phases.assemble = (profile.phases.assemble ?? 0) + Number(process.hrtime.bigint() - tAssemble) / 1e6;
     plan.dimensions.push({
       id: dim.id,
       dir: path.relative(serverPath, dim.dir).split(path.sep).join("/"),
@@ -389,6 +541,144 @@ function scanWorld({ serverPath, params: rawParams, onProgress }) {
   return { plan, maps };
 }
 
+/**
+ * Every region file a scan of these parameters would read, for warming the cache
+ * in parallel before the (cheap, single-threaded) decision runs.
+ */
+function listScanJobs({ serverPath, params: rawParams }) {
+  const params = normalizeParams(rawParams);
+  const worldDir = world.worldDirOf(serverPath);
+  const jobs = [];
+  for (const dim of world.discoverDimensions(worldDir)) {
+    if (params.dimensions && !params.dimensions.includes(dim.id)) continue;
+    for (const r of listRegions(dim.dir)) jobs.push({ file: r.file, dimId: dim.id, rx: r.x, rz: r.z });
+  }
+  return jobs;
+}
+
+/** The dimensions of a world and how many region files each has. Reads directory listings only. */
+function listDimensions({ serverPath }) {
+  return world.discoverDimensions(world.worldDirOf(serverPath)).map((dim) => {
+    let regions = 0;
+    try {
+      regions = listRegions(dim.dir).length;
+    } catch {
+      /* a dimension folder without region files */
+    }
+    return { id: dim.id, regions };
+  });
+}
+
+const SIGNAL_NAMES = Object.entries(SIGNAL).map(([name, bit]) => [bit, name.toLowerCase()]);
+
+/**
+ * Everything the engine can tell about one chunk of a plan, read from the world
+ * right now: what it contains, why a rule would keep or delete it, and how much
+ * space it takes. The chunk is read and decoded in full (it is one chunk), so
+ * this is the place for detail that would be too heavy to keep for every chunk.
+ */
+function inspectChunk({ serverPath, plan, dimension, cx, cz }) {
+  const dim = plan.dimensions.find((d) => d.id === dimension);
+  if (!dim) {
+    const err = new Error("That plan has no such dimension.");
+    err.code = "dimension";
+    throw err;
+  }
+  const worldDir = world.worldDirOf(serverPath);
+  const dimDir = path.join(serverPath, ...dim.dir.split("/").filter(Boolean));
+  if (!isInside(worldDir, dimDir)) throw new Error("A plan names a folder outside the world.");
+
+  const rx = Math.floor(cx / 32);
+  const rz = Math.floor(cz / 32);
+  const slot = region.slotOf(cx, cz);
+  const file = path.join(dimDir, "region", region.regionName(rx, rz));
+  const out = { chunk: { dimension, cx, cz, rx, rz, slot }, thresholdMinutes: plan.params.thresholdMinutes };
+
+  let buf;
+  try {
+    buf = fs.readFileSync(file);
+  } catch {
+    return { ...out, present: false };
+  }
+  const header = region.readHeader(buf);
+  if (!header || header.locations[slot] === 0) return { ...out, present: false };
+
+  out.present = true;
+  out.bytes = {
+    region: region.sectorCount(header.locations[slot]) * region.SECTOR,
+    entities: scan.siblingSectorBytes(path.join(dimDir, "entities", region.regionName(rx, rz)))[slot],
+    poi: scan.siblingSectorBytes(path.join(dimDir, "poi", region.regionName(rx, rz)))[slot],
+  };
+  const sets = new Set(slotsOfBitmap(dim.deletions[`r.${rx}.${rz}`] ?? ""));
+  out.plannedForDeletion = sets.has(slot);
+
+  const res = region.readChunk(buf, header, slot, path.dirname(file), rx, rz);
+  if (!res.ok) return { ...out, readable: false, unreadableReason: res.reason };
+
+  let nbt;
+  try {
+    nbt = parseNbt(res.data);
+  } catch {
+    return { ...out, readable: false, unreadableReason: "corrupt" };
+  }
+  const source = nbt.Level && typeof nbt.Level === "object" ? nbt.Level : nbt;
+  const ticks = typeof source.InhabitedTime === "number" ? source.InhabitedTime : null;
+  const counts = new Map();
+  for (const be of Array.isArray(source.block_entities) ? source.block_entities : []) {
+    const id = typeof be?.id === "string" ? be.id : "unknown";
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  const keysOf = (v) => (v && typeof v === "object" ? Object.keys(v).sort() : []);
+  const flags = fastFlags(res.data);
+
+  const spawn = world.readSpawn(worldDir);
+  const players = world.readPlayerPositions(worldDir);
+  const protectedBy = protectedRects(dimension, plan.params, spawn, players)
+    .filter((r) => cx >= r.x1 && cx <= r.x2 && cz >= r.z1 && cz <= r.z2)
+    .map((r) => ({ kind: r.kind, ...(r.name ? { name: r.name } : {}) }));
+
+  return {
+    ...out,
+    readable: true,
+    dataVersion: typeof nbt.DataVersion === "number" ? nbt.DataVersion : null,
+    status: typeof (source.Status ?? source.status) === "string" ? source.Status ?? source.status : null,
+    lastUpdate: typeof source.LastUpdate === "number" ? source.LastUpdate : null,
+    inhabitedTicks: ticks,
+    inhabitedMinutes: ticks === null ? null : Math.round((ticks / TICKS_PER_MINUTE) * 10) / 10,
+    blockEntities: [...counts].map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count || a.id.localeCompare(b.id)),
+    structureStarts: keysOf(source.structures?.starts),
+    structureReferences: keysOf(source.structures?.References),
+    signals: SIGNAL_NAMES.filter(([bit]) => flags & bit).map(([, name]) => name),
+    unexplained: isUnexplained(flags),
+    protectedBy,
+  };
+}
+
+function fastFlags(data) {
+  try {
+    return chunkSignals(data).flags;
+  } catch {
+    return 0;
+  }
+}
+
+/** "dimension:rx,rz" of every region a plan deletes from. */
+function touchedKeys(plan) {
+  const keys = new Set();
+  for (const dim of plan.dimensions) {
+    for (const key of Object.keys(dim.deletions)) {
+      const m = /^r\.(-?\d+)\.(-?\d+)$/.exec(key);
+      if (m) keys.add(`${dim.id}:${m[1]},${m[2]}`);
+    }
+  }
+  return keys;
+}
+
+/** An empty profile for scanWorld; see summarizeProfile in prune-chunks.js. */
+function newProfile() {
+  return { phases: {}, counts: { chunks: 0, regions: 0, cacheHits: 0, cacheMisses: 0 } };
+}
+
 /** A hash of what a plan would delete, independent of when it was made. */
 function planHash(plan) {
   const h = crypto.createHash("sha256");
@@ -407,8 +697,16 @@ function planHash(plan) {
  *
  * @param {{serverPath: string, plan: object, tolerance?: number, onProgress?: Function}} args
  */
-function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
-  const fresh = scanWorld({ serverPath, params: plan.params });
+function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = null, reread: rereadOverride = null, timeBudgetMs = 0 }) {
+  if (!plan || typeof plan.hash !== "string" || planHash(plan) !== plan.hash) {
+    const err = new Error("The plan does not match its own hash.");
+    err.code = "plan_invalid";
+    throw err;
+  }
+  // Regions the plan touches are always re-read; the cache only stands in for the rest,
+  // which can matter only as neighbours for the buffer.
+  const reread = touchedKeys(plan);
+  const fresh = scanWorld({ serverPath, params: plan.params, cacheDir, fresh: rereadOverride ?? reread });
   const freshDims = new Map(fresh.plan.dimensions.map((d) => [d.id, d]));
 
   // What both scans want gone.
@@ -426,7 +724,7 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
       if (both.length > 0) todo.push({ dim, key, slots: both });
     }
   }
-  if (planned === 0) return { deletedChunks: 0, removedFiles: 0, bytesFreed: 0, planned: 0 };
+  if (planned === 0) return { deletedChunks: 0, removedFiles: 0, bytesFreed: 0, planned: 0, skippedFiles: 0 };
   if (agreed < planned * (1 - tolerance)) {
     const err = new Error(`Only ${agreed} of ${planned} planned chunks are still unused.`);
     err.code = "plan_stale";
@@ -435,13 +733,22 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
 
   const worldDir = world.worldDirOf(serverPath);
   let deletedChunks = 0;
+  let skippedFiles = 0;
   let removedFiles = 0;
   let bytesFreed = 0;
-  const touched = [];
+  const deadline = timeBudgetMs > 0 ? Date.now() + timeBudgetMs : Infinity;
+  const cleaned = new Set();
 
-  for (const { dim, key, slots } of todo) {
-    const dimDir = path.join(serverPath, ...dim.dir.split("/").filter(Boolean));
-    if (!path.resolve(dimDir).startsWith(path.resolve(worldDir))) throw new Error("A plan names a folder outside the world.");
+  for (const [index, { dim, key, slots }] of todo.entries()) {
+    if (Date.now() > deadline) {
+      const err = new Error("The prune ran out of its time budget and stopped before finishing.");
+      err.code = "time_budget";
+      throw err;
+    }
+    // The folder comes from the fresh scan, never from the stored plan.
+    const freshDim = freshDims.get(dim.id);
+    const dimDir = path.join(serverPath, ...freshDim.dir.split("/").filter(Boolean));
+    if (!isInside(worldDir, dimDir)) throw new Error("A plan names a folder outside the world.");
     const parsed = /^r\.(-?\d+)\.(-?\d+)$/.exec(key);
     if (!parsed) throw new Error("A plan names an invalid region.");
     const rx = Number(parsed[1]);
@@ -449,9 +756,31 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
 
     for (const folder of world.CHUNK_FOLDERS) {
       const dir = path.join(dimDir, folder);
+      if (!cleaned.has(dir)) {
+        cleaned.add(dir);
+        region.removeStaleTemps(dir);
+      }
+    }
+
+    // A region the engine cannot rewrite safely is left whole, in every folder.
+    const regionFile = path.join(dimDir, "region", region.regionName(rx, rz));
+    if (!fs.existsSync(regionFile) || !region.isSafeToRewrite(regionFile)) {
+      skippedFiles++;
+      continue;
+    }
+
+    // Entities and poi first, the region file last: a crash in between loses only
+    // entities of chunks that were about to go, never leaves entities pointing at
+    // a chunk that was deleted while they were kept.
+    for (const folder of [...world.CHUNK_FOLDERS].reverse()) {
+      const dir = path.join(dimDir, folder);
       const file = path.join(dir, region.regionName(rx, rz));
       if (!fs.existsSync(file)) continue;
       const res = region.removeChunks(file, slots);
+      if (res.unsafe) {
+        skippedFiles++;
+        continue;
+      }
       if (res.removed === 0) continue;
       if (folder === "region") deletedChunks += res.removed;
       for (const slot of res.removedSlots) {
@@ -468,37 +797,35 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
         bytesFreed += res.bytesBefore;
       } else {
         bytesFreed += res.bytesBefore - res.bytesAfter;
-        touched.push({ file, folder, rx, rz });
+        const problem = region.verifyKept(file, res.keptHashes);
+        if (problem) throw new Error(`${path.basename(file)} is wrong after the prune: ${problem}.`);
       }
     }
-    if (onProgress) onProgress();
+    if (onProgress) onProgress({ done: index + 1, total: todo.length });
   }
 
-  validate(touched);
-  return { deletedChunks, removedFiles, bytesFreed, planned };
+  return { deletedChunks, removedFiles, bytesFreed, planned, skippedFiles };
 }
 
-/** Every chunk left in a rewritten region file must still read. */
-function validate(touched) {
-  for (const t of touched) {
-    const buf = fs.readFileSync(t.file);
-    const header = region.readHeader(buf);
-    if (!header) throw new Error(`${path.basename(t.file)} has no header after the prune.`);
-    for (const slot of region.occupiedSlots(header)) {
-      const res = region.readChunk(buf, header, slot, path.dirname(t.file), t.rx, t.rz);
-      if (!res.ok && res.reason !== "lz4" && res.reason !== "external") {
-        throw new Error(`${path.basename(t.file)} slot ${slot} is unreadable after the prune (${res.reason}).`);
-      }
-    }
-  }
+/** True when `child` is `parent` or lies below it. */
+function isInside(parent, child) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 module.exports = {
   CELL,
+  isUnexplained,
+  isDeletion,
   DEFAULT_PARAMS,
   TICKS_PER_MINUTE,
   normalizeParams,
   scanWorld,
+  inspectChunk,
+  listScanJobs,
+  listDimensions,
+  touchedKeys,
+  newProfile,
   applyPlan,
   planHash,
   slotsOfBitmap,
