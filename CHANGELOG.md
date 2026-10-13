@@ -15,6 +15,8 @@ All notable changes to this project are documented here. The format follows
 
 - `world/prune-chunks.js`: delete generated chunks nobody has used (InhabitedTime below a threshold) so a new Minecraft version regenerates them. Spawn, player positions, drawn zones and a buffer are never touched; region, entities and poi are pruned together; `--scan` is read only, `--apply` re-scans and deletes only what both scans agree on. `upgrade.sh --prune-plan=<id>` runs it inside an upgrade; `--prune-only` runs it alone, both under one backup. See `docs/chunk-pruning.md`.
 
+- **Server-side migrations in `migrate.sh`** (`src/migrations/server.sh`, `docs/migrations.md`). Until now `migrate.sh` only updated the helper scripts and shared services; the files the suite wrote for the server itself never reached existing installs. `instance_start_script` updates `<instance>/start.sh` (old copy kept, takes effect at the next start) and `unit_start_limits` adds crash-loop limits to the instance's systemd unit (daemon-reload, no restart). Detected from the real files, previewed, idempotent, recorded in `common/server-migrations.log`, never restarts the server. New options `--list-server-migrations` and `--no-server-migrations`.
+
 ### Changed
 
 - `update-server.js` records the new version after the jar swap instead of before it, and disables incompatible mods (reversible, `mods/disabled/`) instead of deleting jars by filename match.
