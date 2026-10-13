@@ -265,3 +265,26 @@ test("--inspect lists block entities and structures", withSetup((s) => {
   assert.ok(r.signals.includes("container") && r.signals.includes("structure_start"));
   assert.equal(r.unexplained, false);
 }));
+
+test("--tile draws a region and serves it from the cache the second time", withSetup((s) => {
+  const list = [];
+  for (let i = 0; i < 4; i++) list.push({ x: i, z: 0, nbt: fx.chunkTerrain({ x: i, z: 0, blockAt: (_x, y) => (y <= 64 ? "minecraft:grass_block" : undefined) }) });
+  fx.writeRegion(s.server.regionFile(null, "region", 0, 0), 0, 0, list);
+  const first = s.run(["--tile", "--dimension=overworld", "--rx=0", "--rz=0"]).last;
+  assert.equal(first.ok, true);
+  assert.equal(first.cached, false);
+  assert.equal(first.chunks, 4);
+  assert.match(first.tile, /^overworld\/r\.0\.0\.[0-9a-f]{16}\.png$/);
+  const png = fs.readFileSync(path.join(s.scripts, "common", "prune", "tiles", first.tile));
+  assert.deepEqual([...png.subarray(0, 4)], [0x89, 0x50, 0x4e, 0x47]);
+  const again = s.run(["--tile", "--dimension=overworld", "--rx=0", "--rz=0"]).last;
+  assert.equal(again.cached, true);
+  assert.equal(again.tile, first.tile);
+}));
+
+test("--tile refuses a bad request and a region that does not exist", withSetup((s) => {
+  assert.equal(s.run(["--tile", "--dimension=overworld", "--rx=x", "--rz=0"]).last.code, "params");
+  assert.equal(s.run(["--tile", "--rx=0", "--rz=0"]).last.code, "params");
+  assert.equal(s.run(["--tile", "--dimension=overworld", "--rx=9", "--rz=9"]).last.code, "no_region");
+  assert.equal(s.run(["--tile", "--dimension=the_end", "--rx=0", "--rz=0"]).last.code, "no_region");
+}));

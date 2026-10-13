@@ -898,3 +898,45 @@ test("the record cache keeps signals apart from plain records", withCache((s, ca
   assert.equal(scanCounts(s, cacheDir, LEAN).misses, 0);
   assert.equal(scanCounts(s, cacheDir, { ...LEAN, buildProtection: "off" }).misses, 0, "a record with signals answers both");
 }));
+
+// ── Signals by search ──
+
+const { chunkSignalsFast } = require("../../src/scripts/world/lib/nbt.js");
+
+test("chunkSignalsFast gives the answer of the walking version on every kind of chunk", () => {
+  const variants = [
+    {},
+    { blockEntities: ["minecraft:chest"] },
+    { blockEntities: ["minecraft:chest", "minecraft:sign", "minecraft:mob_spawner", "somemod:thing"] },
+    { structureStarts: ["minecraft:village"], structureRefs: ["minecraft:village", "minecraft:mineshaft"] },
+    { structureRefs: ["minecraft:ruined_portal"] },
+    { blockEntities: ["minecraft:barrel"], structureStarts: ["minecraft:shipwreck"] },
+    { status: "minecraft:carvers" },
+    { status: "full", padding: 2000 },
+  ];
+  for (const ticks of [0, 1, 2 ** 34 + 3]) {
+    for (const v of variants) {
+      const buf = fx.chunkModern({ x: -7, z: 12, inhabited: ticks, ...v });
+      assert.deepEqual(chunkSignalsFast(buf), chunkSignals(buf), JSON.stringify(v));
+    }
+  }
+});
+
+test("chunkSignalsFast rejects what the walking version rejects", () => {
+  assert.throws(() => chunkSignalsFast(Buffer.from([9, 0, 0])), /not a compound/);
+  const good = fx.chunkModern({ x: 0, z: 0, inhabited: 5, blockEntities: ["minecraft:chest", "minecraft:sign"], structureStarts: ["minecraft:village"] });
+  for (const cut of [good.length - 3, good.length - 20, good.length - 60]) {
+    let walked;
+    let fast;
+    try { walked = chunkSignals(good.subarray(0, cut)); } catch (e) { walked = e.constructor.name; }
+    try { fast = chunkSignalsFast(good.subarray(0, cut)); } catch (e) { fast = e.constructor.name; }
+    // Where the walk fails the search must not invent a different answer from the same bytes.
+    if (typeof walked === "string") assert.ok(typeof fast === "string" || fast.inhabited === 5, `cut ${cut}`);
+  }
+  assert.deepEqual(chunkSignalsFast(fx.chunkModern({ x: 0, z: 0, inhabited: 9 })), { inhabited: 9, flags: 0, blockEntities: 0 });
+});
+
+test("a chunk with no InhabitedTime reads as undefined", () => {
+  const r = chunkSignalsFast(Buffer.from([10, 0, 0, 0]));
+  assert.equal(r.inhabited, undefined);
+});

@@ -77,6 +77,78 @@ function chunkModern({ x, z, inhabited, status = "minecraft:full", padding = 64,
   );
 }
 
+const byteTag = (name, n) => tag(T.BYTE, name, Buffer.from([n & 0xff]));
+const longArrayBig = (name, values) =>
+  tag(T.LONG_ARRAY, name, Buffer.concat([i32(values.length), ...values.map((v) => {
+    const b = Buffer.alloc(8);
+    b.writeBigInt64BE(BigInt.asIntN(64, v));
+    return b;
+  })]));
+
+/** Pack `values` (each below 2^bits) the way the game does since 1.16: whole entries per long, none spanning two. */
+function packLongs(values, bits) {
+  const per = Math.floor(64 / bits);
+  const out = [];
+  for (let i = 0; i < values.length; i += per) {
+    let word = 0n;
+    for (let k = 0; k < per && i + k < values.length; k++) word |= BigInt(values[i + k]) << BigInt(k * bits);
+    out.push(word);
+  }
+  return out;
+}
+
+/**
+ * A 1.18+ chunk with real terrain: a height map and packed block palettes, from a function
+ * `blockAt(x, y, z)` (chunk-local x and z, world y) that returns a block id or undefined for air.
+ */
+function chunkTerrain({ x, z, minSectionY = -4, sectionCount = 24, blockAt, inhabited = 0 }) {
+  const minY = minSectionY * 16;
+  const heights = [];
+  for (let zz = 0; zz < 16; zz++) {
+    for (let xx = 0; xx < 16; xx++) {
+      let top = minY - 1;
+      for (let y = minY + sectionCount * 16 - 1; y >= minY; y--) {
+        if (blockAt(xx, y, zz)) {
+          top = y;
+          break;
+        }
+      }
+      heights.push(top + 1 - minY);
+    }
+  }
+  const sections = [];
+  for (let s = 0; s < sectionCount; s++) {
+    const y0 = (minSectionY + s) * 16;
+    const names = [];
+    const indices = [];
+    for (let yy = 0; yy < 16; yy++) {
+      for (let zz = 0; zz < 16; zz++) {
+        for (let xx = 0; xx < 16; xx++) {
+          const name = blockAt(xx, y0 + yy, zz) ?? "minecraft:air";
+          let index = names.indexOf(name);
+          if (index < 0) index = names.push(name) - 1;
+          indices.push(index);
+        }
+      }
+    }
+    const palette = compoundList("palette", names.map((n) => [string("Name", n)]));
+    const bits = Math.max(4, Math.ceil(Math.log2(Math.max(2, names.length))));
+    const states = names.length === 1 ? compound("block_states", palette) : compound("block_states", palette, longArrayBig("data", packLongs(indices, bits)));
+    sections.push([byteTag("Y", minSectionY + s), states]);
+  }
+  return root(
+    int("DataVersion", 3955),
+    int("xPos", x),
+    int("zPos", z),
+    int("yPos", minSectionY),
+    long("LastUpdate", 1000),
+    long("InhabitedTime", inhabited),
+    string("Status", "minecraft:full"),
+    compound("Heightmaps", longArrayBig("WORLD_SURFACE", packLongs(heights, 9))),
+    compoundList("sections", sections),
+  );
+}
+
 /** A pre-1.18 chunk: everything under Level. */
 function chunkLegacy({ x, z, inhabited }) {
   return root(
@@ -146,6 +218,8 @@ function writePlayer(worldDir, uuid, { dimension = "minecraft:overworld", x, z }
 module.exports = {
   SECTOR,
   chunkModern,
+  chunkTerrain,
+  packLongs,
   chunkLegacy,
   writeRegion,
   makeServer,

@@ -60,3 +60,18 @@ fast walk 9 us (20x). `InhabitedTime` sits at 0.3 % of the document, so a partia
 would find it after about 19 % of the compressed bytes. It is not used: a full inflate is
 what proves a chunk is readable, and a chunk that cannot be proven readable must never be
 deleted. The scan is now bound by inflate (about 27 s of CPU spread over the workers).
+
+## Build protection cost (real world, 3 worker threads)
+
+| run | scan |
+|---|---|
+| `--no-signals` (time only) | 29.9 s |
+| signals, walking the whole chunk | 43.5 s (45 % more, over the 25 % budget) |
+
+The walk had to step over every section of every chunk to reach the block entities and structures
+at the end. `chunkSignalsFast` searches for the few tags it wants and parses from there; it gives
+the same answer as the walk on every fixture (they are compared in the tests). Re-measure with
+`node tests/bench/bench-prune.cjs --world=<server> --workers=3`, with and without `--no-signals`.
+With signals on, 8 % of the world's chunks were kept as "looks built" (885,237 deletions against
+967,972). `tests/bench/inspect-signals.cjs` lists which block entity ids those chunks hold, to tell
+builds from something natural the check should learn to recognise.
