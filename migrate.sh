@@ -11,7 +11,8 @@ set -euo pipefail
 # ║  — a copy of everything removed stays in the pre-migration  ║
 # ║  backup archive. Does NOT touch:                            ║
 # ║    - World data, mods, server.jar, server.properties        ║
-# ║    - Systemd services, cron jobs                            ║
+# ║    - Cron jobs                                              ║
+# ║    - systemd units, except the migrations below             ║
 # ║    - Your variables.txt values (only adds new fields)       ║
 # ║    - downloaded_versions.json                               ║
 # ║    - interface/  (retired web interface — left untouched)   ║
@@ -26,6 +27,12 @@ set -euo pipefail
 # ║  systemd unit is stopped, disabled and removed; the         ║
 # ║  deployment is renamed to *.retired and left on disk,       ║
 # ║  because it holds the only copy of its credentials.         ║
+# ║                                                             ║
+# ║  Applies the server-side migrations (src/migrations/):      ║
+# ║  files the suite wrote for the server itself, namely the    ║
+# ║  instance's start.sh and its systemd unit's crash-loop      ║
+# ║  limits. Previewed first; never restarts the server.        ║
+# ║  --list-server-migrations shows them.                       ║
 # ║                                                             ║
 # ║  The Minecraft instance is stopped ONLY when the migration  ║
 # ║  actually touches it. A services-only update leaves the     ║
@@ -53,6 +60,8 @@ SKIP_CONFIRM=false
 SKIP_STOP=false
 SKIP_SERVICE_RESTART=false
 DRY_RUN=false
+SKIP_SERVER_MIGRATIONS=false
+LIST_SERVER_MIGRATIONS=false
 
 # Defined here (not further down) so the helpers below can use it.
 run_cmd() {
@@ -77,6 +86,11 @@ Options:
   --no-service-restart   Don't restart updated shared services (api-server,
                          manager) — print the commands instead
   --dry-run              Show what would be done without making changes
+  --no-server-migrations Skip the server-side migrations (the instance's own
+                         start.sh and systemd unit)
+  --list-server-migrations
+                         Show each server-side migration and whether it is
+                         pending, then exit; changes nothing
   --help                 Show this help
 
 What gets replaced (per-instance scripts):
@@ -85,6 +99,16 @@ What gets replaced (per-instance scripts):
     preview as REMOVE; a copy stays in the pre-migration backup archive)
   - Skipped entirely when nothing per-instance changed, so a services-only
     migration never touches the running instance
+
+Server-side migrations (src/migrations/server.sh):
+  Changes to files the suite wrote for the server itself, which a scripts
+  update alone never reaches. Each is detected from the real files, shown in
+  the preview, recorded in common/server-migrations.log, and never restarts the
+  server (a changed start.sh takes effect at the next restart; the old copy is
+  kept next to it).
+    instance_start_script   <instance>/start.sh: lifecycle events
+    unit_start_limits       systemd unit: crash-loop limits, then daemon-reload
+  World data, mods, server.jar and server.properties are not touched.
 
 What gets updated (shared services):
   - services/api-server/   at <install-root>/services/api-server/
@@ -128,7 +152,7 @@ What is NEVER touched:
   - services/api-server/api-server-config.json   (user config — fully preserved)
   - backup/logs/, logs/
   - World data, mods, server.jar, server.properties
-  - Systemd services, cron jobs
+  - Cron jobs, and systemd units beyond the server-side migrations above
 EOF
 }
 
@@ -138,6 +162,8 @@ while [[ $# -gt 0 ]]; do
     --no-stop)            SKIP_STOP=true; shift ;;
     --no-service-restart) SKIP_SERVICE_RESTART=true; shift ;;
     --dry-run)            DRY_RUN=true; shift ;;
+    --no-server-migrations)    SKIP_SERVER_MIGRATIONS=true; shift ;;
+    --list-server-migrations)  LIST_SERVER_MIGRATIONS=true; shift ;;
     --help|-h)            print_help; exit 0 ;;
     -*)                   err "Unknown option: $1"; print_help; exit 1 ;;
     *)
@@ -180,6 +206,20 @@ BASE_DIR="$(dirname "$(dirname "$TARGET_SCRIPTS_DIR")")"
   exit 1
 }
 
+# The server-side migrations (see src/migrations/server.sh).
+SM_SOURCE_ROOT="$MIGRATE_SCRIPT_DIR"
+SM_INSTANCE_NAME="${INSTANCE_NAME:-}"
+SM_SCRIPTS_DIR="$TARGET_SCRIPTS_DIR"
+SM_INSTANCE_DIR="$SERVER_PATH"
+SM_DRY_RUN=$DRY_RUN
+# shellcheck source=src/migrations/server.sh
+source "$MIGRATE_SCRIPT_DIR/src/migrations/server.sh"
+
+if $LIST_SERVER_MIGRATIONS; then
+  sm_list
+  exit 0
+fi
+
 # Root-level shared services: source name → deployed subpath under $BASE_DIR/
 # Parallel arrays (bash 3 compatible)
 # The web interface (minecraft-server-manager) used to be the second entry.
@@ -197,6 +237,7 @@ ROOT_HAS_BUILD=()     # package.json declares a "build" script
 ROOT_SRC_CHANGED=()   # at least one tracked source file added/updated/removed
 ROOT_NEEDS_BUILD=()   # dist/ must be regenerated
 BUILD_FAILED=false
+SM_MIGRATIONS_OK=true
 
 echo
 echo -e "${BOLD}Minecraft Server Setup — Migration${NC}"
@@ -656,6 +697,14 @@ if [[ -d "$_old_manager_dir" || -d "$_new_manager_dir" ]] \
   NEEDS_MANAGER_RETIRE=true
   info "RETIRE  the bundled web interface (service + deployment)"
 fi
+# Server-side migrations. After an instance move the files live at the new path.
+if $NEEDS_INSTANCE_MOVE; then SM_INSTANCE_DIR="$_new_instance_dir"; fi
+if $SKIP_SERVER_MIGRATIONS; then
+  SM_PENDING=()
+else
+  sm_plan
+fi
+
 NEEDS_STRUCT_MIGRATION=false
 { $NEEDS_INSTANCE_MOVE || $NEEDS_API_MOVE || $NEEDS_MANAGER_RETIRE; } && NEEDS_STRUCT_MIGRATION=true
 
@@ -677,7 +726,8 @@ if $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && $NEEDS_INSTANCE_UPDATE; then
 fi
 
 if [[ $TOTAL_CHANGES -eq 0 && ${#NEW_VARS[@]} -eq 0 && "$NEEDS_ANY_NPM_INSTALL" != true \
-   && "$NEEDS_STRUCT_MIGRATION" != true && "$NEEDS_ROOT_UPDATE" != true ]]; then
+   && "$NEEDS_STRUCT_MIGRATION" != true && "$NEEDS_ROOT_UPDATE" != true \
+   && ${#SM_PENDING[@]} -eq 0 ]]; then
   log "Everything is already up to date. Nothing to do."
   exit 0
 fi
@@ -691,6 +741,7 @@ SUMMARY="$REPLACED file(s) to update, $ADDED file(s) to add, ${#NEW_VARS[@]} var
 [[ $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) -gt 0 ]] && \
   SUMMARY="$SUMMARY, $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) config key(s) to merge"
 "$NEEDS_INSTANCE_MOVE" && SUMMARY="$SUMMARY, instance dir to relocate" || true
+[[ ${#SM_PENDING[@]} -gt 0 ]] && SUMMARY="$SUMMARY, ${#SM_PENDING[@]} server migration(s)" || true
 info "$SUMMARY"
 echo
 
@@ -749,6 +800,10 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   [[ $(( STALE + ROOT_STALE )) -gt 0 ]] && \
     echo "     (all removed files remain available in the backup archive)"
   echo "  6. Add ${#NEW_VARS[@]} new variable(s) to variables.txt"
+  if [[ ${#SM_PENDING[@]} -gt 0 ]]; then
+    echo " 6b. Server migrations (the server is not restarted):"
+    for _id in "${SM_PENDING[@]}"; do echo "       - $("sm_${_id}_describe")"; done
+  fi
   $NEEDS_ANY_NPM_INSTALL && echo "  7. Run npm install in changed per-instance subdirs"
   $NEEDS_SERVER_STOP && echo "  9. Restart the Minecraft server"
   if $NEEDS_ROOT_UPDATE && [[ "$SKIP_SERVICE_RESTART" != true ]]; then
@@ -1279,6 +1334,18 @@ else
   log "variables.txt already has all required variables"
 fi
 
+# ── Step 6b: Server-side migrations ──
+# Files the suite wrote for the server itself. None of them restarts it.
+
+if [[ ${#SM_PENDING[@]} -gt 0 ]]; then
+  echo; echo -e "${BOLD}Step 6b: Server migrations${NC}"
+  # Variables may have moved with the instance; point the migrations at the final path.
+  SM_INSTANCE_DIR="$SERVER_PATH"
+  SM_DRY_RUN=$DRY_RUN
+  SM_MIGRATIONS_OK=true
+  sm_apply || SM_MIGRATIONS_OK=false
+fi
+
 # ── Step 7: npm install in changed per-instance subdirs ──
 
 if $NEEDS_ANY_NPM_INSTALL; then
@@ -1418,6 +1485,18 @@ echo
 info "Backup archive: $BACKUP_ARCHIVE"
 info "Remove once verified: rm -f '$BACKUP_ARCHIVE'"
 echo
+if [[ ${#SM_FAILED[@]} -gt 0 ]]; then
+  err "Server migration(s) failed: ${SM_FAILED[*]}. They run again on the next migration."
+  echo
+fi
+if [[ ${#SM_MANUAL[@]} -gt 0 ]]; then
+  warn "Server migration(s) need a manual step (printed above): ${SM_MANUAL[*]}"
+  echo
+fi
+if $SM_NEEDS_RESTART; then
+  info "The instance's start.sh was updated. It takes effect the next time '$INSTANCE_NAME' starts."
+  echo
+fi
 if $BUILD_FAILED; then
   err "At least one service build failed — it is still running its previous dist/."
   info "Check the build output above before relying on the new code."
