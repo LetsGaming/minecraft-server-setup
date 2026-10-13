@@ -22,13 +22,39 @@ Region, entities and poi folders are pruned together, so no entity or point of
 interest is left pointing at a chunk that no longer exists. Dimensions are discovered
 (overworld, `DIM-1`, `DIM1`, and `dimensions/<namespace>/<name>`), not assumed.
 
+## Choosing chunks by hand
+
+`params.selection` is an ordered list of rectangles in chunk coordinates (at most 2,500):
+
+```json
+{ "selection": { "ops": [
+  { "dimension": "overworld", "mode": "add",    "x1": 0, "z1": 0, "x2": 40, "z2": 40 },
+  { "dimension": "overworld", "mode": "remove", "x1": 10, "z1": 10, "x2": 12, "z2": 12 }
+], "allowProtected": false } }
+```
+
+Later operations win. A chunk chosen this way is deleted even where a **soft rule** would keep
+it (in use, buffer). A **hard protection** (spawn, player areas, drawn zones) holds unless
+`allowProtected` is true. An unreadable chunk is never deleted, whatever the selection says,
+because it cannot be verified. The result is exact and authoritative, since it is computed by
+the same scan: per dimension the summary reports `manualSoft` and `manualHard` (parts of
+`delete`) and `manualBlocked` (chosen but kept). On the map these chunks are cell classes 6
+and 7. The selection is part of the plan and its hash, and is never saved as a default.
+
+## Choosing dimensions
+
+`params.dimensions` limits everything to the named dimensions: only their region files are
+read, cached and pruned. `--dimensions` lists what a world has (names and region-file counts)
+from directory listings, without reading a chunk.
+
 ## Modes
 
 ```
-node prune-chunks.js --scan [--params=<json>]     read only, stores a plan
-node prune-chunks.js --apply --plan=<id>          delete what the plan names
+node prune-chunks.js --dimensions                 names and region counts, reads no chunk
+node prune-chunks.js --scan [--params=<json> | --params-file=<path> | --params-stdin]
+node prune-chunks.js --apply --plan=<id> [--time-budget=<seconds>]
 node prune-chunks.js --settings=get | set --params=<json>
-node prune-chunks.js --status
+node prune-chunks.js --status                     engine version, an unfinished delete
 ```
 
 `--scan` is safe on a running server; its answer is approximate because region files
@@ -56,6 +82,15 @@ and reported as skipped. The plan must match its own hash, and the folder to del
 from the fresh scan, never from the stored plan. Without `common/instance_ops.sh` the
 server counts as running and `--apply` refuses; a hand-run `--apply` takes the operation lock.
 
+While a delete runs it writes `common/prune/prune-apply.journal` (`applying`); a clean finish
+removes it, a failed one leaves it as `failed`, and a process that died leaves it as `applying`.
+`--status` reports it as `unfinishedApply`, because the world may then be half pruned and the
+job's backup is the way back. `--apply` stops itself after `--time-budget` seconds (default
+45 minutes) and reports `time_budget`, so the orchestrator rolls back instead of being killed
+in the middle of a delete. Entities and poi files are rewritten before the region file, each
+through a flushed temporary file and a rename, and temporary files left by an interrupted run
+are removed on the next one.
+
 `--scan --profile` adds phase timings, counts and peak memory to the summary. It reads single-threaded and without the cache, so the numbers are the plain cost of a scan.
 `tests/bench/bench-prune.cjs` builds a synthetic world (or scans a real one, read only)
 and prints the same numbers; see `docs/prune-benchmarks.md`.
@@ -74,4 +109,7 @@ The reader and writer are built in (Node, no dependencies). The functions in
 `world/lib/plan.js` are the whole interface (`scanWorld`, `applyPlan`); another engine,
 such as MCA Selector's command line, can replace them without touching the wrapper
 routes or the dashboard. LZ4-compressed chunks (1.20.5+ `region-file-compression`) are
-kept, never deleted, until a decoder is added.
+kept, never deleted, until a decoder is added. MCA Selector's command line was evaluated and
+not adopted: it returns no per-chunk data or progress, always exits 0, writes non-atomically,
+needs Java 21 and a display for its image modes, and the dashboard needs the data it cannot
+give. The records and cell classes above are what the map and the selection are built on.
