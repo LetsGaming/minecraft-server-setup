@@ -601,4 +601,125 @@ function chunkSignalsFast(buf) {
   return { inhabited, flags, blockEntities };
 }
 
-module.exports = { TAG, NbtError, parseNbt, chunkMeta, inhabitedTime, chunkSignals, chunkSignalsFast, SIGNAL, blockEntityKind };
+// ── Terrain: what a top-down map needs ──
+
+const TERRAIN = {
+  yPos: header(TAG.INT, "yPos"),
+  heightmaps: header(TAG.COMPOUND, "Heightmaps"),
+  sections: header(TAG.LIST, "sections"),
+};
+const N = {
+  Y: Buffer.from("Y"),
+  blockStates: Buffer.from("block_states"),
+  palette: Buffer.from("palette"),
+  data: Buffer.from("data"),
+  name: Buffer.from("Name"),
+};
+
+/**
+ * The parts of a 1.18+ chunk a top-down map is drawn from, without decoding the rest.
+ * Long arrays stay raw bytes (big endian, 8 per entry): a packed value can use all 64 bits,
+ * which a JavaScript number cannot hold.
+ *
+ * @returns {{minSectionY: number, heightmaps: Record<string, Buffer>, sections: Map<number, {palette: string[], data: Buffer|null}>}}
+ */
+function chunkTerrain(buf) {
+  if (buf.length < 3 || buf[0] !== TAG.COMPOUND) throw new NbtError("Chunk root is not a compound");
+  const heightmaps = {};
+  const sections = new Map();
+  let minSectionY = -4;
+
+  let at = buf.indexOf(TERRAIN.yPos);
+  if (at >= 0) {
+    const pos = at + TERRAIN.yPos.length;
+    if (pos + 4 > buf.length) throw overrun();
+    minSectionY = buf.readInt32BE(pos);
+  }
+
+  at = buf.indexOf(TERRAIN.heightmaps);
+  if (at >= 0) {
+    walkCompound(buf, at + TERRAIN.heightmaps.length, (an, al, atype, vp) => {
+      if (atype === TAG.LONG_ARRAY) {
+        const count = buf.readInt32BE(vp);
+        if (count < 0 || vp + 4 + count * 8 > buf.length) throw overrun();
+        heightmaps[buf.toString("utf8", an, an + al)] = buf.subarray(vp + 4, vp + 4 + count * 8);
+      }
+      return skipAt(buf, vp, atype);
+    });
+  }
+
+  at = buf.indexOf(TERRAIN.sections);
+  if (at >= 0) {
+    let pos = at + TERRAIN.sections.length;
+    if (pos + 5 > buf.length) throw overrun();
+    const inner = buf[pos];
+    const count = buf.readInt32BE(pos + 1);
+    pos += 5;
+    if (inner === TAG.COMPOUND) {
+      for (let i = 0; i < count; i++) {
+        let y;
+        let palette = [];
+        let data = null;
+        pos = walkCompound(buf, pos, (an, al, atype, vp) => {
+          if (atype === TAG.BYTE && eq(buf, an, al, N.Y)) {
+            y = buf.readInt8(vp);
+            return vp + 1;
+          }
+          if (atype === TAG.COMPOUND && eq(buf, an, al, N.blockStates)) {
+            return walkCompound(buf, vp, (bn, bl, btype, bp) => {
+              if (btype === TAG.LIST && eq(buf, bn, bl, N.palette)) {
+                const kind = buf[bp];
+                const entries = buf.readInt32BE(bp + 1);
+                let p = bp + 5;
+                if (kind !== TAG.COMPOUND || entries < 0) return skipAt(buf, bp, btype);
+                for (let e = 0; e < entries; e++) {
+                  let name = "minecraft:air";
+                  p = walkCompound(buf, p, (cn, cl, ctype, cp) => {
+                    if (ctype === TAG.STRING && eq(buf, cn, cl, N.name)) {
+                      const len = buf.readUInt16BE(cp);
+                      name = buf.toString("utf8", cp + 2, cp + 2 + len);
+                      return cp + 2 + len;
+                    }
+                    return skipAt(buf, cp, ctype);
+                  });
+                  palette.push(name);
+                }
+                return p;
+              }
+              if (btype === TAG.LONG_ARRAY && eq(buf, bn, bl, N.data)) {
+                const longs = buf.readInt32BE(bp);
+                if (longs < 0 || bp + 4 + longs * 8 > buf.length) throw overrun();
+                data = buf.subarray(bp + 4, bp + 4 + longs * 8);
+                return bp + 4 + longs * 8;
+              }
+              return skipAt(buf, bp, btype);
+            });
+          }
+          return skipAt(buf, vp, atype);
+        });
+        if (y !== undefined) sections.set(y, { palette, data });
+      }
+    }
+  }
+  return { minSectionY, heightmaps, sections };
+}
+
+/**
+ * Entry `index` of a packed long array: `bits` bits each, as many whole entries per long as fit
+ * (an entry never spans two longs, as since 1.16). `raw` holds the longs big endian.
+ */
+function unpackAt(raw, bits, index) {
+  const per = Math.floor(64 / bits);
+  const base = Math.floor(index / per) * 8;
+  const offset = (index % per) * bits;
+  if (base + 8 > raw.length) return 0;
+  const hi = raw.readUInt32BE(base);
+  const lo = raw.readUInt32BE(base + 4);
+  const mask = (1 << bits) - 1;
+  if (offset >= 32) return (hi >>> (offset - 32)) & mask;
+  if (offset + bits <= 32) return (lo >>> offset) & mask;
+  const fromLo = 32 - offset;
+  return ((lo >>> offset) | ((hi & ((1 << (bits - fromLo)) - 1)) << fromLo)) & mask;
+}
+
+module.exports = { TAG, NbtError, parseNbt, chunkMeta, inhabitedTime, chunkSignals, chunkSignalsFast, chunkTerrain, unpackAt, SIGNAL, blockEntityKind };
