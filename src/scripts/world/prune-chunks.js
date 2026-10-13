@@ -89,6 +89,11 @@ function readParams(args) {
   return raw;
 }
 
+/** No parameters, or an empty object, means the saved settings. */
+function scanParams(raw) {
+  return raw && typeof raw === "object" && Object.keys(raw).length > 0 ? raw : readSettings();
+}
+
 function readSettings() {
   try {
     return normalizeParams(JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf8")).params);
@@ -113,10 +118,25 @@ function serverIsRunning(vars) {
   // The setup suite's own check: RCON, screen session or systemd, whichever answers.
   const { spawnSync } = require("child_process");
   const ops = path.join(SCRIPTS_DIR, "common", "instance_ops.sh");
-  if (!fs.existsSync(ops)) return false;
+  // Without the check there is no proof the server is down, so it counts as running.
+  if (!fs.existsSync(ops)) return true;
   const r = spawnSync("bash", [ops, "running"], { encoding: "utf8" });
   // 0 up, 1 down, 2 unknown: unknown counts as running, the safe answer here.
   return r.status !== 1;
+}
+
+/**
+ * Run this same command again under the operation lock. The upgrade job already
+ * holds it (MC_OPERATION_LOCK_HELD=1); a hand-run apply takes it here so it
+ * cannot overlap a restore, a rollback or an upgrade.
+ */
+function reenterLocked() {
+  const { spawnSync } = require("child_process");
+  const common = path.join(SCRIPTS_DIR, "common");
+  const script = 'source "$1/load_variables.sh"; source "$1/utils.sh"; acquire_operation_lock prune || exit 75; shift; node "$@"; rc=$?; release_operation_lock; exit $rc';
+  const r = spawnSync("bash", ["-c", script, "prune-lock", common, __filename, ...process.argv.slice(2)], { stdio: "inherit" });
+  if (r.status === 75) fail("busy", "Another operation is running for this server.");
+  process.exit(r.status ?? 1);
 }
 
 function main() {
@@ -150,7 +170,7 @@ function main() {
   if (args.bool("scan")) {
     let result;
     try {
-      result = scanWorld({ serverPath, params: readParams(args) ?? readSettings() });
+      result = scanWorld({ serverPath, params: scanParams(readParams(args)) });
     } catch (err) {
       fail("scan_failed", err.message);
     }
@@ -165,6 +185,7 @@ function main() {
   }
 
   if (args.bool("apply")) {
+    if (process.env.MC_OPERATION_LOCK_HELD !== "1") reenterLocked();
     const id = args.get("plan");
     if (!id || !PLAN_ID_RE.test(id)) fail("plan", "A plan id is required.");
     let plan;
@@ -179,7 +200,7 @@ function main() {
       const res = applyPlan({ serverPath, plan });
       out({ ok: true, ...res });
     } catch (err) {
-      fail(err.code === "plan_stale" ? "plan_stale" : "apply_failed", err.message);
+      fail(["plan_stale", "plan_invalid"].includes(err.code) ? err.code : "apply_failed", err.message);
     }
     return;
   }

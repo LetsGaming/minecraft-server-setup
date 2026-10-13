@@ -357,12 +357,26 @@ test(
 );
 
 test(
-  "a plan cannot name a folder outside the world",
+  "the folder a plan names is ignored: the fresh scan decides where to delete",
   withServer((s) => {
     threeFolders(s, [0, 0]);
     const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
     p.dimensions[0].dir = "../../elsewhere";
-    assert.throws(() => plan.applyPlan({ serverPath: s.dir, plan: p }), /outside the world|plan_stale|Only/);
+    const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+    assert.equal(res.deletedChunks, 2);
+  }),
+);
+
+test(
+  "a plan whose deletions were edited is refused",
+  withServer((s) => {
+    threeFolders(s, [0, 0, 90]);
+    const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+    const dim = p.dimensions[0];
+    const key = Object.keys(dim.deletions)[0];
+    dim.deletions[key] = Buffer.alloc(128, 0xff).toString("base64");
+    assert.throws(() => plan.applyPlan({ serverPath: s.dir, plan: p }), (e) => e.code === "plan_invalid");
+    assert.deepEqual(slotsIn(s, "region"), [0, 1, 2]);
   }),
 );
 
@@ -371,6 +385,50 @@ test(
   withServer((s) => {
     threeFolders(s, [90, 90]);
     const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
-    assert.deepEqual(plan.applyPlan({ serverPath: s.dir, plan: p }), { deletedChunks: 0, removedFiles: 0, bytesFreed: 0, planned: 0 });
+    assert.deepEqual(plan.applyPlan({ serverPath: s.dir, plan: p }), { deletedChunks: 0, removedFiles: 0, bytesFreed: 0, planned: 0, skippedFiles: 0 });
   }),
 );
+
+// ── Safety edge cases ──
+
+test("a chunk that was already corrupt stays and does not fail validation", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [
+    chunk(0, 0, 0),
+    { ...chunk(1, 0, 0), compression: "corrupt" },
+    chunk(2, 0, 90),
+  ]);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+  assert.equal(res.deletedChunks, 1);
+  assert.deepEqual(slotsIn(s, "region"), [1, 2]);
+}));
+
+test("a region whose header overlaps two chunks is left alone", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  const file = s.regionFile(null, "region", 0, 0);
+  fx.writeRegion(file, 0, 0, [chunk(0, 0, 0), chunk(1, 0, 90), chunk(2, 0, 90)]);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  const buf = fs.readFileSync(file);
+  buf.writeUInt32BE(buf.readUInt32BE(4), 8); // slot 2 now points at slot 1's sectors
+  fs.writeFileSync(file, buf);
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+  assert.equal(res.deletedChunks, 0);
+  assert.equal(res.skippedFiles, 1);
+  assert.deepEqual(fs.readFileSync(file), buf);
+}));
+
+test("a chunk entry with no sectors reads as corrupt and makes the file unsafe", withServer((s) => {
+  const file = s.regionFile(null, "region", 0, 0);
+  fx.writeRegion(file, 0, 0, [chunk(0, 0, 0), chunk(1, 0, 0)]);
+  const buf = fs.readFileSync(file);
+  buf.writeUInt32BE((2 << 8) | 0, 4);
+  const header = region.readHeader(buf);
+  assert.equal(region.readChunk(buf, header, 1, path.dirname(file), 0, 0).reason, "corrupt");
+  assert.deepEqual([...region.unsafeSlots(header)], [1]);
+}));
+
+test("a negative NBT array length is an error, not a loop", () => {
+  const doc = (type) => Buffer.from([10, 0, 0, type, 0, 1, 0x61, 0xff, 0xff, 0xff, 0xff, 0]);
+  for (const type of [7, 11, 12]) assert.throws(() => chunkMeta(doc(type)), /ended early/);
+});

@@ -33,7 +33,7 @@ class Reader {
     this.pos = 0;
   }
   need(n) {
-    if (this.pos + n > this.buf.length) throw new NbtError("NBT ended early");
+    if (n < 0 || this.pos + n > this.buf.length) throw new NbtError("NBT ended early");
   }
   u8() {
     this.need(1);

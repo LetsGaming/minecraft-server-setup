@@ -408,6 +408,11 @@ function planHash(plan) {
  * @param {{serverPath: string, plan: object, tolerance?: number, onProgress?: Function}} args
  */
 function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
+  if (!plan || typeof plan.hash !== "string" || planHash(plan) !== plan.hash) {
+    const err = new Error("The plan does not match its own hash.");
+    err.code = "plan_invalid";
+    throw err;
+  }
   const fresh = scanWorld({ serverPath, params: plan.params });
   const freshDims = new Map(fresh.plan.dimensions.map((d) => [d.id, d]));
 
@@ -426,7 +431,7 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
       if (both.length > 0) todo.push({ dim, key, slots: both });
     }
   }
-  if (planned === 0) return { deletedChunks: 0, removedFiles: 0, bytesFreed: 0, planned: 0 };
+  if (planned === 0) return { deletedChunks: 0, removedFiles: 0, bytesFreed: 0, planned: 0, skippedFiles: 0 };
   if (agreed < planned * (1 - tolerance)) {
     const err = new Error(`Only ${agreed} of ${planned} planned chunks are still unused.`);
     err.code = "plan_stale";
@@ -435,13 +440,16 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
 
   const worldDir = world.worldDirOf(serverPath);
   let deletedChunks = 0;
+  let skippedFiles = 0;
   let removedFiles = 0;
   let bytesFreed = 0;
   const touched = [];
 
   for (const { dim, key, slots } of todo) {
-    const dimDir = path.join(serverPath, ...dim.dir.split("/").filter(Boolean));
-    if (!path.resolve(dimDir).startsWith(path.resolve(worldDir))) throw new Error("A plan names a folder outside the world.");
+    // The folder comes from the fresh scan, never from the stored plan.
+    const freshDim = freshDims.get(dim.id);
+    const dimDir = path.join(serverPath, ...freshDim.dir.split("/").filter(Boolean));
+    if (!isInside(worldDir, dimDir)) throw new Error("A plan names a folder outside the world.");
     const parsed = /^r\.(-?\d+)\.(-?\d+)$/.exec(key);
     if (!parsed) throw new Error("A plan names an invalid region.");
     const rx = Number(parsed[1]);
@@ -452,6 +460,11 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
       const file = path.join(dir, region.regionName(rx, rz));
       if (!fs.existsSync(file)) continue;
       const res = region.removeChunks(file, slots);
+      if (res.unsafe) {
+        skippedFiles++;
+        if (folder === "region") break;
+        continue;
+      }
       if (res.removed === 0) continue;
       if (folder === "region") deletedChunks += res.removed;
       for (const slot of res.removedSlots) {
@@ -468,29 +481,28 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress }) {
         bytesFreed += res.bytesBefore;
       } else {
         bytesFreed += res.bytesBefore - res.bytesAfter;
-        touched.push({ file, folder, rx, rz });
+        touched.push({ file, keptHashes: res.keptHashes });
       }
     }
     if (onProgress) onProgress();
   }
 
   validate(touched);
-  return { deletedChunks, removedFiles, bytesFreed, planned };
+  return { deletedChunks, removedFiles, bytesFreed, planned, skippedFiles };
 }
 
-/** Every chunk left in a rewritten region file must still read. */
+/** Every chunk kept in a rewritten region file must be byte for byte what was copied. */
 function validate(touched) {
   for (const t of touched) {
-    const buf = fs.readFileSync(t.file);
-    const header = region.readHeader(buf);
-    if (!header) throw new Error(`${path.basename(t.file)} has no header after the prune.`);
-    for (const slot of region.occupiedSlots(header)) {
-      const res = region.readChunk(buf, header, slot, path.dirname(t.file), t.rx, t.rz);
-      if (!res.ok && res.reason !== "lz4" && res.reason !== "external") {
-        throw new Error(`${path.basename(t.file)} slot ${slot} is unreadable after the prune (${res.reason}).`);
-      }
-    }
+    const problem = region.verifyKept(t.file, t.keptHashes);
+    if (problem) throw new Error(`${path.basename(t.file)} is wrong after the prune: ${problem}.`);
   }
+}
+
+/** True when `child` is `parent` or lies below it. */
+function isInside(parent, child) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 module.exports = {

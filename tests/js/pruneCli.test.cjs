@@ -20,6 +20,8 @@ function setup() {
   fs.cpSync(path.join(SRC, "world"), path.join(scripts, "world"), { recursive: true });
   fs.mkdirSync(path.join(scripts, "update"), { recursive: true });
   fs.cpSync(path.join(SRC, "update", "lib"), path.join(scripts, "update", "lib"), { recursive: true });
+  // The real check is a bash script; "running" answers 1 (down) here.
+  fs.writeFileSync(path.join(scripts, "common", "instance_ops.sh"), '#!/bin/bash\n[ "$1" = running ] && exit 1\nexit 0\n');
   fs.writeFileSync(path.join(scripts, "common", "variables.txt"), `USER="t"\nINSTANCE_NAME="inst"\nSERVER_PATH="${server.dir}"\n`);
 
   fx.writeLevelDat(server.worldDir, 100_000, 100_000);
@@ -33,7 +35,11 @@ function setup() {
   }
 
   const run = (args) => {
-    const res = spawnSync(process.execPath, [path.join(scripts, "world", "prune-chunks.js"), ...args], { encoding: "utf8", cwd: scripts });
+    const res = spawnSync(process.execPath, [path.join(scripts, "world", "prune-chunks.js"), ...args], {
+      encoding: "utf8",
+      cwd: scripts,
+      env: { ...process.env, MC_OPERATION_LOCK_HELD: "1" },
+    });
     const lines = (res.stdout ?? "").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
     return { code: res.status, lines, last: lines.at(-1), stderr: res.stderr };
   };
@@ -140,4 +146,19 @@ test("invalid parameters are an error, not a silent default", withSetup((s) => {
   const r = s.run(["--scan", "--params={not json"]);
   assert.equal(r.code, 1);
   assert.equal(r.last.code, "params");
+}));
+
+test("--apply refuses when the server check is missing", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  fs.rmSync(path.join(s.scripts, "common", "instance_ops.sh"));
+  const r = s.run(["--apply", `--plan=${scan.id}`]);
+  assert.equal(r.code, 1);
+  assert.equal(r.last.code, "server_running");
+}));
+
+test("--scan with an empty parameter object uses the saved settings", withSetup((s) => {
+  s.run(["--settings=set", `--params=${JSON.stringify({ thresholdMinutes: 1000, bufferChunks: 0 })}`]);
+  const empty = s.run(["--scan", "--params={}"]);
+  assert.equal(empty.last.params.thresholdMinutes, 1000);
+  assert.equal(empty.last.totals.delete, 4);
 }));
