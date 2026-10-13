@@ -35,6 +35,15 @@ node prune-chunks.js --status
 can be mid-write. A plan lives under `common/prune/` (the newest five are kept) with
 a map per dimension for the dashboard.
 
+Reading is done by worker threads (`--workers=<n>`, default the core count minus one, at most
+4) into a per-region record cache under `common/prune/cache/`. A record depends only on the
+region file and is reused while its size, modification time and header digest are unchanged,
+so a repeat scan reads only changed regions and a different threshold, radius, buffer or zone
+needs no file I/O at all. `--no-cache` forces a full read. Progress is printed as NDJSON
+lines (`phase: "scan"`, `done`, `total`, `chunks`, `etaSeconds`); a scan can be cancelled by
+stopping the process, because it only reads and every cache write is atomic. The buffer is
+decided per region with a halo from its neighbours, so a far-away region cannot fail the scan.
+
 `--apply` refuses to run while the server is up. It scans again and deletes only what
 both scans agree on, so a preview made while players were online can remove less than
 it promised and never more. If fewer than 90 % of the planned chunks are still unused
@@ -47,7 +56,7 @@ and reported as skipped. The plan must match its own hash, and the folder to del
 from the fresh scan, never from the stored plan. Without `common/instance_ops.sh` the
 server counts as running and `--apply` refuses; a hand-run `--apply` takes the operation lock.
 
-`--scan --profile` adds phase timings, counts and peak memory to the summary.
+`--scan --profile` adds phase timings, counts and peak memory to the summary. It reads single-threaded and without the cache, so the numbers are the plain cost of a scan.
 `tests/bench/bench-prune.cjs` builds a synthetic world (or scans a real one, read only)
 and prints the same numbers; see `docs/prune-benchmarks.md`.
 

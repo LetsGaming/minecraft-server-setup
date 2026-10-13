@@ -19,11 +19,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `prune-chunks.js --scan` reads regions on worker threads into a per-region record cache and prints NDJSON progress. A repeat scan takes about a tenth of the time, changing a threshold, radius, buffer or zone reads no region file, and `--apply` reads only the regions it deletes from (in parallel). Options `--workers` and `--no-cache`.
 - `update-server.js` records the new version after the jar swap instead of before it, and disables incompatible mods (reversible, `mods/disabled/`) instead of deleting jars by filename match.
 - `backup.sh`, `restore.sh` and `rollback.sh` take the operation lock, so they no longer overlap with each other or with an upgrade.
 
 ### Fixed
 
+- A world with regions very far apart no longer fails a prune scan with a buffer; the buffer is computed per region.
 - `prune-chunks.js --apply`: a chunk that was already corrupt no longer makes the post-prune check fail and roll the whole job back; the check now compares kept chunks byte for byte instead of re-reading them.
 - `prune-chunks.js --apply` refuses to run when `instance_ops.sh` is missing (it used to assume the server was stopped), takes the operation lock when run by hand, rejects a plan whose content does not match its hash, and deletes only in folders found by the fresh scan.
 - Region files with a chunk entry of zero sectors or overlapping sectors are left untouched by a prune instead of being rewritten.

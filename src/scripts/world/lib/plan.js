@@ -397,6 +397,33 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDi
   return { plan, maps };
 }
 
+/**
+ * Every region file a scan of these parameters would read, for warming the cache
+ * in parallel before the (cheap, single-threaded) decision runs.
+ */
+function listScanJobs({ serverPath, params: rawParams }) {
+  const params = normalizeParams(rawParams);
+  const worldDir = world.worldDirOf(serverPath);
+  const jobs = [];
+  for (const dim of world.discoverDimensions(worldDir)) {
+    if (params.dimensions && !params.dimensions.includes(dim.id)) continue;
+    for (const r of listRegions(dim.dir)) jobs.push({ file: r.file, dimId: dim.id, rx: r.x, rz: r.z });
+  }
+  return jobs;
+}
+
+/** "dimension:rx,rz" of every region a plan deletes from. */
+function touchedKeys(plan) {
+  const keys = new Set();
+  for (const dim of plan.dimensions) {
+    for (const key of Object.keys(dim.deletions)) {
+      const m = /^r.(-?d+).(-?d+)$/.exec(key);
+      if (m) keys.add(`${dim.id}:${m[1]},${m[2]}`);
+    }
+  }
+  return keys;
+}
+
 /** An empty profile for scanWorld; see summarizeProfile in prune-chunks.js. */
 function newProfile() {
   return { phases: {}, counts: { chunks: 0, regions: 0, cacheHits: 0, cacheMisses: 0 } };
@@ -420,7 +447,7 @@ function planHash(plan) {
  *
  * @param {{serverPath: string, plan: object, tolerance?: number, onProgress?: Function}} args
  */
-function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = null }) {
+function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = null, reread: rereadOverride = null }) {
   if (!plan || typeof plan.hash !== "string" || planHash(plan) !== plan.hash) {
     const err = new Error("The plan does not match its own hash.");
     err.code = "plan_invalid";
@@ -428,14 +455,8 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = n
   }
   // Regions the plan touches are always re-read; the cache only stands in for the rest,
   // which can matter only as neighbours for the buffer.
-  const reread = new Set();
-  for (const dim of plan.dimensions) {
-    for (const key of Object.keys(dim.deletions)) {
-      const m = /^r.(-?d+).(-?d+)$/.exec(key);
-      if (m) reread.add(`${dim.id}:${m[1]},${m[2]}`);
-    }
-  }
-  const fresh = scanWorld({ serverPath, params: plan.params, cacheDir, fresh: reread });
+  const reread = touchedKeys(plan);
+  const fresh = scanWorld({ serverPath, params: plan.params, cacheDir, fresh: rereadOverride ?? reread });
   const freshDims = new Map(fresh.plan.dimensions.map((d) => [d.id, d]));
 
   // What both scans want gone.
@@ -533,6 +554,8 @@ module.exports = {
   TICKS_PER_MINUTE,
   normalizeParams,
   scanWorld,
+  listScanJobs,
+  touchedKeys,
   newProfile,
   applyPlan,
   planHash,

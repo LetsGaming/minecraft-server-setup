@@ -173,3 +173,32 @@ test("--scan --profile reports phase timings and counts", withSetup((s) => {
   assert.ok(p.peakRssMb > 0);
   assert.equal("profile" in s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]).last, false);
 }));
+
+test("a scan on worker threads decides what a plain scan decides, and reports progress", withSetup((s) => {
+  for (const [rx, rz] of [[1, 0], [0, 1], [-1, -1]]) {
+    const list = [0, 1, 2].map((i) => ({ x: rx * 32 + i, z: rz * 32, nbt: fx.chunkModern({ x: rx * 32 + i, z: rz * 32, inhabited: (i === 1 ? 60 : 0) * MIN }) }));
+    fx.writeRegion(s.server.regionFile(null, "region", rx, rz), rx, rz, list);
+  }
+  const plain = s.run(["--scan", "--no-cache", `--params=${JSON.stringify(LEAN)}`]);
+  const pooled = s.run(["--scan", "--workers=3", `--params=${JSON.stringify(LEAN)}`]);
+  assert.equal(pooled.code, 0, pooled.stderr);
+  assert.equal(pooled.last.id, plain.last.id);
+  const progress = pooled.lines.filter((l) => l.phase === "scan");
+  assert.ok(progress.length > 0);
+  assert.deepEqual([progress.at(-1).done, progress.at(-1).total], [4, 4]);
+  const cached = path.join(s.scripts, "common", "prune", "cache", "overworld");
+  assert.equal(fs.readdirSync(cached).length, 4);
+  assert.equal(s.run(["--scan", "--workers=0", `--params=${JSON.stringify(LEAN)}`]).last.id, plain.last.id);
+}));
+
+test("--apply on worker threads deletes the same chunks", withSetup((s) => {
+  for (const [rx, rz] of [[1, 0], [0, 1]]) {
+    const list = [0, 1].map((i) => ({ x: rx * 32 + i, z: rz * 32, nbt: fx.chunkModern({ x: rx * 32 + i, z: rz * 32, inhabited: 0 }) }));
+    fx.writeRegion(s.server.regionFile(null, "region", rx, rz), rx, rz, list);
+  }
+  const { last: scan } = s.run(["--scan", "--workers=2", `--params=${JSON.stringify(LEAN)}`]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, "--workers=2"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.last.deletedChunks, scan.totals.delete);
+  assert.equal(s.run(["--scan", "--workers=2", `--params=${JSON.stringify(LEAN)}`]).last.totals.delete, 0);
+}));

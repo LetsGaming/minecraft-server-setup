@@ -6,6 +6,8 @@
  *   node tests/bench/bench-prune.cjs --chunks=100000            synthetic world
  *   node tests/bench/bench-prune.cjs --world=/path/to/server    real server, read only
  *
+ * --workers=<n> reads on n worker threads into a cold cache, then decides: the
+ * reported time is read plus decision, as the CLI does it (0 is the same inline).
  * --cache scans twice and reports the repeat scan (cache warm).
  * Options: --padding=<longs per chunk> (chunk size, default 400), --keep to
  * leave the synthetic world on disk, --seed=<n>. It only ever calls scan, never
@@ -17,7 +19,8 @@ const os = require("os");
 const path = require("path");
 
 const fx = require("../js/worldFixtures.cjs");
-const { scanWorld, newProfile } = require("../../src/scripts/world/lib/plan.js");
+const { scanWorld, listScanJobs, newProfile } = require("../../src/scripts/world/lib/plan.js");
+const { warmCache } = require("../../src/scripts/world/lib/pool.js");
 
 const MIN = 20 * 60;
 
@@ -62,7 +65,7 @@ function buildWorld({ chunks, padding, seed }) {
   return server;
 }
 
-function main() {
+async function main() {
   const worldArg = arg("world", null);
   const chunks = Number(arg("chunks", 100000));
   const padding = Number(arg("padding", 400));
@@ -78,21 +81,27 @@ function main() {
     serverPath = server.dir;
   }
 
-  const cacheDir = arg("cache", false) ? fs.mkdtempSync(path.join(os.tmpdir(), "prune-bench-cache-")) : null;
-  const runScan = () => {
+  const workers = arg("workers", null);
+  const cacheDir = arg("cache", false) || workers !== null ? fs.mkdtempSync(path.join(os.tmpdir(), "prune-bench-cache-")) : null;
+  const runScan = async () => {
     const profile = newProfile();
     const t0 = process.hrtime.bigint();
+    if (workers !== null) {
+      await warmCache({ jobs: listScanJobs({ serverPath, params: {} }), cacheDir, workers: Number(workers) });
+      if (arg("cache", false)) profile.phases.warm = Number(process.hrtime.bigint() - t0) / 1e6;
+    }
     const { plan } = scanWorld({ serverPath, params: {}, profile, cacheDir });
     return { profile, plan, totalMs: Number(process.hrtime.bigint() - t0) / 1e6 };
   };
   // With --cache the first scan fills the cache and the second is the repeat scan that is reported.
-  if (cacheDir) runScan();
-  const { profile, plan, totalMs } = runScan();
+  if (arg("cache", false)) await runScan();
+  const { profile, plan, totalMs } = await runScan();
 
   const report = {
     source: worldArg ? "real" : "synthetic",
     node: process.version,
     cpus: os.cpus().length,
+    workers: workers === null ? "none" : Number(workers),
     generateMs,
     scanMs: Math.round(totalMs),
     phasesMs: Object.fromEntries(Object.entries(profile.phases).map(([k, v]) => [k, Math.round(v)])),
@@ -109,3 +118,4 @@ function main() {
 }
 
 main();
+
