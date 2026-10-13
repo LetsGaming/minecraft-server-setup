@@ -794,3 +794,107 @@ test("random worlds and selections never delete an unreadable chunk", () => {
     }
   }
 });
+
+// ── Signals ──
+
+const { chunkSignals, SIGNAL, blockEntityKind } = require("../../src/scripts/world/lib/nbt.js");
+
+test("chunkSignals reads InhabitedTime and what a chunk contains, wherever the tags sit", () => {
+  const plain = chunkSignals(fx.chunkModern({ x: 1, z: 2, inhabited: 77 }));
+  assert.deepEqual(plain, { inhabited: 77, flags: 0, blockEntities: 0 });
+
+  const built = chunkSignals(
+    fx.chunkModern({ x: 0, z: 0, inhabited: 5, blockEntities: ["minecraft:chest", "minecraft:oak_sign", "minecraft:furnace", "minecraft:white_bed", "minecraft:hopper", "minecraft:lectern"] }),
+  );
+  assert.equal(built.blockEntities, 6);
+  // "oak_sign" and "white_bed" are not block entity ids (they are "sign" and "bed"), so they count as other.
+  assert.ok(built.flags & SIGNAL.CONTAINER);
+  assert.ok(built.flags & SIGNAL.FURNACE);
+  assert.ok(built.flags & SIGNAL.REDSTONE);
+  assert.ok(built.flags & SIGNAL.OTHER_BLOCK_ENTITY);
+
+  const natural = chunkSignals(fx.chunkModern({ x: 0, z: 0, inhabited: 5, blockEntities: ["minecraft:chest"], structureStarts: ["minecraft:village"], structureRefs: ["minecraft:village"] }));
+  assert.ok(natural.flags & SIGNAL.STRUCTURE_START);
+  assert.ok(natural.flags & SIGNAL.STRUCTURE_REFERENCE);
+
+  const half = chunkSignals(fx.chunkModern({ x: 0, z: 0, inhabited: 5, status: "minecraft:features" }));
+  assert.ok(half.flags & SIGNAL.NOT_FULL);
+});
+
+test("block entity ids map to their kind, with or without the namespace", () => {
+  assert.equal(blockEntityKind("minecraft:chest"), SIGNAL.CONTAINER);
+  assert.equal(blockEntityKind("barrel"), SIGNAL.CONTAINER);
+  assert.equal(blockEntityKind("minecraft:sign"), SIGNAL.SIGN);
+  assert.equal(blockEntityKind("minecraft:mob_spawner"), SIGNAL.SPAWNER);
+  assert.equal(blockEntityKind("somemod:machine"), SIGNAL.OTHER_BLOCK_ENTITY);
+});
+
+test("chunkSignals agrees with inhabitedTime and rejects broken data", () => {
+  for (const ticks of [0, 9, 2 ** 33 + 1]) {
+    const buf = fx.chunkModern({ x: 3, z: 3, inhabited: ticks, blockEntities: ["minecraft:barrel"], structureRefs: ["minecraft:mineshaft"] });
+    assert.equal(chunkSignals(buf).inhabited, inhabitedTime(buf));
+  }
+  assert.throws(() => chunkSignals(Buffer.from([9, 0, 0])), /not a compound/);
+  const good = fx.chunkModern({ x: 0, z: 0, inhabited: 5, blockEntities: ["minecraft:chest"] });
+  assert.throws(() => chunkSignals(good.subarray(0, good.length - 6)), /ended early/);
+});
+
+// ── Build protection ──
+
+const BUILT = (x, extra = {}) => ({ x, z: 0, nbt: fx.chunkModern({ x, z: 0, inhabited: 0, ...extra }) });
+
+test("unused chunks with block entities no structure explains are kept as uncertain", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [
+    BUILT(0),
+    BUILT(1, { blockEntities: ["minecraft:chest", "minecraft:sign"] }),
+    BUILT(2, { blockEntities: ["minecraft:chest"], structureRefs: ["minecraft:village"] }),
+    BUILT(3, { blockEntities: ["minecraft:chest", "minecraft:mob_spawner"] }),
+    BUILT(4, { blockEntities: ["somemod:machine"] }),
+    BUILT(5, { structureStarts: ["minecraft:mineshaft"] }),
+  ]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  const cell = Buffer.from(r.maps.overworld.regions["r.0.0"].cell, "base64");
+  assert.deepEqual([...cell.subarray(0, 6)], [
+    plan.CELL.DELETE,
+    plan.CELL.UNCERTAIN, // a chest and a sign, nothing natural
+    plan.CELL.DELETE, // a village explains the chest
+    plan.CELL.DELETE, // a dungeon: spawner and chest
+    plan.CELL.UNCERTAIN, // a modded machine
+    plan.CELL.DELETE,
+  ]);
+  assert.equal(r.plan.dimensions[0].uncertain, 2);
+  assert.equal(r.plan.totals.delete, 4);
+}));
+
+test("buildProtection off ignores what a chunk contains", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [BUILT(0, { blockEntities: ["minecraft:chest"] }), BUILT(1)]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, buildProtection: "off" } });
+  assert.equal(r.plan.totals.delete, 2);
+  assert.equal(r.plan.dimensions[0].uncertain, 0);
+  assert.equal(plan.normalizeParams({ buildProtection: "nonsense" }).buildProtection, "likely");
+}));
+
+test("an uncertain chunk is a keep for the buffer, and a manual selection may still choose it", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [BUILT(0, { blockEntities: ["minecraft:chest"] }), BUILT(1), BUILT(2), BUILT(3), BUILT(4)]);
+  const r = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, bufferChunks: 1 } });
+  const cell = Buffer.from(r.maps.overworld.regions["r.0.0"].cell, "base64");
+  assert.deepEqual([...cell.subarray(0, 5)], [plan.CELL.UNCERTAIN, plan.CELL.BUFFER, plan.CELL.DELETE, plan.CELL.DELETE, plan.CELL.DELETE]);
+  const picked = plan.scanWorld({ serverPath: s.dir, params: { ...LEAN, selection: { ops: [{ dimension: "overworld", mode: "add", x1: 0, z1: 0, x2: 0, z2: 0 }], allowProtected: false } } });
+  assert.equal(picked.plan.dimensions[0].manualSoft, 1);
+  assert.equal(picked.plan.totals.delete, 5);
+}));
+
+test("the record cache keeps signals apart from plain records", withCache((s, cacheDir) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [BUILT(0, { blockEntities: ["minecraft:chest"] })]);
+  assert.equal(scanCounts(s, cacheDir, { ...LEAN, buildProtection: "off" }).misses, 1);
+  assert.equal(scanCounts(s, cacheDir, { ...LEAN, buildProtection: "off" }).misses, 0);
+  const withSignals = scanCounts(s, cacheDir, LEAN);
+  assert.equal(withSignals.misses, 1, "a record without signals cannot answer a request for them");
+  assert.equal(withSignals.r.plan.dimensions[0].uncertain, 1);
+  assert.equal(scanCounts(s, cacheDir, LEAN).misses, 0);
+  assert.equal(scanCounts(s, cacheDir, { ...LEAN, buildProtection: "off" }).misses, 0, "a record with signals answers both");
+}));

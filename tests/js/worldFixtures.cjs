@@ -50,7 +50,20 @@ const compoundList = (name, items) =>
 const root = (...children) => Buffer.concat([u8(T.COMPOUND), str(""), ...children, u8(0)]);
 
 /** A 1.18+ chunk: flat root. `padding` is junk that has to be skipped to find the fields. */
-function chunkModern({ x, z, inhabited, status = "minecraft:full", padding = 64 }) {
+function chunkModern({ x, z, inhabited, status = "minecraft:full", padding = 64, blockEntities = [], structureStarts = [], structureRefs = [] }) {
+  const tail = [];
+  if (blockEntities.length > 0) {
+    tail.push(compoundList("block_entities", blockEntities.map((id) => [string("id", id), int("x", x * 16), int("y", 64), int("z", z * 16)])));
+  }
+  if (structureStarts.length > 0 || structureRefs.length > 0) {
+    tail.push(
+      compound(
+        "structures",
+        compound("starts", ...structureStarts.map((k) => compound(k, string("id", k)))),
+        compound("References", ...structureRefs.map((k) => longArray(k, [1]))),
+      ),
+    );
+  }
   return root(
     int("DataVersion", 3955),
     int("xPos", x),
@@ -60,6 +73,7 @@ function chunkModern({ x, z, inhabited, status = "minecraft:full", padding = 64 
     string("Status", status),
     longArray("Heightmaps", new Array(padding).fill(7)),
     compoundList("sections", [[int("Y", 0), string("note", "x")], [int("Y", 1)]]),
+    ...tail,
   );
 }
 

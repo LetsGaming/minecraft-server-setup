@@ -277,7 +277,7 @@ async function main() {
         // cache; the decision below then finds every region already read.
         const jobs = listScanJobs({ serverPath, params });
         const progress = progressReporter(jobs.length);
-        await warmCache({ jobs, cacheDir, workers: workersOf(args), onDone: progress.onDone });
+        await warmCache({ jobs, cacheDir, workers: workersOf(args), signals: normalizeParams(params).buildProtection !== "off", onDone: progress.onDone });
       }
       result = scanWorld({ serverPath, params, profile, cacheDir });
     } catch (err) {
@@ -312,7 +312,7 @@ async function main() {
       // Regions the plan touches are read fresh (in parallel); the rest may come from the cache.
       const touched = touchedKeys(plan);
       const jobs = listScanJobs({ serverPath, params: plan.params }).filter((j) => touched.has(`${j.dimId}:${j.rx},${j.rz}`));
-      await warmCache({ jobs, cacheDir: CACHE_DIR, workers: workersOf(args), force: true });
+      await warmCache({ jobs, cacheDir: CACHE_DIR, workers: workersOf(args), force: true, signals: plan.params.buildProtection !== "off" });
       const res = applyPlan({
         serverPath,
         plan,

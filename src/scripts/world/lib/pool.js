@@ -17,10 +17,10 @@ function defaultWorkers() {
  * reports it), so one bad file never stops the others.
  *
  * @param {{jobs: Array<{file: string, dimId: string, rx: number, rz: number}>, cacheDir: string,
- *   workers?: number, force?: boolean, onDone?: (r: {hit: boolean, chunks: number}) => void}} args
+ *   workers?: number, force?: boolean, signals?: boolean, onDone?: (r: {hit: boolean, chunks: number}) => void}} args
  * @returns {Promise<{hits: number, misses: number, failed: number}>}
  */
-function warmCache({ jobs, cacheDir, workers = defaultWorkers(), force = false, onDone = () => {} }) {
+function warmCache({ jobs, cacheDir, workers = defaultWorkers(), force = false, signals = false, onDone = () => {} }) {
   const tally = { hits: 0, misses: 0, failed: 0 };
   const note = (r) => {
     if (r.error) tally.failed++;
@@ -32,7 +32,7 @@ function warmCache({ jobs, cacheDir, workers = defaultWorkers(), force = false, 
   if (workers <= 0 || jobs.length < 2) {
     for (const job of jobs) {
       try {
-        note(ensureRecord({ ...job, cacheDir, force }));
+        note(ensureRecord({ ...job, cacheDir, force, signals }));
       } catch {
         note({ error: "failed" });
       }
@@ -62,7 +62,7 @@ function warmCache({ jobs, cacheDir, workers = defaultWorkers(), force = false, 
         return;
       }
       const job = jobs[next];
-      w.postMessage({ ...job, id: next, cacheDir, force });
+      w.postMessage({ ...job, id: next, cacheDir, force, signals });
       next++;
     };
 

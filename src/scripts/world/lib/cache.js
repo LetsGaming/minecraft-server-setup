@@ -13,10 +13,10 @@ const fs = require("fs");
 const path = require("path");
 const region = require("./region");
 
-const VERSION = 1;
+const VERSION = 2;
 const MAGIC = 0x50524e43; // "PRNC"
 const FP_BYTES = 20;
-const BODY = region.CHUNKS * (1 + 4 + 8);
+const BODY = 1 + region.CHUNKS * (1 + 4 + 8 + 2);
 const SIZE = 4 + 4 + FP_BYTES + BODY;
 
 /**
@@ -43,8 +43,11 @@ function fingerprint(file) {
 
 const entryFile = (dir, dimId, rx, rz) => path.join(dir, dimId, `r.${rx}.${rz}.meta`);
 
-/** The cached record for a region if its fingerprint still matches. */
-function load(dir, dimId, rx, rz, fp) {
+/**
+ * The cached record for a region if its fingerprint still matches. A record read
+ * without signals does not answer a request that needs them.
+ */
+function load(dir, dimId, rx, rz, fp, needSignals = false) {
   if (!fp) return null;
   let buf;
   try {
@@ -54,14 +57,19 @@ function load(dir, dimId, rx, rz, fp) {
   }
   if (buf.length !== SIZE || buf.readUInt32BE(0) !== MAGIC || buf.readUInt32BE(4) !== VERSION) return null;
   if (!buf.subarray(8, 8 + FP_BYTES).equals(fp)) return null;
-  const body = buf.subarray(8 + FP_BYTES);
+  const full = buf.subarray(8 + FP_BYTES);
+  const signals = full[0] === 1;
+  if (needSignals && !signals) return null;
+  const body = full.subarray(1);
   const n = region.CHUNKS;
   const state = new Uint8Array(body.subarray(0, n));
   const bytes = new Uint32Array(n);
   const ticks = new Float64Array(n);
+  const flags = new Uint16Array(n);
   for (let i = 0; i < n; i++) bytes[i] = body.readUInt32BE(n + i * 4);
   for (let i = 0; i < n; i++) ticks[i] = body.readDoubleBE(n + n * 4 + i * 8);
-  return { state, ticks, bytes };
+  for (let i = 0; i < n; i++) flags[i] = body.readUInt16BE(n + n * 4 + n * 8 + i * 2);
+  return { state, ticks, bytes, flags, signals };
 }
 
 /** Store a record under the fingerprint it was read with. Best effort: a failed write only costs a later rescan. */
@@ -72,10 +80,13 @@ function store(dir, dimId, rx, rz, fp, record) {
   buf.writeUInt32BE(MAGIC, 0);
   buf.writeUInt32BE(VERSION, 4);
   fp.copy(buf, 8);
-  const body = buf.subarray(8 + FP_BYTES);
+  const full = buf.subarray(8 + FP_BYTES);
+  full[0] = record.signals ? 1 : 0;
+  const body = full.subarray(1);
   Buffer.from(record.state.buffer, record.state.byteOffset, n).copy(body, 0);
   for (let i = 0; i < n; i++) body.writeUInt32BE(record.bytes[i], n + i * 4);
   for (let i = 0; i < n; i++) body.writeDoubleBE(record.ticks[i], n + n * 4 + i * 8);
+  for (let i = 0; i < n; i++) body.writeUInt16BE(record.flags[i] ?? 0, n + n * 4 + n * 8 + i * 2);
   const file = entryFile(dir, dimId, rx, rz);
   const tmp = `${file}.${process.pid}.tmp`;
   try {

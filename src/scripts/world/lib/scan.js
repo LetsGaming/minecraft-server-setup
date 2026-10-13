@@ -8,7 +8,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { inhabitedTime } = require("./nbt");
+const { inhabitedTime, chunkSignals } = require("./nbt");
 const region = require("./region");
 
 /** Per-slot state of a chunk in a record. */
@@ -19,6 +19,8 @@ const STATE = { EMPTY: 0, OK: 1, UNREADABLE: 2 };
  * @property {Uint8Array} state    STATE per slot
  * @property {Float64Array} ticks  InhabitedTime per slot (0 unless state is OK)
  * @property {Uint32Array} bytes   sector bytes the chunk occupies in the region file
+ * @property {Uint16Array} flags   SIGNAL bits per slot (see nbt.js); only meaningful when `signals` is true
+ * @property {boolean} signals     whether `flags` were read
  */
 
 /**
@@ -28,7 +30,7 @@ const STATE = { EMPTY: 0, OK: 1, UNREADABLE: 2 };
  *
  * @returns {RegionRecord | null}
  */
-function readRegionRecord(file, rx, rz, timed = (_n, fn) => fn(), onChunk = () => {}) {
+function readRegionRecord(file, rx, rz, timed = (_n, fn) => fn(), onChunk = () => {}, { signals = false } = {}) {
   let buf;
   try {
     buf = timed("read", () => fs.readFileSync(file));
@@ -41,6 +43,7 @@ function readRegionRecord(file, rx, rz, timed = (_n, fn) => fn(), onChunk = () =
   const state = new Uint8Array(region.CHUNKS);
   const ticks = new Float64Array(region.CHUNKS);
   const bytes = new Uint32Array(region.CHUNKS);
+  const flags = new Uint16Array(region.CHUNKS);
   const dir = path.dirname(file);
   let any = false;
 
@@ -55,7 +58,13 @@ function readRegionRecord(file, rx, rz, timed = (_n, fn) => fn(), onChunk = () =
     }
     let inhabited;
     try {
-      inhabited = timed("nbt", () => inhabitedTime(res.data));
+      if (signals) {
+        const found = timed("nbt", () => chunkSignals(res.data));
+        inhabited = found.inhabited;
+        flags[slot] = found.flags;
+      } else {
+        inhabited = timed("nbt", () => inhabitedTime(res.data));
+      }
     } catch {
       state[slot] = STATE.UNREADABLE;
       continue;
@@ -68,7 +77,7 @@ function readRegionRecord(file, rx, rz, timed = (_n, fn) => fn(), onChunk = () =
     state[slot] = STATE.OK;
     ticks[slot] = inhabited;
   }
-  return any ? { state, ticks, bytes } : null;
+  return any ? { state, ticks, bytes, flags, signals } : null;
 }
 
 /** Sector bytes per slot of a sibling folder's file (entities, poi); all zero when absent. */

@@ -8,6 +8,7 @@
  *
  * --workers=<n> reads on n worker threads into a cold cache, then decides: the
  * reported time is read plus decision, as the CLI does it (0 is the same inline).
+ * --no-signals turns build protection off, to show what reading the signals costs.
  * --cache scans twice and reports the repeat scan (cache warm).
  * Options: --padding=<longs per chunk> (chunk size, default 400), --keep to
  * leave the synthetic world on disk, --seed=<n>. It only ever calls scan, never
@@ -66,6 +67,7 @@ function buildWorld({ chunks, padding, seed }) {
 }
 
 async function main() {
+  const benchParams = arg("no-signals", false) ? { buildProtection: "off" } : {};
   const worldArg = arg("world", null);
   const chunks = Number(arg("chunks", 100000));
   const padding = Number(arg("padding", 400));
@@ -87,10 +89,10 @@ async function main() {
     const profile = newProfile();
     const t0 = process.hrtime.bigint();
     if (workers !== null) {
-      await warmCache({ jobs: listScanJobs({ serverPath, params: {} }), cacheDir, workers: Number(workers) });
+      await warmCache({ jobs: listScanJobs({ serverPath, params: benchParams }), cacheDir, workers: Number(workers), signals: benchParams.buildProtection !== "off" });
       if (arg("cache", false)) profile.phases.warm = Number(process.hrtime.bigint() - t0) / 1e6;
     }
-    const { plan } = scanWorld({ serverPath, params: {}, profile, cacheDir });
+    const { plan } = scanWorld({ serverPath, params: benchParams, profile, cacheDir });
     return { profile, plan, totalMs: Number(process.hrtime.bigint() - t0) / 1e6 };
   };
   // With --cache the first scan fills the cache and the second is the repeat scan that is reported.

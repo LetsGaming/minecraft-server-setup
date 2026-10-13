@@ -21,6 +21,7 @@ const cache = require("./cache");
 const scan = require("./scan");
 const region = require("./region");
 const world = require("./world");
+const { SIGNAL } = require("./nbt");
 
 const TICKS_PER_MINUTE = 20 * 60;
 
@@ -36,7 +37,22 @@ const CELL = {
   MANUAL_SOFT: 6,
   /** Chosen by hand, overriding a hard protection (needs `selection.allowProtected`). */
   MANUAL_HARD: 7,
+  /** Would be deleted by the rules, but holds things players usually put there (see isUnexplained). */
+  UNCERTAIN: 8,
 };
+
+/**
+ * Block entities (chests, signs, furnaces, beds, redstone parts, anything modded) in a
+ * chunk that has neither a generated structure nor a spawner to account for them.
+ * Villages, mineshafts and ruins hold plenty of these by themselves, and a dungeon is
+ * a spawner and a chest, so those do not count. What is left is mostly built by hand.
+ * Advisory: it can be wrong both ways, which is why it only keeps a chunk, never deletes.
+ */
+function isUnexplained(flags) {
+  const placed = SIGNAL.CONTAINER | SIGNAL.SIGN | SIGNAL.FURNACE | SIGNAL.BED | SIGNAL.REDSTONE | SIGNAL.OTHER_BLOCK_ENTITY;
+  const natural = SIGNAL.STRUCTURE_START | SIGNAL.STRUCTURE_REFERENCE | SIGNAL.SPAWNER;
+  return (flags & placed) !== 0 && (flags & natural) === 0;
+}
 
 /** Cells that go: what the rules found and what was chosen by hand. */
 const isDeletion = (c) => c === CELL.DELETE || c === CELL.MANUAL_SOFT || c === CELL.MANUAL_HARD;
@@ -53,7 +69,11 @@ const DEFAULT_PARAMS = Object.freeze({
   zones: [],
   dimensions: null,
   selection: Object.freeze({ ops: [], allowProtected: false }),
+  buildProtection: "likely",
 });
+
+/** "off" ignores what a chunk contains; "likely" keeps chunks with block entities no structure explains. */
+const BUILD_PROTECTION = ["off", "likely"];
 
 /**
  * A manual selection as an ordered list of rectangles in chunk coordinates:
@@ -109,6 +129,7 @@ function normalizeParams(input = {}) {
     zones,
     dimensions: Array.isArray(input.dimensions) ? input.dimensions.filter((d) => typeof d === "string") : null,
     selection: normalizeSelection(input.selection),
+    buildProtection: BUILD_PROTECTION.includes(input.buildProtection) ? input.buildProtection : DEFAULT_PARAMS.buildProtection,
   };
 }
 
@@ -175,6 +196,7 @@ function heatLevel(minutes) {
  * enough per-chunk data to build the plan and the map.
  */
 function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profile, cacheDir, fresh }) {
+  const signals = params.buildProtection !== "off";
   const thresholdTicks = params.thresholdMinutes * TICKS_PER_MINUTE;
   const regions = listRegions(dimDir);
   const cells = new Map(); // "rx,rz" -> {cell:Uint8Array(1024), heat:Uint8Array(1024), bytes:Uint32Array(1024)}
@@ -186,7 +208,7 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profil
     let fp = null;
     if (cacheDir && !fresh.has(key)) {
       fp = timed(profile, "fingerprint", () => cache.fingerprint(r.file));
-      record = timed(profile, "cacheLoad", () => cache.load(cacheDir, dimId, r.x, r.z, fp));
+      record = timed(profile, "cacheLoad", () => cache.load(cacheDir, dimId, r.x, r.z, fp, signals));
       if (profile) profile.counts[record ? "cacheHits" : "cacheMisses"]++;
     }
     if (!record) {
@@ -196,6 +218,7 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profil
         r.z,
         (name, fn) => timed(profile, name, fn),
         profile ? () => profile.counts.chunks++ : undefined,
+        { signals },
       );
       if (cacheDir && record) {
         fp = fp ?? cache.fingerprint(r.file);
@@ -215,7 +238,9 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profil
         continue;
       }
       heat[slot] = heatLevel(record.ticks[slot] / TICKS_PER_MINUTE);
-      cell[slot] = record.ticks[slot] < thresholdTicks ? CELL.DELETE : CELL.ACTIVE;
+      if (record.ticks[slot] >= thresholdTicks) cell[slot] = CELL.ACTIVE;
+      else if (signals && isUnexplained(record.flags[slot])) cell[slot] = CELL.UNCERTAIN;
+      else cell[slot] = CELL.DELETE;
     }
 
     cells.set(`${r.x},${r.z}`, { rx: r.x, rz: r.z, cell, heat, bytes: record.bytes, file: r.file });
@@ -319,7 +344,7 @@ function applySelection(dimId, cells, selection, rects) {
   return result;
 }
 
-const isKeep = (c) => c === CELL.ACTIVE || c === CELL.PROTECTED || c === CELL.UNREADABLE;
+const isKeep = (c) => c === CELL.ACTIVE || c === CELL.PROTECTED || c === CELL.UNREADABLE || c === CELL.UNCERTAIN;
 
 /**
  * A deletion candidate within `n` chunks (Chebyshev distance) of anything that
@@ -449,6 +474,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDi
       protected: 0,
       buffer: 0,
       unreadable: 0,
+      uncertain: 0,
       manualSoft: manual?.soft ?? 0,
       manualHard: manual?.hard ?? 0,
       manualBlocked: manual?.blocked ?? 0,
@@ -479,6 +505,7 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDi
         else if (c === CELL.PROTECTED) counts.protected++;
         else if (c === CELL.BUFFER) counts.buffer++;
         else if (c === CELL.UNREADABLE) counts.unreadable++;
+        else if (c === CELL.UNCERTAIN) counts.uncertain++;
         if (isDeletion(c)) {
           bytes += entry.bytes[slot] + (siblings ? siblings[0][slot] + siblings[1][slot] : 0);
         }
@@ -695,6 +722,7 @@ function isInside(parent, child) {
 
 module.exports = {
   CELL,
+  isUnexplained,
   isDeletion,
   DEFAULT_PARAMS,
   TICKS_PER_MINUTE,
