@@ -8,7 +8,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { chunkMeta } = require("./nbt");
+const { inhabitedTime } = require("./nbt");
 const region = require("./region");
 
 /** Per-slot state of a chunk in a record. */
@@ -53,20 +53,20 @@ function readRegionRecord(file, rx, rz, timed = (_n, fn) => fn(), onChunk = () =
       state[slot] = STATE.UNREADABLE;
       continue;
     }
-    let meta;
+    let inhabited;
     try {
-      meta = timed("nbt", () => chunkMeta(res.data));
+      inhabited = timed("nbt", () => inhabitedTime(res.data));
     } catch {
       state[slot] = STATE.UNREADABLE;
       continue;
     }
     // A chunk with no InhabitedTime at all is not known to be unused.
-    if (typeof meta.InhabitedTime !== "number") {
+    if (typeof inhabited !== "number") {
       state[slot] = STATE.UNREADABLE;
       continue;
     }
     state[slot] = STATE.OK;
-    ticks[slot] = meta.InhabitedTime;
+    ticks[slot] = inhabited;
   }
   return any ? { state, ticks, bytes } : null;
 }

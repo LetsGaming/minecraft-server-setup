@@ -202,3 +202,19 @@ test("--apply on worker threads deletes the same chunks", withSetup((s) => {
   assert.equal(r.last.deletedChunks, scan.totals.delete);
   assert.equal(s.run(["--scan", "--workers=2", `--params=${JSON.stringify(LEAN)}`]).last.totals.delete, 0);
 }));
+
+test("--dimensions lists what a world has without reading chunks", withSetup((s) => {
+  const r = s.run(["--dimensions"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(r.last, { ok: true, dimensions: [{ id: "overworld", regions: 1 }] });
+}));
+
+test("a scan limited to one dimension reads only that dimension", withSetup((s) => {
+  const nether = path.join(s.server.worldDir, "DIM-1");
+  fx.writeRegion(path.join(nether, "region", "r.0.0.mca"), 0, 0, [{ x: 0, z: 0, nbt: fx.chunkModern({ x: 0, z: 0, inhabited: 0 }) }]);
+  const only = s.run(["--scan", `--params=${JSON.stringify({ ...LEAN, dimensions: ["the_nether"] })}`]);
+  assert.deepEqual(only.last.dimensions.map((d) => d.id), ["the_nether"]);
+  assert.equal(only.last.totals.chunks, 1);
+  const cached = path.join(s.scripts, "common", "prune", "cache");
+  assert.deepEqual(fs.readdirSync(cached), ["the_nether"]);
+}));

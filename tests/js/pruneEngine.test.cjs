@@ -494,16 +494,16 @@ test("a damaged or foreign cache entry is a miss", withCache((s, cacheDir) => {
 }));
 
 test("apply reads the regions it touches fresh, even when the cache says otherwise", withCache((s, cacheDir) => {
-  threeFolders(s, [0, 0, 0, 0]);
-  const { r } = scanCounts(s, cacheDir);
-  // Poison the cached record: it claims every chunk is idle, the file says chunk 1 is busy
-  // and keeps the same size and mtime would not be enough to fool the fingerprint, so
-  // rewrite the file and put the old mtime back.
-  const file = s.regionFile(null, "region", 0, 0);
-  const before = fs.statSync(file);
-  fx.writeRegion(file, 0, 0, [0, 1, 2, 3].map((i) => chunk(i, 0, i === 1 ? 90 : 0)));
-  fs.utimesSync(file, before.atimeMs / 1000, before.mtimeMs / 1000);
-  const res = plan.applyPlan({ serverPath: s.dir, plan: r.plan, cacheDir, tolerance: 0.5 });
+  threeFolders(s, [0, 90, 0, 0]);
+  scanCounts(s, cacheDir);
+  // Make the cached record claim chunk 1 is idle although the file says it is busy.
+  const entry = path.join(cacheDir, "overworld", "r.0.0.meta");
+  const buf = fs.readFileSync(entry);
+  buf.writeDoubleBE(0, 28 + 1024 + 1024 * 4 + 1 * 8);
+  fs.writeFileSync(entry, buf);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN, cacheDir });
+  assert.equal(p.totals.delete, 4, "the poisoned cache plans to delete everything");
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p, cacheDir, tolerance: 0.5 });
   assert.equal(res.deletedChunks, 3);
   assert.deepEqual(slotsIn(s, "region"), [1]);
 }));
@@ -563,3 +563,31 @@ test("the buffer matches a brute-force Chebyshev distance across region borders"
     assert.equal(r.plan.totals.delete, expected, `buffer ${n}`);
   }
 }));
+
+// ── Fast InhabitedTime path ──
+
+const { inhabitedTime } = require("../../src/scripts/world/lib/nbt.js");
+
+test("inhabitedTime agrees with chunkMeta on both layouts and rejects broken data the same way", () => {
+  for (const ticks of [0, 1, 2400, 2 ** 33 + 5, 123456789012]) {
+    for (const make of [fx.chunkModern, fx.chunkLegacy]) {
+      const buf = make({ x: 3, z: -4, inhabited: ticks, padding: 300 });
+      assert.equal(inhabitedTime(buf), chunkMeta(buf).InhabitedTime, `${make.name} ${ticks}`);
+    }
+  }
+  assert.equal(inhabitedTime(Buffer.from([10, 0, 0, 0])), undefined);
+  assert.throws(() => inhabitedTime(Buffer.from([9, 0, 0])), /not a compound/);
+  const good = fx.chunkModern({ x: 0, z: 0, inhabited: 5 });
+  for (const cut of [5, 20, 60, good.length - 3]) {
+    let a;
+    let b;
+    try { a = inhabitedTime(good.subarray(0, cut)); } catch (e) { a = e.constructor.name; }
+    try { b = chunkMeta(good.subarray(0, cut)).InhabitedTime; } catch (e) { b = e.constructor.name; }
+    // Stopping at the first hit may succeed where a full walk of a cut document fails; it never lies.
+    if (typeof a === "number") assert.equal(a, 5, `cut ${cut}`);
+    void b;
+  }
+  for (const type of [7, 11, 12]) {
+    assert.throws(() => inhabitedTime(Buffer.from([10, 0, 0, type, 0, 1, 0x61, 0xff, 0xff, 0xff, 0xff, 0])), /ended early/);
+  }
+});

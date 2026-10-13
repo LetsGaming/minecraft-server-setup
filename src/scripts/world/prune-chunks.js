@@ -6,7 +6,9 @@
  *
  * Usage (every mode prints one JSON object per line with --json):
  *   node prune-chunks.js --status
+ *   node prune-chunks.js --dimensions             (names and region counts, no chunk is read)
  *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path>] [--profile] [--no-cache] [--workers=<n>]
+ *   node prune-chunks.js --apply  --plan=<id> [--workers=<n>] [--time-budget=<seconds>]
  *   node prune-chunks.js --apply  --plan=<id>
  *   node prune-chunks.js --settings=get
  *   node prune-chunks.js --settings=set --params=<json>
@@ -24,12 +26,14 @@ const fs = require("fs");
 const path = require("path");
 const { parseArgs } = require("../update/lib/args");
 const { loadVariables } = require("../update/lib/variables");
-const { scanWorld, listScanJobs, newProfile, applyPlan, normalizeParams, touchedKeys } = require("./lib/plan");
+const { listDimensions, scanWorld, listScanJobs, newProfile, applyPlan, normalizeParams, touchedKeys } = require("./lib/plan");
 const { warmCache, defaultWorkers } = require("./lib/pool");
 
 const SCRIPTS_DIR = path.resolve(__dirname, "..");
 const PRUNE_DIR = path.join(SCRIPTS_DIR, "common", "prune");
 const CACHE_DIR = path.join(PRUNE_DIR, "cache");
+const JOURNAL_FILE = path.join(PRUNE_DIR, "prune-apply.journal");
+const DEFAULT_TIME_BUDGET_SECONDS = 45 * 60;
 const SETTINGS_FILE = path.join(PRUNE_DIR, "settings.json");
 const PLANS_KEPT = 5;
 const PLAN_ID_RE = /^[a-f0-9]{16}$/;
@@ -75,6 +79,26 @@ function prunePlans(keepId) {
   for (const p of plans) {
     if (keep.has(p.id)) continue;
     for (const n of names) if (n.startsWith(`${p.id}.`)) fs.rmSync(path.join(PRUNE_DIR, n), { force: true });
+  }
+}
+
+/**
+ * A note that an apply started and has not finished. A clean finish removes it; a
+ * failed apply leaves it marked "failed", and a process that died leaves it as
+ * "applying". Either way the world may be half pruned, so `--status` reports it
+ * until the backup is restored or a later apply finishes.
+ */
+function writeJournal(entry) {
+  ensureDir();
+  writePrivate(JOURNAL_FILE, JSON.stringify({ version: 1, ...entry }));
+}
+
+function readJournal() {
+  try {
+    const j = JSON.parse(fs.readFileSync(JOURNAL_FILE, "utf8"));
+    return j && typeof j.state === "string" ? j : null;
+  } catch {
+    return null;
   }
 }
 
@@ -180,6 +204,17 @@ function progressReporter(total) {
   };
 }
 
+/** NDJSON progress for the delete, at most twice a second. */
+function progressApply() {
+  let last = 0;
+  return ({ done, total }) => {
+    const now = Date.now();
+    if (now - last < 500 && done < total) return;
+    last = now;
+    out({ phase: "prune", done, total });
+  };
+}
+
 function workersOf(args) {
   const raw = args.get("workers");
   if (raw === null || raw === undefined) return defaultWorkers();
@@ -189,13 +224,14 @@ function workersOf(args) {
 
 async function main() {
   const args = parseArgs({
-    flags: { params: null, "params-file": null, plan: null, settings: null, workers: null },
-    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache"],
+    flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null },
+    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions"],
   });
   const vars = loadVariables(path.join(SCRIPTS_DIR, "common", "variables.txt"), { optional: true });
 
   if (args.bool("status")) {
-    out({ ok: true, engine: ENGINE.name, version: ENGINE.version });
+    const journal = readJournal();
+    out({ ok: true, engine: ENGINE.name, version: ENGINE.version, ...(journal ? { unfinishedApply: journal } : {}) });
     return;
   }
 
@@ -214,6 +250,16 @@ async function main() {
 
   const serverPath = vars.SERVER_PATH;
   if (!serverPath || !fs.existsSync(serverPath)) fail("server_path", "SERVER_PATH does not exist.");
+
+  if (args.bool("dimensions")) {
+    // A directory listing, so the dashboard can offer a choice without reading any chunk.
+    try {
+      out({ ok: true, dimensions: listDimensions({ serverPath }) });
+    } catch (err) {
+      fail("scan_failed", err.message);
+    }
+    return;
+  }
 
   if (args.bool("scan")) {
     let result;
@@ -256,20 +302,34 @@ async function main() {
     }
     if (serverIsRunning(vars)) fail("server_running", "The server must be stopped before chunks are deleted.");
     out({ phase: "prune", msg: "Deleting unused chunks" });
+    const budget = Number(args.get("time-budget") ?? DEFAULT_TIME_BUDGET_SECONDS);
+    const startedAt = new Date().toISOString();
+    writeJournal({ state: "applying", plan: id, startedAt, pid: process.pid });
     try {
       // Regions the plan touches are read fresh (in parallel); the rest may come from the cache.
       const touched = touchedKeys(plan);
       const jobs = listScanJobs({ serverPath, params: plan.params }).filter((j) => touched.has(`${j.dimId}:${j.rx},${j.rz}`));
       await warmCache({ jobs, cacheDir: CACHE_DIR, workers: workersOf(args), force: true });
-      const res = applyPlan({ serverPath, plan, cacheDir: CACHE_DIR, reread: new Set() });
+      const res = applyPlan({
+        serverPath,
+        plan,
+        cacheDir: CACHE_DIR,
+        reread: new Set(),
+        timeBudgetMs: Number.isFinite(budget) && budget > 0 ? budget * 1000 : 0,
+        onProgress: progressApply(),
+      });
+      fs.rmSync(JOURNAL_FILE, { force: true });
       out({ ok: true, ...res });
     } catch (err) {
-      fail(["plan_stale", "plan_invalid"].includes(err.code) ? err.code : "apply_failed", err.message);
+      // Refused before anything was deleted: nothing is half done.
+      if (["plan_stale", "plan_invalid"].includes(err.code)) fs.rmSync(JOURNAL_FILE, { force: true });
+      else writeJournal({ state: "failed", plan: id, startedAt, error: err.message, code: err.code ?? null });
+      fail(["plan_stale", "plan_invalid", "time_budget"].includes(err.code) ? err.code : "apply_failed", err.message);
     }
     return;
   }
 
-  fail("usage", "Use --status, --scan, --apply or --settings.");
+  fail("usage", "Use --status, --dimensions, --scan, --apply or --settings.");
 }
 
 if (require.main === module) {

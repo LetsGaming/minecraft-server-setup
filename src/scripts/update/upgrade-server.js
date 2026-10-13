@@ -37,6 +37,8 @@ const { spawnSync } = require("child_process");
 const { parseArgs } = require("./lib/args");
 const { loadVariables } = require("./lib/variables");
 
+/** The prune stops itself after this long and the job rolls back, rather than being killed mid-delete. */
+const PRUNE_TIME_BUDGET_SECONDS = 45 * 60;
 const DEFAULT_COUNTDOWN_SECONDS = 30;
 const DEFAULT_START_TIMEOUT_SECONDS = 300;
 const POLL_SECONDS = 2;
@@ -237,11 +239,11 @@ function runUpgrade(deps, opts) {
   let pruneResult = null;
   if (opts.prunePlan) {
     say("prune", "running", "Deleting unused chunks");
-    const pruned = deps.run("prune", ["--apply", `--plan=${opts.prunePlan}`, "--json"]);
+    const pruned = deps.run("prune", ["--apply", `--plan=${opts.prunePlan}`, `--time-budget=${PRUNE_TIME_BUDGET_SECONDS}`, "--json"]);
     pruneResult = parseLines(pruned.stdout).find((l) => "ok" in l) ?? null;
     if (pruned.code !== 0 || !pruneResult || !pruneResult.ok) {
       say("prune", "error", pruneResult?.error ?? "The prune failed. The whole job is rolled back.");
-      return rollback(pruneResult?.code === "plan_stale" ? "prune_stale" : "prune_failed");
+      return rollback(pruneResult?.code === "plan_stale" ? "prune_stale" : pruneResult?.code === "time_budget" ? "prune_timeout" : "prune_failed");
     }
     say("prune", "done", `${pruneResult.deletedChunks} chunks deleted`, {
       deletedChunks: pruneResult.deletedChunks,

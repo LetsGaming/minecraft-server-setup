@@ -196,8 +196,9 @@ function removeChunks(file, slotsToRemove) {
   const result = Buffer.concat([out, ...parts]);
 
   const tmp = `${file}.prune-${process.pid}.tmp`;
-  fs.writeFileSync(tmp, result);
+  writeDurably(tmp, result);
   fs.renameSync(tmp, file);
+  syncDirectory(path.dirname(file));
   return {
     kept: keep.length,
     removed: removedSlots.length,
@@ -206,6 +207,58 @@ function removeChunks(file, slotsToRemove) {
     bytesAfter: result.length,
     keptHashes,
   };
+}
+
+/** Write a file and flush it to disk before it can be renamed over anything. */
+function writeDurably(file, data) {
+  const fd = fs.openSync(file, "w");
+  try {
+    fs.writeSync(fd, data, 0, data.length, 0);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Flush a directory entry (the rename). Not possible on Windows, where it is skipped. */
+function syncDirectory(dir) {
+  let fd;
+  try {
+    fd = fs.openSync(dir, "r");
+    fs.fsyncSync(fd);
+  } catch {
+    /* unsupported here; the rename itself is still atomic */
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/** True when a region file can be compacted without aliasing or losing a chunk. */
+function isSafeToRewrite(file) {
+  try {
+    const header = readHeader(fs.readFileSync(file));
+    return header === null || unsafeSlots(header).size === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove temp files an interrupted rewrite left beside the region files in `dir`. */
+function removeStaleTemps(dir) {
+  let removed = 0;
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (/\.mca\.prune-\d+\.tmp$/.test(name)) {
+      fs.rmSync(path.join(dir, name), { force: true });
+      removed++;
+    }
+  }
+  return removed;
 }
 
 /**
@@ -251,6 +304,8 @@ module.exports = {
   removeChunks,
   verifyKept,
   unsafeSlots,
+  isSafeToRewrite,
+  removeStaleTemps,
   sectorOffset,
   sectorCount,
 };

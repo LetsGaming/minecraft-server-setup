@@ -412,12 +412,25 @@ function listScanJobs({ serverPath, params: rawParams }) {
   return jobs;
 }
 
+/** The dimensions of a world and how many region files each has. Reads directory listings only. */
+function listDimensions({ serverPath }) {
+  return world.discoverDimensions(world.worldDirOf(serverPath)).map((dim) => {
+    let regions = 0;
+    try {
+      regions = listRegions(dim.dir).length;
+    } catch {
+      /* a dimension folder without region files */
+    }
+    return { id: dim.id, regions };
+  });
+}
+
 /** "dimension:rx,rz" of every region a plan deletes from. */
 function touchedKeys(plan) {
   const keys = new Set();
   for (const dim of plan.dimensions) {
     for (const key of Object.keys(dim.deletions)) {
-      const m = /^r.(-?d+).(-?d+)$/.exec(key);
+      const m = /^r\.(-?\d+)\.(-?\d+)$/.exec(key);
       if (m) keys.add(`${dim.id}:${m[1]},${m[2]}`);
     }
   }
@@ -447,7 +460,7 @@ function planHash(plan) {
  *
  * @param {{serverPath: string, plan: object, tolerance?: number, onProgress?: Function}} args
  */
-function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = null, reread: rereadOverride = null }) {
+function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = null, reread: rereadOverride = null, timeBudgetMs = 0 }) {
   if (!plan || typeof plan.hash !== "string" || planHash(plan) !== plan.hash) {
     const err = new Error("The plan does not match its own hash.");
     err.code = "plan_invalid";
@@ -486,9 +499,15 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = n
   let skippedFiles = 0;
   let removedFiles = 0;
   let bytesFreed = 0;
-  const touched = [];
+  const deadline = timeBudgetMs > 0 ? Date.now() + timeBudgetMs : Infinity;
+  const cleaned = new Set();
 
-  for (const { dim, key, slots } of todo) {
+  for (const [index, { dim, key, slots }] of todo.entries()) {
+    if (Date.now() > deadline) {
+      const err = new Error("The prune ran out of its time budget and stopped before finishing.");
+      err.code = "time_budget";
+      throw err;
+    }
     // The folder comes from the fresh scan, never from the stored plan.
     const freshDim = freshDims.get(dim.id);
     const dimDir = path.join(serverPath, ...freshDim.dir.split("/").filter(Boolean));
@@ -500,12 +519,29 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = n
 
     for (const folder of world.CHUNK_FOLDERS) {
       const dir = path.join(dimDir, folder);
+      if (!cleaned.has(dir)) {
+        cleaned.add(dir);
+        region.removeStaleTemps(dir);
+      }
+    }
+
+    // A region the engine cannot rewrite safely is left whole, in every folder.
+    const regionFile = path.join(dimDir, "region", region.regionName(rx, rz));
+    if (!fs.existsSync(regionFile) || !region.isSafeToRewrite(regionFile)) {
+      skippedFiles++;
+      continue;
+    }
+
+    // Entities and poi first, the region file last: a crash in between loses only
+    // entities of chunks that were about to go, never leaves entities pointing at
+    // a chunk that was deleted while they were kept.
+    for (const folder of [...world.CHUNK_FOLDERS].reverse()) {
+      const dir = path.join(dimDir, folder);
       const file = path.join(dir, region.regionName(rx, rz));
       if (!fs.existsSync(file)) continue;
       const res = region.removeChunks(file, slots);
       if (res.unsafe) {
         skippedFiles++;
-        if (folder === "region") break;
         continue;
       }
       if (res.removed === 0) continue;
@@ -524,22 +560,14 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = n
         bytesFreed += res.bytesBefore;
       } else {
         bytesFreed += res.bytesBefore - res.bytesAfter;
-        touched.push({ file, keptHashes: res.keptHashes });
+        const problem = region.verifyKept(file, res.keptHashes);
+        if (problem) throw new Error(`${path.basename(file)} is wrong after the prune: ${problem}.`);
       }
     }
-    if (onProgress) onProgress();
+    if (onProgress) onProgress({ done: index + 1, total: todo.length });
   }
 
-  validate(touched);
   return { deletedChunks, removedFiles, bytesFreed, planned, skippedFiles };
-}
-
-/** Every chunk kept in a rewritten region file must be byte for byte what was copied. */
-function validate(touched) {
-  for (const t of touched) {
-    const problem = region.verifyKept(t.file, t.keptHashes);
-    if (problem) throw new Error(`${path.basename(t.file)} is wrong after the prune: ${problem}.`);
-  }
 }
 
 /** True when `child` is `parent` or lies below it. */
@@ -555,6 +583,7 @@ module.exports = {
   normalizeParams,
   scanWorld,
   listScanJobs,
+  listDimensions,
   touchedKeys,
   newProfile,
   applyPlan,

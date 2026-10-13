@@ -251,4 +251,108 @@ function chunkMeta(buf) {
   return found;
 }
 
-module.exports = { TAG, NbtError, parseNbt, chunkMeta };
+// ── Fast path: InhabitedTime only ──
+
+const INHABITED = Buffer.from("InhabitedTime");
+const LEVEL = Buffer.from("Level");
+
+function overrun() {
+  return new NbtError("NBT ended early");
+}
+
+/** Position after a value of `type` that starts at `pos`. Names and strings are never decoded. */
+function skipAt(buf, pos, type) {
+  const end = buf.length;
+  switch (type) {
+    case TAG.BYTE:
+      pos += 1;
+      break;
+    case TAG.SHORT:
+      pos += 2;
+      break;
+    case TAG.INT:
+    case TAG.FLOAT:
+      pos += 4;
+      break;
+    case TAG.LONG:
+    case TAG.DOUBLE:
+      pos += 8;
+      break;
+    case TAG.STRING:
+      if (pos + 2 > end) throw overrun();
+      pos += 2 + buf.readUInt16BE(pos);
+      break;
+    case TAG.BYTE_ARRAY:
+    case TAG.INT_ARRAY:
+    case TAG.LONG_ARRAY: {
+      if (pos + 4 > end) throw overrun();
+      const len = buf.readInt32BE(pos);
+      if (len < 0) throw overrun();
+      pos += 4 + len * (type === TAG.BYTE_ARRAY ? 1 : type === TAG.INT_ARRAY ? 4 : 8);
+      break;
+    }
+    case TAG.LIST: {
+      if (pos + 5 > end) throw overrun();
+      const inner = buf[pos];
+      const count = buf.readInt32BE(pos + 1);
+      pos += 5;
+      if (inner === TAG.END || count <= 0) break;
+      // Fixed-size elements need no walk.
+      const size = FIXED_SIZE[inner];
+      if (size !== undefined) {
+        pos += count * size;
+        break;
+      }
+      for (let i = 0; i < count; i++) pos = skipAt(buf, pos, inner);
+      break;
+    }
+    case TAG.COMPOUND:
+      for (;;) {
+        if (pos >= end) throw overrun();
+        const t = buf[pos++];
+        if (t === TAG.END) return pos;
+        if (pos + 2 > end) throw overrun();
+        pos += 2 + buf.readUInt16BE(pos);
+        pos = skipAt(buf, pos, t);
+      }
+    default:
+      throw new NbtError(`Unknown NBT tag ${type}`);
+  }
+  if (pos > end) throw overrun();
+  return pos;
+}
+
+const FIXED_SIZE = { [TAG.BYTE]: 1, [TAG.SHORT]: 2, [TAG.INT]: 4, [TAG.FLOAT]: 4, [TAG.LONG]: 8, [TAG.DOUBLE]: 8 };
+
+/** InhabitedTime of a chunk (either layout), or undefined when the chunk has none. Stops at the first hit. */
+function inhabitedTime(buf) {
+  if (buf.length < 3 || buf[0] !== TAG.COMPOUND) throw new NbtError("Chunk root is not a compound");
+  let pos = 3 + buf.readUInt16BE(1);
+  const end = buf.length;
+  let inLevel = false;
+  for (;;) {
+    if (pos >= end) throw overrun();
+    const type = buf[pos++];
+    if (type === TAG.END) {
+      if (!inLevel) return undefined;
+      inLevel = false; // end of Level: the root's own END follows
+      continue;
+    }
+    if (pos + 2 > end) throw overrun();
+    const nameLen = buf.readUInt16BE(pos);
+    const nameAt = pos + 2;
+    pos = nameAt + nameLen;
+    if (pos > end) throw overrun();
+    if (type === TAG.LONG && nameLen === INHABITED.length && buf.compare(INHABITED, 0, nameLen, nameAt, pos) === 0) {
+      if (pos + 8 > end) throw overrun();
+      return buf.readInt32BE(pos) * 4294967296 + buf.readUInt32BE(pos + 4);
+    }
+    if (!inLevel && type === TAG.COMPOUND && nameLen === LEVEL.length && buf.compare(LEVEL, 0, nameLen, nameAt, pos) === 0) {
+      inLevel = true;
+      continue;
+    }
+    pos = skipAt(buf, pos, type);
+  }
+}
+
+module.exports = { TAG, NbtError, parseNbt, chunkMeta, inhabitedTime };
