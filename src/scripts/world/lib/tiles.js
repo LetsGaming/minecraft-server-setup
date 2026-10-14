@@ -8,6 +8,7 @@
  * renderer: no biome tint, no shadows beyond a hint of relief.
  */
 
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
@@ -18,6 +19,12 @@ const region = require("./region");
 const world = require("./world");
 
 const SIZE = 512;
+/**
+ * Bumped when the drawing changes, so tiles drawn by an older version are drawn again instead of
+ * being served from the cache until their region changes. 2: 12 bit height maps (worlds over
+ * 2048 tall) were read as 11 bit and drawn in diagonal stripes.
+ */
+const RENDER_VERSION = 2;
 /** Tiles are kept up to this many bytes; the oldest go first. */
 const DEFAULT_MAX_BYTES = 500 * 1024 * 1024;
 
@@ -45,8 +52,8 @@ function paintChunk(terrain, cx, cz, image, heights, water) {
   const heightmap = terrain.heightmaps.WORLD_SURFACE ?? terrain.heightmaps.MOTION_BLOCKING;
   if (!heightmap) return false;
   const minY = terrain.minSectionY * 16;
-  // 9 bits covers 384 blocks; the entry width follows from how many longs the array has.
-  const bits = bitsOfHeightmap(heightmap.length / 8);
+  // 9 bits covers 384 blocks; taller worlds (mods, datapacks) use wider entries.
+  const bits = bitsOfHeightmap(heightmap);
   let painted = false;
   for (let z = 0; z < 16; z++) {
     for (let x = 0; x < 16; x++) {
@@ -93,12 +100,31 @@ function paintChunk(terrain, cx, cz, image, heights, water) {
   return painted;
 }
 
-/** The entry width of a height map with this many longs (9 bits for a 384 tall world, and so on). */
-function bitsOfHeightmap(longs) {
+/**
+ * The entry width of a packed height map (9 bits for a 384 tall world, and so on). The number
+ * of longs alone is ambiguous: 11 and 12 bits both fit 5 entries in a long (52 longs), 13 to 16
+ * bits fit 4 (64 longs). Of the widths that give this many longs, the right one is the
+ * narrowest that leaves every long's unused top bits zero; a narrower guess would read the high
+ * bits of the last entry as padding and shift every entry after the first.
+ */
+function bitsOfHeightmap(raw) {
+  const longs = raw.length / 8;
+  let fallback = null;
   for (let bits = 1; bits <= 16; bits++) {
-    if (Math.ceil(256 / Math.floor(64 / bits)) === longs) return bits;
+    const per = Math.floor(64 / bits);
+    if (Math.ceil(256 / per) !== longs) continue;
+    fallback ??= bits;
+    if (paddingIsZero(raw, longs, per * bits)) return bits;
   }
-  return 9;
+  return fallback ?? 9;
+}
+
+/** Whether bits from \`used\` up are zero in every long of \`raw\` (big endian). */
+function paddingIsZero(raw, longs, used) {
+  for (let i = 0; i < longs; i++) {
+    if (raw.readBigUInt64BE(i * 8) >> BigInt(used) !== 0n) return false;
+  }
+  return true;
 }
 
 /** Light relief: a column higher than its northern neighbour is brighter, lower is darker. */
@@ -248,7 +274,8 @@ function tileFor({ serverPath, dimension, rx, rz, tilesDir, maxBytes = DEFAULT_M
   const file = path.join(dim.dir, "region", region.regionName(rx, rz));
   const fp = cache.fingerprint(file);
   if (!fp) return null;
-  const hex = fp.toString("hex").slice(0, 16);
+  // Same shape as before (16 hex digits, which the wrapper checks), but new for each renderer version.
+  const hex = crypto.createHash("sha256").update(fp).update(`tiles-v${RENDER_VERSION}`).digest("hex").slice(0, 16);
   const dir = path.join(tilesDir, dimension);
   const target = path.join(dir, tileName(rx, rz, hex));
   const relative = path.join(dimension, tileName(rx, rz, hex)).split(path.sep).join("/");

@@ -101,7 +101,7 @@ function packLongs(values, bits) {
  * A 1.18+ chunk with real terrain: a height map and packed block palettes, from a function
  * `blockAt(x, y, z)` (chunk-local x and z, world y) that returns a block id or undefined for air.
  */
-function chunkTerrain({ x, z, minSectionY = -4, sectionCount = 24, blockAt, inhabited = 0 }) {
+function chunkTerrain({ x, z, minSectionY = -4, sectionCount = 24, blockAt, inhabited = 0, heightBits = 9 }) {
   const minY = minSectionY * 16;
   const heights = [];
   for (let zz = 0; zz < 16; zz++) {
@@ -144,7 +144,7 @@ function chunkTerrain({ x, z, minSectionY = -4, sectionCount = 24, blockAt, inha
     long("LastUpdate", 1000),
     long("InhabitedTime", inhabited),
     string("Status", "minecraft:full"),
-    compound("Heightmaps", longArrayBig("WORLD_SURFACE", packLongs(heights, 9))),
+    compound("Heightmaps", longArrayBig("WORLD_SURFACE", packLongs(heights, heightBits))),
     compoundList("sections", sections),
   );
 }
