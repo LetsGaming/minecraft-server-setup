@@ -31,6 +31,28 @@ test_archive_mode_uses_type_directory() {
 }
 
 
+# The install root is <root>, not the server dir's parent <root>/instances.
+test_archive_carries_the_wrapper_config_from_services() {
+  setup
+  use_install_layout
+  mkdir -p "$R/services/api-server"
+  echo '{"apiKey":"k"}' > "$R/services/api-server/api-server-config.json"
+  run_in_layout "$BACKUP" --archive weekly
+  assert_rc 0 "$RC" "archive backup exits 0"
+  assert_contains "$OUT" "✓ api-server-config.json" "the config is staged"
+  assert_contains "$("$REAL_TAR" -tzf "$(first_archive "$T/backups/archives/weekly")")" \
+    ".mc-meta/api-server-config.json" "the archive holds the config"
+}
+
+test_archive_finds_the_wrapper_config_in_the_old_layout() {
+  setup
+  use_install_layout
+  mkdir -p "$R/api-server"
+  echo '{"apiKey":"k"}' > "$R/api-server/api-server-config.json"
+  run_in_layout "$BACKUP" --archive weekly
+  assert_contains "$OUT" "✓ api-server-config.json" "the config at <root>/api-server/ is staged"
+}
+
 test_dry_run_writes_nothing() {
   setup
   run_script "$BACKUP" --dry-run

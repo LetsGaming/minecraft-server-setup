@@ -1,4 +1,0 @@
-[submodule "src/scripts/api-server"]
-	path = src/scripts/api-server
-	url = https://github.com/LetsGaming/minecraft-server-api.git
-

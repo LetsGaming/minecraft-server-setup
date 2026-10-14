@@ -284,4 +284,40 @@ test_identical_unit_is_left_alone() {
   assert_not_logged "daemon-reload" "no reload"
 }
 
+# ── the wrapper config from an archive ──────────────────────────────────────
+
+config_archive() { # archive holding .mc-meta/api-server-config.json
+  local src
+  src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world" "$src/.mc-meta"
+  echo restored > "$src/world/level.dat"
+  echo '{"apiKey":"restored"}' > "$src/.mc-meta/api-server-config.json"
+  mkdir -p "$T/backups/archives"
+  "$REAL_TAR" -cf - -C "$src" . | gzip -c > "$T/backups/archives/minecraft_backup_c.tar.zst"
+  rm -rf "$src"
+}
+
+test_wrapper_config_is_restored_into_services() {
+  setup
+  use_install_layout
+  config_archive
+  run_in_layout "$RESTORE" --archive --file minecraft_backup_c.tar.zst --y
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$R/services/api-server/api-server-config.json" '{"apiKey":"restored"}' "config lands in services/api-server/"
+  assert_eq "600" "$(stat -c %a "$R/services/api-server/api-server-config.json")" "config is mode 600"
+  assert_missing "$R/instances/api-server" "nothing is written under instances/"
+  assert_contains "$OUT" "mc-root-api-server.service" "the start hint names the install root's unit"
+}
+
+test_wrapper_config_goes_to_the_old_folder_on_an_old_layout() {
+  setup
+  use_install_layout
+  rmdir "$R/services"
+  mkdir -p "$R/api-server"
+  config_archive
+  run_in_layout "$RESTORE" --archive --file minecraft_backup_c.tar.zst --y
+  assert_file_content "$R/api-server/api-server-config.json" '{"apiKey":"restored"}' "config lands in api-server/"
+  assert_missing "$R/services/api-server" "no services/ folder is made beside it"
+}
+
 run_tests

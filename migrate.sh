@@ -18,10 +18,9 @@ set -euo pipefail
 # ║    - interface/  (retired web interface — left untouched)   ║
 # ║    - update/node_modules/   (preserved; reinstalled only    ║
 # ║      when the dependency set changes)                       ║
-# ║    - services/api-server/node_modules/  (same)              ║
-# ║    - services/*/dist/  (build output — rebuilt, not         ║
-# ║      deleted; the previous build survives a failed build)   ║
-# ║    - services/api-server/api-server-config.json  (untouched)║
+# ║    - services/api-server/api-server-config.json and logs/   ║
+# ║      (the wrapper itself is replaced by the release pinned  ║
+# ║      in api-server-release.json when it is not current)     ║
 # ║                                                             ║
 # ║  Retires the bundled web interface where it finds one: the  ║
 # ║  systemd unit is stopped, disabled and removed; the         ║
@@ -83,8 +82,8 @@ Options:
   --y                    Skip all confirmation prompts
   --no-stop              Never stop the Minecraft server, even when the
                          per-instance scripts change
-  --no-service-restart   Don't restart updated shared services (api-server,
-                         manager) — print the commands instead
+  --no-service-restart   Don't restart the API wrapper after updating it —
+                         print the command instead
   --dry-run              Show what would be done without making changes
   --no-server-migrations Skip the server-side migrations (the instance's own
                          start.sh and systemd unit)
@@ -110,19 +109,14 @@ Server-side migrations (src/migrations/server.sh):
     unit_start_limits       systemd unit: crash-loop limits, then daemon-reload
   World data, mods, server.jar and server.properties are not touched.
 
-What gets updated (shared services):
-  - services/api-server/   at <install-root>/services/api-server/
-  Fully replaced: files removed upstream are deleted, and a changed
-  dependency set (package.json / package-lock.json) triggers a fresh install
-  instead of restoring the old node_modules/
-
-Build output (services/*/dist/):
-  Services whose package.json declares a "build" script are compiled, not
-  copied. dist/ is therefore NEVER treated as stale: the existing build is
-  carried across the replace step and regenerated with \`npm run build\`
-  whenever the service's sources changed or dist/ is missing. devDependencies
-  are installed for the build and pruned again afterwards. If the build fails,
-  the previous dist/ stays in place and the failure is reported.
+The API wrapper (services/api-server/):
+  Installed from the release pinned in api-server-release.json, never copied
+  from this checkout (src/setup/management/install_api_server.js). When the
+  installed release is not the pinned one, or the install predates releases,
+  the pinned tarball is downloaded, checked against its sha256, unpacked and
+  given its production dependencies in a staging folder, and only then swapped
+  in. api-server-config.json and logs/ are kept. A failed download or install
+  leaves the running wrapper untouched. Hosts without the wrapper get nothing.
 
 When the Minecraft server is stopped:
   Only when the migration touches the instance — per-instance script changes,
@@ -148,7 +142,6 @@ What is NEVER touched:
   - common/downloaded_versions.json
   - interface/                    (retired web interface — left as found)
   - update/node_modules/          (preserved; reinstalled if deps changed)
-  - services/api-server/node_modules/            (same)
   - services/api-server/api-server-config.json   (user config — fully preserved)
   - backup/logs/, logs/
   - World data, mods, server.jar, server.properties
@@ -220,23 +213,14 @@ if $LIST_SERVER_MIGRATIONS; then
   exit 0
 fi
 
-# Root-level shared services: source name → deployed subpath under $BASE_DIR/
-# Parallel arrays (bash 3 compatible)
-# The web interface (minecraft-server-manager) used to be the second entry.
-# It was retired — its submodule is gone, so there is nothing to sync from —
-# and Step 3d below decommissions whatever an older install left behind.
-ROOT_SRC_NAMES=("api-server")
-ROOT_DST_NAMES=("services/api-server")
-# Systemd service-name suffix (separate from path because 'services/' is not
-# part of the service identifier)
-ROOT_SVC_NAMES=("api-server")
-
-# Per-service state, filled during the diff pass, consumed by Step 5 / Step 9b.
-# Parallel to the arrays above.
-ROOT_HAS_BUILD=()     # package.json declares a "build" script
-ROOT_SRC_CHANGED=()   # at least one tracked source file added/updated/removed
-ROOT_NEEDS_BUILD=()   # dist/ must be regenerated
-BUILD_FAILED=false
+# The API wrapper is the one shared service. It is installed from its pinned
+# release (install_api_server.js), not synced from this checkout.
+API_INSTALLER="$MIGRATE_SCRIPT_DIR/src/setup/management/install_api_server.js"
+API_DIR="$BASE_DIR/services/api-server"
+API_SVC="$(basename "$BASE_DIR")-api-server.service"
+NEEDS_API_UPDATE=false
+API_UPDATE_FAILED=false
+API_FROM=""; API_TO=""
 SM_MIGRATIONS_OK=true
 
 echo
@@ -266,8 +250,6 @@ REQUIRED_NEW_FILES=(
   "update/update-mods.js"
   "update/check-updates.js"
   "update/package.json"
-  "api-server/index.js"
-  "api-server/package.json"
 )
 check_ok=true
 for f in "${REQUIRED_NEW_FILES[@]}"; do
@@ -349,20 +331,7 @@ _merge_json_config() {
   " "$existing" "$new_file"
 }
 
-# ── npm / build helpers ──
-
-# True when the component is compiled rather than copied, i.e. its package.json
-# declares a "build" script. Such components own a dist/ that is generated, not
-# shipped in source.
-_has_build_script() {
-  local pkg="$1"
-  [[ -f "$pkg" ]] || return 1
-  node -e "
-    const fs = require('fs');
-    const p = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-    process.exit(p.scripts && p.scripts.build ? 0 : 1);
-  " "$pkg" 2>/dev/null
-}
+# ── npm helpers ──
 
 # True when the deployed dependency set differs from the source one. Checks the
 # lockfile too — a package.json-only comparison misses a lockfile bump and
@@ -379,7 +348,7 @@ _pkg_deps_changed() {
 
 # Install dependencies for a deployed component. Prefers `npm ci` when a
 # lockfile is present (reproducible, matches the shipped tree exactly).
-# $2 = "dev" includes devDependencies — required to run a build.
+# $2 = "dev" includes devDependencies.
 _npm_install() {
   local dir="$1" mode="${2:-prod}"
   local omit=()
@@ -399,10 +368,6 @@ echo -e "${BOLD}Changes to be applied${NC}"
 REPLACED=0; ADDED=0; STALE=0
 JSON_CONFIGS=()      # "relpath:new_key_count" — per-instance config.json files
 JSON_CONFIG_ADDED=0
-
-# Root-level component counters
-ROOT_REPLACED=0; ROOT_ADDED=0; ROOT_JSON_ADDED=0; ROOT_STALE=0
-NEEDS_ROOT_UPDATE=false
 
 # Per-instance npm subdirs (api-server excluded — it's root-level)
 HAS_INTERFACE=false
@@ -520,122 +485,37 @@ if [[ -d "$TARGET_SCRIPTS_DIR/interface" ]]; then
   info "KEEP    interface/  (web interface — preserved)"
 fi
 
-# ── Root-level component diff ──
+# ── API wrapper ──
+# Only an install that exists is updated: the wrapper is optional. Before the
+# structural move it still sits at <install-root>/api-server/.
 
-for i in "${!ROOT_SRC_NAMES[@]}"; do
-  src_name="${ROOT_SRC_NAMES[$i]}"
-  dst_name="${ROOT_DST_NAMES[$i]}"
-  src_dir="$NEW_SCRIPTS_SOURCE/$src_name"
-  dst_dir="$BASE_DIR/$dst_name"
-
-  # Initialised before any `continue` so Step 5 / Step 9b can index safely.
-  ROOT_HAS_BUILD[$i]=false
-  ROOT_SRC_CHANGED[$i]=false
-  ROOT_NEEDS_BUILD[$i]=false
-  if _has_build_script "$src_dir/package.json"; then ROOT_HAS_BUILD[$i]=true; fi
-  _root_changes_before=$(( ROOT_REPLACED + ROOT_ADDED + ROOT_STALE ))
-
-  # Skip if source component doesn't exist or component isn't installed yet.
-  # Also check the old location (pre-structure-migration) so we still report
-  # what will change even before the directories have been moved.
-  [[ ! -d "$src_dir" ]] && continue
-  if [[ ! -d "$dst_dir" ]]; then
-    # Fall back to old location: services/api-server → api-server, services/manager → manager
-    _old_dst="$BASE_DIR/$(basename "$dst_name")"
-    [[ -d "$_old_dst" ]] && dst_dir="$_old_dst" || continue
-  fi
-
-  while IFS= read -r f; do
-    case "$f" in
-      node_modules/*|.git) continue ;;
+_api_check_dir="$API_DIR"
+[[ ! -d "$_api_check_dir" && -d "$BASE_DIR/api-server" ]] && _api_check_dir="$BASE_DIR/api-server"
+if [[ -f "$_api_check_dir/index.js" ]]; then
+  if ! command -v node &>/dev/null; then
+    warn "node not found — cannot check the API wrapper against its pinned release"
+  elif _api_line=$(node "$API_INSTALLER" --check --dir "$_api_check_dir" 2>&1); then
+    _api_state=$(sed -n 's/.*state=\([a-z]*\).*/\1/p' <<<"$_api_line")
+    API_FROM=$(sed -n 's/.*installed=\([^ ]*\).*/\1/p' <<<"$_api_line")
+    API_TO=$(sed -n 's/.*pinned=\([^ ]*\).*/\1/p' <<<"$_api_line")
+    case "$_api_state" in
+      current)
+        info "KEEP    services/api-server/  (release $API_TO, as pinned)" ;;
+      outdated)
+        info "UPDATE  services/api-server/  ($API_FROM → release $API_TO)"
+        NEEDS_API_UPDATE=true ;;
+      unmanaged)
+        info "UPDATE  services/api-server/  (copy from before releases, $API_FROM → release $API_TO)"
+        NEEDS_API_UPDATE=true ;;
     esac
-
-    src_file="$src_dir/$f"
-    dst_file="$dst_dir/$f"
-    display="$dst_name/$f"
-
-    # config.json: merge
-    if [[ "$f" == */config/config.json ]]; then
-      if [[ -f "$dst_file" ]]; then
-        nk=$(_count_new_json_keys "$dst_file" "$src_file")
-        if [[ "$nk" -gt 0 ]]; then
-          info "MERGE   $display ($nk new key(s))"
-          ROOT_JSON_ADDED=$(( ROOT_JSON_ADDED + nk ))
-          ROOT_REPLACED=$(( ROOT_REPLACED + 1 ))
-          NEEDS_ROOT_UPDATE=true
-        else
-          info "KEEP    $display (no new keys)"
-        fi
-      else
-        info "ADD     $display"; ROOT_ADDED=$(( ROOT_ADDED + 1 ))
-        NEEDS_ROOT_UPDATE=true
-      fi
-      continue
-    fi
-
-    if [[ -f "$dst_file" ]]; then
-      diff -q "$src_file" "$dst_file" &>/dev/null || {
-        info "UPDATE  $display"
-        ROOT_REPLACED=$(( ROOT_REPLACED + 1 ))
-        NEEDS_ROOT_UPDATE=true
-      }
-    else
-      info "ADD     $display"
-      ROOT_ADDED=$(( ROOT_ADDED + 1 ))
-      NEEDS_ROOT_UPDATE=true
-    fi
-  done < <(cd "$src_dir" && find . -type f | sed 's|^\./||' | sort)
-
-  # Stale files: present in the deployed service, gone from the source.
-  # Step 5's wipe-and-replace performs the deletion — but only when it runs,
-  # so removals must set NEEDS_ROOT_UPDATE like any other change.
-  while IFS= read -r f; do
-    case "$f" in
-      node_modules/*) continue ;;
-      # Build output. Generated from src/, never shipped in source, so every
-      # compiled file would otherwise read as "removed upstream". It is carried
-      # across the replace step and regenerated below instead.
-      dist/*)
-        if [[ "${ROOT_HAS_BUILD[$i]}" == true ]]; then continue; fi
-        ;;
-      # User-generated files preserved across the wipe
-      api-server-config.json) continue ;;
-      src/config/users.json|src/config/config.json) continue ;;
-      logs/*) continue ;;
-      */.git|.git|.git/*) continue ;;
-    esac
-    [[ -f "$src_dir/$f" ]] && continue
-    info "REMOVE  $dst_name/$f  (no longer part of the suite)"
-    ROOT_STALE=$(( ROOT_STALE + 1 ))
-    NEEDS_ROOT_UPDATE=true
-  done < <(cd "$dst_dir" && find . -type f | sed 's|^\./||' | sort)
-
-  if [[ $(( ROOT_REPLACED + ROOT_ADDED + ROOT_STALE )) -gt $_root_changes_before ]]; then
-    ROOT_SRC_CHANGED[$i]=true
+  else
+    warn "Could not check the API wrapper: $_api_line"
   fi
-
-  # Rebuild when the sources moved or there is no build to keep.
-  if [[ "${ROOT_HAS_BUILD[$i]}" == true ]]; then
-    if [[ "${ROOT_SRC_CHANGED[$i]}" == true || ! -d "$dst_dir/dist" ]]; then
-      info "REBUILD ${dst_name}/dist/  (npm run build)"
-      ROOT_NEEDS_BUILD[$i]=true
-      NEEDS_ROOT_UPDATE=true
-    else
-      info "KEEP    ${dst_name}/dist/  (build up to date)"
-    fi
-  fi
-
-  # Node modules: preserved only while the dependency set is unchanged —
-  # Step 5 drops them for a fresh install when package.json or the lockfile
-  # differs.
-  if [[ -d "$dst_dir/node_modules" ]]; then
-    if _pkg_deps_changed "$src_dir" "$dst_dir"; then
-      info "DROP    ${dst_name}/node_modules/  (dependencies changed — fresh install will run)"
-    else
-      info "KEEP    ${dst_name}/node_modules/  (preserved)"
-    fi
-  fi
-done
+fi
+if [[ -d "$NEW_SCRIPTS_SOURCE/api-server" ]]; then
+  info "NOTE    src/scripts/api-server/ in this checkout is left over from the old submodule"
+  info "        and no longer used. Delete it: rm -rf '$NEW_SCRIPTS_SOURCE/api-server'"
+fi
 
 # ── New variables ──
 
@@ -662,7 +542,7 @@ for entry in "${NEW_VAR_DEFAULTS[@]}"; do
   fi
 done
 
-TOTAL_CHANGES=$(( REPLACED + ADDED + STALE + ROOT_REPLACED + ROOT_ADDED + ROOT_STALE ))
+TOTAL_CHANGES=$(( REPLACED + ADDED + STALE ))
 
 # ── Structural migration detection ──
 # Detect whether the install uses the old flat layout and needs directories moved.
@@ -726,7 +606,7 @@ if $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && $NEEDS_INSTANCE_UPDATE; then
 fi
 
 if [[ $TOTAL_CHANGES -eq 0 && ${#NEW_VARS[@]} -eq 0 && "$NEEDS_ANY_NPM_INSTALL" != true \
-   && "$NEEDS_STRUCT_MIGRATION" != true && "$NEEDS_ROOT_UPDATE" != true \
+   && "$NEEDS_STRUCT_MIGRATION" != true && "$NEEDS_API_UPDATE" != true \
    && ${#SM_PENDING[@]} -eq 0 ]]; then
   log "Everything is already up to date. Nothing to do."
   exit 0
@@ -734,12 +614,11 @@ fi
 
 echo
 SUMMARY="$REPLACED file(s) to update, $ADDED file(s) to add, ${#NEW_VARS[@]} variable(s) to add"
-[[ $(( STALE + ROOT_STALE )) -gt 0 ]] && \
-  SUMMARY="$SUMMARY, $(( STALE + ROOT_STALE )) stale file(s) to remove"
-[[ $(( ROOT_REPLACED + ROOT_ADDED )) -gt 0 ]] && \
-  SUMMARY="$SUMMARY, $ROOT_REPLACED service file(s) to update"
-[[ $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) -gt 0 ]] && \
-  SUMMARY="$SUMMARY, $(( JSON_CONFIG_ADDED + ROOT_JSON_ADDED )) config key(s) to merge"
+[[ $STALE -gt 0 ]] && \
+  SUMMARY="$SUMMARY, $STALE stale file(s) to remove"
+$NEEDS_API_UPDATE && SUMMARY="$SUMMARY, API wrapper to release $API_TO" || true
+[[ $JSON_CONFIG_ADDED -gt 0 ]] && \
+  SUMMARY="$SUMMARY, $JSON_CONFIG_ADDED config key(s) to merge"
 "$NEEDS_INSTANCE_MOVE" && SUMMARY="$SUMMARY, instance dir to relocate" || true
 [[ ${#SM_PENDING[@]} -gt 0 ]] && SUMMARY="$SUMMARY, ${#SM_PENDING[@]} server migration(s)" || true
 info "$SUMMARY"
@@ -780,24 +659,11 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   else
     echo "  4. Skip per-instance scripts (nothing changed — left untouched)"
   fi
-  if $NEEDS_ROOT_UPDATE; then
-    echo "  5. Update shared services:"
-    for i in "${!ROOT_DST_NAMES[@]}"; do
-      dst_dir="$BASE_DIR/${ROOT_DST_NAMES[$i]}"
-      # Show the destination path (new or old, whichever will exist after migration)
-      echo "       $dst_dir"
-    done
-    echo "     Preserving: node_modules/, dist/, api-server-config.json,"
-    echo "                 services/manager/src/config/users.json"
-    echo "     Merging (not replacing): services/manager/src/config/config.json"
-    [[ $ROOT_STALE -gt 0 ]] && \
-      echo "     Removing $ROOT_STALE stale service file(s) no longer part of the suite"
-    for i in "${!ROOT_DST_NAMES[@]}"; do
-      [[ "${ROOT_NEEDS_BUILD[$i]:-false}" == true ]] && \
-        echo "     Rebuilding ${ROOT_DST_NAMES[$i]}/dist/ (npm run build)"
-    done
+  if $NEEDS_API_UPDATE; then
+    echo "  5. Install API wrapper release $API_TO in $API_DIR"
+    echo "     (downloaded and checked first; keeps api-server-config.json and logs/)"
   fi
-  [[ $(( STALE + ROOT_STALE )) -gt 0 ]] && \
+  [[ $STALE -gt 0 ]] && \
     echo "     (all removed files remain available in the backup archive)"
   echo "  6. Add ${#NEW_VARS[@]} new variable(s) to variables.txt"
   if [[ ${#SM_PENDING[@]} -gt 0 ]]; then
@@ -806,8 +672,8 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   fi
   $NEEDS_ANY_NPM_INSTALL && echo "  7. Run npm install in changed per-instance subdirs"
   $NEEDS_SERVER_STOP && echo "  9. Restart the Minecraft server"
-  if $NEEDS_ROOT_UPDATE && [[ "$SKIP_SERVICE_RESTART" != true ]]; then
-    echo " 9b. Restart the updated shared services"
+  if $NEEDS_API_UPDATE && [[ "$SKIP_SERVICE_RESTART" != true ]]; then
+    echo " 9b. Restart $API_SVC"
   fi
   echo
   read -rp "Proceed? (y/N): " confirm
@@ -1078,14 +944,12 @@ $DRY_RUN || find "$TARGET_SCRIPTS_DIR" -mindepth 1 -delete
 log "Copying new per-instance scripts..."
 $DRY_RUN || cp -a "$NEW_SCRIPTS_SOURCE/." "$TARGET_SCRIPTS_DIR/"
 
-# Remove root-level component source trees that got copied into the scripts dir
-# (they're submodules in src/scripts/ but don't belong inside scripts/INSTANCE_NAME/)
-for src_name in "${ROOT_SRC_NAMES[@]}"; do
-  [[ -d "$TARGET_SCRIPTS_DIR/$src_name" ]] && {
-    # SC2115 fix: :? aborts if TARGET_SCRIPTS_DIR is somehow empty, preventing rm -rf /…
-    $DRY_RUN || rm -rf "${TARGET_SCRIPTS_DIR:?}/$src_name"
-  }
-done
+# A checkout from the submodule days can still hold src/scripts/api-server/;
+# it was copied along above and does not belong in the instance's scripts.
+if [[ -d "$TARGET_SCRIPTS_DIR/api-server" ]]; then
+  # :? aborts if TARGET_SCRIPTS_DIR is somehow empty, preventing rm -rf /api-server
+  $DRY_RUN || rm -rf "${TARGET_SCRIPTS_DIR:?}/api-server"
+fi
 
 # Restore preserved files
 log "Restoring preserved files..."
@@ -1149,173 +1013,20 @@ else
   log "No per-instance changes — scripts left untouched"
 fi
 
-# ── Step 5: Update shared services ──
+# ── Step 5: API wrapper ──
+# install_api_server.js stages and checks the release before it touches the
+# install, so a failure here leaves the running wrapper as it was.
 
-if $NEEDS_ROOT_UPDATE; then
-  echo; echo -e "${BOLD}Step 5: Update shared services${NC}"
-
-  for i in "${!ROOT_SRC_NAMES[@]}"; do
-    src_name="${ROOT_SRC_NAMES[$i]}"
-    dst_name="${ROOT_DST_NAMES[$i]}"
-    src_dir="$NEW_SCRIPTS_SOURCE/$src_name"
-    dst_dir="$BASE_DIR/$dst_name"
-
-    [[ ! -d "$src_dir" ]] && continue
-    # After structural migration the new path should exist; but if it doesn't,
-    # fall back to the old location one final time.
-    if [[ ! -d "$dst_dir" ]]; then
-      _fallback="$BASE_DIR/$(basename "$dst_name")"
-      [[ -d "$_fallback" ]] && dst_dir="$_fallback" || continue
-    fi
-
-    log "Updating $dst_name/ ($dst_dir)"
-
-    ROOT_PRESERVE=$(mktemp -d)
-
-    # Decide the npm question NOW, against the DEPLOYED package.json —
-    # after the wipe-and-copy below, dst always equals src, so a
-    # post-copy diff can never detect a change. (This is exactly how the
-    # old JS-era node_modules survived the TypeScript rewrite: the stale
-    # tree was restored and npm install never ran.)
-    pkg_changed=false
-    if _pkg_deps_changed "$src_dir" "$dst_dir"; then pkg_changed=true; fi
-
-    # node_modules: only worth preserving when the dependency set is
-    # unchanged — a changed package.json/lockfile gets a fresh install
-    # instead of a stale restore.
-    if [[ -d "$dst_dir/node_modules" ]]; then
-      if $pkg_changed; then
-        info "  Dropping node_modules/ (dependencies changed — fresh install will run)"
-      else
-        $DRY_RUN || cp -a "$dst_dir/node_modules" "$ROOT_PRESERVE/node_modules"
-        info "  Saved: node_modules/"
-      fi
-    fi
-
-    # dist/ is generated output. It is carried across the wipe so the service
-    # stays runnable if the rebuild below fails.
-    if [[ -d "$dst_dir/dist" ]]; then
-      $DRY_RUN || cp -a "$dst_dir/dist" "$ROOT_PRESERVE/dist"
-      info "  Saved: dist/ (current build)"
-    fi
-
-    # api-server-config.json (api-server only — user-generated, never in source)
-    if [[ -f "$dst_dir/api-server-config.json" ]]; then
-      $DRY_RUN || cp -a "$dst_dir/api-server-config.json" "$ROOT_PRESERVE/api-server-config.json"
-      info "  Saved: api-server-config.json"
-    fi
-
-    # config.json (for merge)
-    if [[ -f "$dst_dir/src/config/config.json" ]]; then
-      $DRY_RUN || { mkdir -p "$ROOT_PRESERVE/src/config"; cp -a "$dst_dir/src/config/config.json" "$ROOT_PRESERVE/src/config/config.json"; }
-    fi
-
-    # users.json (credentials — preserve entirely, never overwrite)
-    if [[ -f "$dst_dir/src/config/users.json" ]]; then
-      $DRY_RUN || { mkdir -p "$ROOT_PRESERVE/src/config"; cp -a "$dst_dir/src/config/users.json" "$ROOT_PRESERVE/src/config/users.json"; }
-      info "  Saved: src/config/users.json"
-    fi
-
-    # logs
-    if [[ -d "$dst_dir/logs" ]]; then
-      $DRY_RUN || { mkdir -p "$ROOT_PRESERVE/logs"; cp -a "$dst_dir/logs/." "$ROOT_PRESERVE/logs/"; }
-    fi
-
-    # Wipe and replace
-    $DRY_RUN || find "$dst_dir" -mindepth 1 -delete
-    $DRY_RUN || cp -a "$src_dir/." "$dst_dir/"
-
-    # Restore node_modules
-    if [[ -d "$ROOT_PRESERVE/node_modules" ]]; then
-      $DRY_RUN || cp -a "$ROOT_PRESERVE/node_modules" "$dst_dir/node_modules"
-      info "  Restored: node_modules/"
-    fi
-
-    # Restore dist — replaced by the rebuild below when one is due
-    if [[ -d "$ROOT_PRESERVE/dist" ]]; then
-      $DRY_RUN || cp -a "$ROOT_PRESERVE/dist" "$dst_dir/dist"
-      info "  Restored: dist/ (previous build)"
-    fi
-
-    # Restore api-server-config.json
-    if [[ -f "$ROOT_PRESERVE/api-server-config.json" ]]; then
-      $DRY_RUN || cp -a "$ROOT_PRESERVE/api-server-config.json" "$dst_dir/api-server-config.json"
-      info "  Restored: api-server-config.json"
-    fi
-
-    # Merge or restore config.json
-    if [[ -f "$ROOT_PRESERVE/src/config/config.json" && -f "$dst_dir/src/config/config.json" ]]; then
-      if command -v node &>/dev/null; then
-        nk=$(_count_new_json_keys "$ROOT_PRESERVE/src/config/config.json" "$dst_dir/src/config/config.json")
-        if [[ "$nk" -gt 0 ]]; then
-          $DRY_RUN || _merge_json_config "$ROOT_PRESERVE/src/config/config.json" "$dst_dir/src/config/config.json"
-          info "  Merged: src/config/config.json ($nk new key(s))"
-        else
-          $DRY_RUN || cp -a "$ROOT_PRESERVE/src/config/config.json" "$dst_dir/src/config/config.json"
-          info "  Restored: src/config/config.json (no new keys)"
-        fi
-      else
-        $DRY_RUN || cp -a "$ROOT_PRESERVE/src/config/config.json" "$dst_dir/src/config/config.json"
-        warn "  node not found — kept existing src/config/config.json"
-      fi
-    fi
-
-    # Restore users.json (never merge — always preserve as-is)
-    if [[ -f "$ROOT_PRESERVE/src/config/users.json" ]]; then
-      $DRY_RUN || { mkdir -p "$dst_dir/src/config"; cp -a "$ROOT_PRESERVE/src/config/users.json" "$dst_dir/src/config/users.json"; }
-      info "  Restored: src/config/users.json"
-    fi
-
-    # Restore logs
-    if [[ -d "$ROOT_PRESERVE/logs" ]]; then
-      $DRY_RUN || { mkdir -p "$dst_dir/logs"; cp -a "$ROOT_PRESERVE/logs/." "$dst_dir/logs/"; }
-    fi
-
-    rm -rf "$ROOT_PRESERVE"
-
-    # npm / build. A build needs devDependencies, the runtime does not — so
-    # install everything, build, then prune back to production deps. On a
-    # failed build the previous dist/ (restored above) stays in place.
-    if [[ -f "$src_dir/package.json" ]]; then
-      needs_npm=false
-      $pkg_changed && needs_npm=true
-      [[ ! -d "$dst_dir/node_modules" ]] && needs_npm=true
-
-      if [[ "${ROOT_NEEDS_BUILD[$i]:-false}" == true ]]; then
-        if command -v npm &>/dev/null; then
-          log "  npm install (with devDependencies) in $dst_name/"
-          _npm_install "$dst_dir" dev
-          log "  npm run build in $dst_name/"
-          if $DRY_RUN; then
-            echo "[DRY-RUN] (cd $dst_dir && npm run build)"
-          elif ( cd "$dst_dir" && npm run build ); then
-            log "  Build succeeded — dist/ regenerated"
-            if npm prune --omit=dev --prefix "$dst_dir" &>/dev/null; then
-              info "  Pruned devDependencies"
-            else
-              warn "  Could not prune devDependencies (harmless)"
-            fi
-          else
-            err "  Build FAILED — previous dist/ left in place, service runs old code"
-            info "  Fix, then: (cd '$dst_dir' && npm run build)"
-            BUILD_FAILED=true
-          fi
-        else
-          warn "  npm not found — run: (cd '$dst_dir' && npm install && npm run build)"
-          BUILD_FAILED=true
-        fi
-      elif $needs_npm; then
-        if command -v npm &>/dev/null; then
-          log "  npm install --omit=dev in $dst_name/"
-          _npm_install "$dst_dir"
-        else
-          warn "  npm not found — run: npm install --omit=dev --prefix '$dst_dir'"
-        fi
-      fi
-    fi
-
-    log "  $dst_name/ updated"
-  done
+if $NEEDS_API_UPDATE; then
+  echo; echo -e "${BOLD}Step 5: API wrapper${NC}"
+  _api_args=(--dir "$API_DIR")
+  $DRY_RUN && _api_args+=(--dry-run)
+  if node "$API_INSTALLER" "${_api_args[@]}"; then
+    log "API wrapper is on release $API_TO"
+  else
+    err "Installing API wrapper release $API_TO failed — the previous install is unchanged"
+    API_UPDATE_FAILED=true
+  fi
 fi
 
 # ── Step 6: Merge new variables ──
@@ -1397,18 +1108,15 @@ for entry in "${JSON_CONFIGS[@]:-}"; do
     || { err "$f is not valid JSON"; verify_ok=false; }
 done
 
-# Compiled services must have a non-empty dist/ or they won't start
-for i in "${!ROOT_DST_NAMES[@]}"; do
-  [[ "${ROOT_HAS_BUILD[$i]:-false}" == true ]] || continue
-  _svc_dir="$BASE_DIR/${ROOT_DST_NAMES[$i]}"
-  [[ -d "$_svc_dir" ]] || continue
-  if [[ -d "$_svc_dir/dist" && -n "$(ls -A "$_svc_dir/dist" 2>/dev/null)" ]]; then
-    info "✓ ${ROOT_DST_NAMES[$i]}/dist/ present"
+# The wrapper runs from dist/; an install without it will not start.
+if [[ -f "$API_DIR/index.js" ]] && ! $DRY_RUN; then
+  if [[ -f "$API_DIR/dist/index.js" ]]; then
+    info "✓ services/api-server/dist/index.js present"
   else
-    err "${ROOT_DST_NAMES[$i]}/dist/ is missing or empty — the service will not start"
+    err "services/api-server/dist/index.js is missing — the API wrapper will not start"
     verify_ok=false
   fi
-done
+fi
 
 bash -c "source '$VARS_FILE'" 2>/dev/null \
   && info "✓ variables.txt loads correctly" \
@@ -1442,38 +1150,28 @@ if $NEEDS_SERVER_STOP; then
   fi
 fi
 
-# ── Step 9b: Restart updated shared services ──
-# Restarts only the units whose code actually changed. The Minecraft instance
-# is unaffected either way.
+# ── Step 9b: Restart the API wrapper ──
+# Only after a successful update. The Minecraft instance is unaffected.
 
 RESTART_HINTS=()
-if $NEEDS_ROOT_UPDATE; then
-  echo; echo -e "${BOLD}Step 9b: Restart shared services${NC}"
-  for i in "${!ROOT_DST_NAMES[@]}"; do
-    if [[ "${ROOT_SRC_CHANGED[$i]:-false}" != true && "${ROOT_NEEDS_BUILD[$i]:-false}" != true ]]; then
-      continue
+if $NEEDS_API_UPDATE && ! $API_UPDATE_FAILED; then
+  echo; echo -e "${BOLD}Step 9b: Restart the API wrapper${NC}"
+  if [[ "$SKIP_SERVICE_RESTART" == true ]]; then
+    info "Skipped (--no-service-restart): $API_SVC"
+    RESTART_HINTS+=("$API_SVC")
+  elif [[ -f "/etc/systemd/system/$API_SVC" ]]; then
+    log "Restarting $API_SVC"
+    run_cmd sudo systemctl restart "$API_SVC"
+    if ! $DRY_RUN; then
+      sleep 2
+      systemctl is-active "$API_SVC" &>/dev/null \
+        && info "  $API_SVC is active" \
+        || warn "  $API_SVC did not come up — check: systemctl status $API_SVC"
     fi
-    _svc="$(basename "$BASE_DIR")-${ROOT_SVC_NAMES[$i]}.service"
-    if [[ "$SKIP_SERVICE_RESTART" == true ]]; then
-      info "Skipped (--no-service-restart): $_svc"
-      RESTART_HINTS+=("$_svc")
-    elif $BUILD_FAILED; then
-      warn "Not restarting $_svc after a failed build"
-      RESTART_HINTS+=("$_svc")
-    elif [[ -f "/etc/systemd/system/$_svc" ]]; then
-      log "Restarting $_svc"
-      run_cmd sudo systemctl restart "$_svc"
-      if ! $DRY_RUN; then
-        sleep 2
-        systemctl is-active "$_svc" &>/dev/null \
-          && info "  $_svc is active" \
-          || warn "  $_svc did not come up — check: systemctl status $_svc"
-      fi
-    else
-      warn "No systemd unit $_svc — restart ${ROOT_DST_NAMES[$i]} manually"
-      RESTART_HINTS+=("$_svc")
-    fi
-  done
+  else
+    warn "No systemd unit $API_SVC — restart services/api-server manually"
+    RESTART_HINTS+=("$API_SVC")
+  fi
 fi
 
 # ── Done ──
@@ -1497,9 +1195,9 @@ if $SM_NEEDS_RESTART; then
   info "The instance's start.sh was updated. It takes effect the next time '$INSTANCE_NAME' starts."
   echo
 fi
-if $BUILD_FAILED; then
-  err "At least one service build failed — it is still running its previous dist/."
-  info "Check the build output above before relying on the new code."
+if $API_UPDATE_FAILED; then
+  err "The API wrapper was not updated — it still runs ${API_FROM:-its previous release}."
+  info "Check the output of Step 5, then run migrate.sh again."
   echo
 fi
 if [[ ${#RESTART_HINTS[@]} -gt 0 ]]; then

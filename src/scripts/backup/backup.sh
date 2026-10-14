@@ -219,8 +219,10 @@ fi
 if $ARCHIVE_MODE && ! $DRY_RUN; then
   log INFO "Staging instance metadata..."
 
-  INSTANCE_SCRIPTS_DIR="$SCRIPT_DIR/.."          # scripts/INSTANCE_NAME/
-  BASE_DIR="$(dirname "$SERVER_PATH")"            # parent of the server dir
+  INSTANCE_SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"   # <root>/scripts/<instance>
+  # The install root holds scripts/, instances/ and services/. It is not the
+  # server dir's parent: in the instances/ layout that is <root>/instances.
+  BASE_DIR="$(dirname "$(dirname "$INSTANCE_SCRIPTS_DIR")")"
   TARGET_DIR_NAME="$(basename "$BASE_DIR")"       # e.g. minecraft-server
   META_DIR="$TMP_DIR/.mc-meta"
 
@@ -247,8 +249,9 @@ if $ARCHIVE_MODE && ! $DRY_RUN; then
     fi
   done
 
-  # 3. api-server-config.json
-  API_CONFIG="$BASE_DIR/api-server/api-server-config.json"
+  # 3. api-server-config.json (at <root>/api-server/ before the services/ layout)
+  API_CONFIG="$BASE_DIR/services/api-server/api-server-config.json"
+  [[ -f "$API_CONFIG" ]] || API_CONFIG="$BASE_DIR/api-server/api-server-config.json"
   if [[ -f "$API_CONFIG" ]]; then
     cp "$API_CONFIG" "$META_DIR/api-server-config.json"
     log INFO "  ✓ api-server-config.json"
