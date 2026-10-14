@@ -62,10 +62,15 @@ delete_old_archives() {
   local dir="$BACKUP_BASE/archives/$type"
   local max_value="${!max_var}"
 
-  [[ -n "$max_value" && "$max_value" -gt 0 ]] || {
+  [[ "$max_value" =~ ^[0-9]+$ ]] || {
     log "ERROR: $max_var is not set or invalid (value: '$max_value')" >&2
     exit 1
   }
+  # 0 means no count limit (S-030); MAX_STORAGE_GB still applies.
+  if (( max_value == 0 )); then
+    log "$max_var is 0: keeping every $type backup (the storage limit still applies)."
+    return
+  fi
 
   log "Checking $type backups in: $dir"
   mapfile -t backups < <(list_archives "$dir")
@@ -82,6 +87,13 @@ delete_old_archives() {
 delete_old_hourly_backups() {
   local dir="$BACKUP_BASE/hourly"
   local max="${MAX_HOURLY_BACKUPS:-3}"
+
+  # 0 means no count limit (S-030). It used to mean "keep none" and deleted
+  # every hourly backup, the newest one included.
+  if [[ ! "$max" =~ ^[0-9]+$ ]] || (( max == 0 )); then
+    log "MAX_HOURLY_BACKUPS is ${max:-unset}: no count limit on hourly backups (the storage limit still applies)."
+    return
+  fi
 
   log "Checking hourly backups in: $dir"
   mapfile -t snapshots < <(list_archives "$dir")

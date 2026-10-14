@@ -70,9 +70,20 @@ su_resolve_tool() { # name override -> absolute path
   echo "$found"
 }
 
-# A value out of the deployed variables.txt (KEY="value").
+# A value out of the deployed variables.txt (KEY="value"), read as data: this
+# runs as root and must not source a file the server user can write. Setup
+# escapes \ " $ and ` inside the quotes; undo exactly that (S-030), where the
+# old pattern cut the value at its first escaped quote.
 su_var() {
-  sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" "$SU_SCRIPTS_DIR/common/variables.txt" | head -n 1
+  local line value
+  line="$(grep -m 1 "^$1=" "$SU_SCRIPTS_DIR/common/variables.txt" || true)"
+  [[ -n "$line" ]] || return 0
+  value="${line#*=}"
+  if [[ ${#value} -ge 2 && "$value" == \"*\" ]]; then
+    value="${value:1:${#value}-2}"
+    value="$(printf '%s' "$value" | sed -e 's/\\\(["$`\\]\)/\1/g')"
+  fi
+  printf '%s\n' "$value"
 }
 
 # The sudoers file for one instance. Pure: prints it, touches nothing.

@@ -78,14 +78,11 @@ if (!fs.existsSync(API_SERVER_ENTRY)) {
 
 // ── Read instance paths from the deployed variables.txt ──────────────────
 
-// Inline parser — avoids a dependency on the wrapper's own parseVars.js
+// The suite's own reader, which undoes setup's escaping (S-030): the inline
+// regex here cut a value at its first escaped quote.
+const { parseVariables } = require("../../scripts/update/lib/variables");
 function parseVarsFile(filePath) {
-  const vars = {};
-  for (const line of fs.readFileSync(filePath, "utf-8").split(/\r?\n/)) {
-    const m = line.match(/^(\w+)="?([^"]*)"?$/);
-    if (m) vars[m[1]] = m[2];
-  }
-  return vars;
+  return parseVariables(fs.readFileSync(filePath, "utf-8"));
 }
 
 if (!fs.existsSync(VARS_FILE)) {

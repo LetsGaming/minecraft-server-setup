@@ -12,10 +12,11 @@ function parseVariables(content) {
     const match = line.match(/^(\w+)=(.*)$/);
     if (!match) continue;
     let value = match[2].trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      // Setup escapes \ " $ and ` inside double quotes (shDquote in
+      // set_common_variables.js); undo exactly that, as bash would (S-030).
+      value = value.slice(1, -1).replace(/\\(["$`\\])/g, "$1");
+    } else if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
       value = value.slice(1, -1);
     }
     vars[match[1]] = value;

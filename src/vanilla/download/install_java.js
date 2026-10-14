@@ -15,7 +15,7 @@ function getLatestJabbaCandidate(javaVersion) {
   try {
     const listOutput = execSync(
       `bash -c '. ~/.jabba/jabba.sh && jabba ls-remote'`,
-      { encoding: "utf8" },
+      { encoding: "utf8", timeout: 120_000 },
     );
     const versions = listOutput
       .split("\n")
@@ -49,7 +49,7 @@ function installJava(candidate) {
     console.log(`Installing Java version: ${candidate}`);
     execSync(
       `bash -c '. ~/.jabba/jabba.sh && jabba install ${candidate} && jabba use ${candidate}'`,
-      { stdio: "inherit" },
+      { stdio: "inherit", timeout: 20 * 60_000 },
     );
     console.log(`Java ${candidate} installed and activated.`);
     setServerVariable(candidate);

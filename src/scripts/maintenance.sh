@@ -6,6 +6,9 @@ source "$SCRIPT_DIR/common/server_control.sh"
 source "$SCRIPT_DIR/common/utils.sh"
 
 acquire_instance_lock "maintenance" || exit 1
+# Not while a backup, restore, rollback or upgrade runs (S-030): a scheduled
+# restart used to stop the server in the middle of a backup. Exit 75 = busy.
+acquire_operation_lock maintenance || exit 75
 
 init_log_file "$SCRIPT_DIR/logs" "maintenance.log"
 
@@ -84,6 +87,7 @@ cleanup() {
     log "INFO" "Maintenance script exited cleanly."
     release_instance_lock
     restart_server
+    release_operation_lock
 }
 
 trap cleanup EXIT
