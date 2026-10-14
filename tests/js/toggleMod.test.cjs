@@ -41,3 +41,19 @@ test(
     assert.equal(lastJson(res.stdout).ok, false);
   }),
 );
+
+test(
+  "a slug with Modrinth's other characters (sit!) is disabled and enabled like any other",
+  withInstance((inst) => {
+    fs.writeFileSync(path.join(inst.mods, "sit-fabric-1.4.jar"), "x");
+    inst.writeManifest({ mods: { "sit!": { versionId: "s1", filename: "sit-fabric-1.4.jar" } } });
+
+    const off = inst.run("toggle-mod.js", ["sit!", "--disable", "--json"]);
+    assert.equal(lastJson(off.stdout).ok, true, off.stderr);
+    assert.ok(fs.existsSync(path.join(inst.mods, "disabled", "sit-fabric-1.4.jar")));
+
+    const on = inst.run("toggle-mod.js", ["sit!", "--enable", "--json"]);
+    assert.equal(lastJson(on.stdout).ok, true, on.stderr);
+    assert.ok(fs.existsSync(path.join(inst.mods, "sit-fabric-1.4.jar")));
+  }),
+);

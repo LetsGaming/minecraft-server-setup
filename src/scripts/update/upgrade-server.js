@@ -19,6 +19,10 @@
  * Progress is NDJSON on stdout (and the same lines in the status file), one
  * object per line: {seq, ts, phase, status, msg} and a final {type:"result"}.
  *
+ * --expect-unavailable is the list of mods a person was shown as unavailable
+ * or unchecked. The job refuses to start only if its own check finds a mod
+ * with no build that is not on that list.
+ *
  * Usage: node upgrade-server.js <version> [--expect-unavailable=a,b]
  *          [--countdown=<seconds>] [--start-timeout=<seconds>]
  *          [--prune-plan=<id>]
@@ -162,16 +166,27 @@ function runUpgrade(deps, opts) {
       return finish({ ok: false, rolledBack: false, reason: "plan_failed", detail: plan?.error ?? planRun.stderr });
     }
     unavailable = [...plan.unavailable].sort();
+    // The person confirmed a list of mods that may be disabled if the new
+    // version does not start. Refuse only when this check finds one with no
+    // build that was not on it. A listed mod that turns out fine is no reason
+    // to stop: the dashboard also lists mods whose check failed (a timeout, a
+    // rate limit), and those usually resolve here.
     if (opts.expectUnavailable) {
       const expected = [...opts.expectUnavailable].sort();
-      if (JSON.stringify(expected) !== JSON.stringify(unavailable)) {
-        say("plan", "error", "The installed mods changed since the compatibility check. Run the check again.");
+      const unexpected = unavailable.filter((slug) => !expected.includes(slug));
+      if (unexpected.length > 0) {
+        say(
+          "plan",
+          "error",
+          `No build for ${plan.target}, and not in the list you confirmed: ${unexpected.join(", ")}. Run the check again.`,
+        );
         return finish({
           ok: false,
           rolledBack: false,
           reason: "mods_changed",
           expected,
           found: unavailable,
+          unexpected,
         });
       }
     }

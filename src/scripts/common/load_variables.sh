@@ -29,7 +29,7 @@ REQUIRED_VARS=(
 )
 
 for var in "${REQUIRED_VARS[@]}"; do
-    if [ -z "${!var}" ]; then
+    if [ -z "${!var:-}" ]; then
         echo "Error: $var is not set in variables.txt"
         exit 1
     fi

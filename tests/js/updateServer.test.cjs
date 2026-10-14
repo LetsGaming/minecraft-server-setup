@@ -69,6 +69,31 @@ test(
 );
 
 test(
+  "--plan counts sit! as available when Modrinth has a build, so an upgrade keeps it",
+  withInstance((inst) => {
+    seed(inst, { mods: { "sit!": { versionId: "s1" } } });
+    const table = JSON.parse(fs.readFileSync(inst.stubFile, "utf8"));
+    table[PROJECT("sit!")] = { json: { id: "sitid" } };
+    table[VERSIONS("sitid")] = {
+      json: [{
+        id: "s2",
+        name: "Sit!",
+        date_published: "2026-10-01T00:00:00Z",
+        game_versions: ["1.21.5"],
+        loaders: ["vanilla"],
+        files: [{ primary: true, url: "https://cdn/sit.jar", hashes: { sha512: "ab" } }],
+      }],
+    };
+    inst.stub(table);
+    const res = inst.run("update-server.js", ["1.21.5", "--plan", "--json"], withJava(inst, 21));
+    assert.equal(res.code, 0, res.stderr);
+    const [out] = lines(res.stdout);
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.unavailable, []);
+  }),
+);
+
+test(
   "--plan sees an installed Java",
   withInstance((inst) => {
     seed(inst);
