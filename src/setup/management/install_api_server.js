@@ -45,8 +45,10 @@ function readPin(file = PIN_FILE) {
   const pin = JSON.parse(fs.readFileSync(file, "utf8"));
   if (!REPO_RE.test(pin.repository || "")) throw new Error(`${file}: "repository" must be owner/name`);
   if (!VERSION_RE.test(pin.version || "")) throw new Error(`${file}: "version" must be a semver version`);
-  if (pin.sha256 && !SHA_RE.test(pin.sha256)) throw new Error(`${file}: "sha256" must be 64 hex characters`);
-  return { repository: pin.repository, version: pin.version, sha256: pin.sha256 || "" };
+  // GitHub's release page shows asset digests as "sha256:<hex>"; accept them pasted as is.
+  const sha = String(pin.sha256 || "").replace(/^sha256:/i, "").toLowerCase();
+  if (sha && !SHA_RE.test(sha)) throw new Error(`${file}: "sha256" must be 64 hex characters`);
+  return { repository: pin.repository, version: pin.version, sha256: sha };
 }
 
 function assetName(version) {
@@ -143,7 +145,13 @@ async function install({ dir, pin = readPin(), tarball = "", verify = true, forc
     }
     if (verify) {
       const got = sha256(file);
-      if (got !== pin.sha256) throw new Error(`sha256 mismatch for ${source}: expected ${pin.sha256}, got ${got}`);
+      if (got !== pin.sha256) {
+        throw new Error(
+          `sha256 mismatch for ${source}: expected ${pin.sha256}, got ${got}. ` +
+            `The pin needs the checksum of ${assetName(pin.version)} itself (the content of its .sha256 file), ` +
+            "not the digest of the .sha256 file.",
+        );
+      }
     } else {
       log("[api-server] Not checking the sha256 (--no-verify).");
     }
