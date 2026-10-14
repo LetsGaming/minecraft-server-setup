@@ -40,6 +40,16 @@ const path = require("path");
 const { spawnSync } = require("child_process");
 const { parseArgs } = require("./lib/args");
 
+/** Ceilings for each step of the job (S-015). Generous: a timeout here means wedged. */
+const STEP_TIMEOUT_MS = {
+  ops: 15 * 60_000,
+  backup: 3 * 60 * 60_000,
+  restore: 2 * 60 * 60_000,
+  update: 45 * 60_000,
+  toggle: 5 * 60_000,
+  prune: 3 * 60 * 60_000,
+};
+
 /** A Minecraft version id: 1.21.4, 24w14a, 1.21-pre1. Never something that starts like a flag. */
 const VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,39}$/;
 const { loadVariables } = require("./lib/variables");
@@ -370,8 +380,20 @@ function realDeps({ scriptsDir, serverPath, backupsPath, statusFile }) {
   return {
     run(kind, args) {
       const [cmd, script] = scripts[kind];
-      const r = spawnSync(cmd, [script, ...args], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-      return { code: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+      // S-015: every step has a ceiling, so one that hangs (a stalled download,
+      // a wedged JVM) cannot keep the server down and the lock held forever.
+      const r = spawnSync(cmd, [script, ...args], {
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: STEP_TIMEOUT_MS[kind] ?? 30 * 60_000,
+        killSignal: "SIGTERM",
+      });
+      const timedOut = r.error && r.error.code === "ETIMEDOUT";
+      return {
+        code: r.status ?? 1,
+        stdout: r.stdout ?? "",
+        stderr: (r.stderr ?? "") + (timedOut ? `\n${kind} timed out` : ""),
+      };
     },
     sleep: (seconds) => Atomics.wait(sleeper, 0, 0, seconds * 1000),
     now: () => Date.now(),

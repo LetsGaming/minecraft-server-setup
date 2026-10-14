@@ -17,7 +17,8 @@ JABBA_VERSION="${JABBA_VERSION:-0.14.0}"
 export JABBA_HOME="$HOME/.jabba"
 export PATH="$JABBA_HOME/bin:$PATH"
 
-JABBA_INSTALL_URL="${JABBA_INSTALL_URL:-https://raw.githubusercontent.com/Jabba-Team/jabba/main/install.sh}"
+# Jabba 0.15.0 by commit (S-027): the hash below is of this exact file.
+JABBA_INSTALL_URL="${JABBA_INSTALL_URL:-https://raw.githubusercontent.com/Jabba-Team/jabba/b045bf217b9e2890c37a767097d7d2e8f147ad97/install.sh}"
 JABBA_INSTALL_SHA256="${JABBA_INSTALL_SHA256:-7298872bae6a19bf22b36c302cb260e6fa88cc09ee21d50cdd0755b4270a9e5e}"
 
 # Check if jabba is installed
@@ -30,7 +31,7 @@ else
   # shellcheck disable=SC2064
   trap "rm -f '$tmp_installer'" EXIT
 
-  if ! curl -fsSL --proto '=https' --tlsv1.2 "$JABBA_INSTALL_URL" -o "$tmp_installer"; then
+  if ! curl -fsSL --proto '=https' --tlsv1.2 --max-time 120 "$JABBA_INSTALL_URL" -o "$tmp_installer"; then
     echo "[install_jabba] ERROR: failed to download installer from $JABBA_INSTALL_URL" >&2
     exit 1
   fi

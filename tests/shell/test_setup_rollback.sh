@@ -94,21 +94,6 @@ test_without_a_snapshot_nothing_is_deleted() {
   assert_exists "$MAIN_DIR/mc/instances/first" "an unarmed rollback deletes nothing"
 }
 
-test_target_dir_name_must_be_a_plain_name() {
-  setup
-  local out
-  for bad in "." ".." "a/b" "../x"; do
-    printf '{"INSTANCE_NAME":"x","TARGET_DIR_NAME":"%s","BACKUPS":{},"JAVA":{}}' "$bad" > "$T/v.json"
-    out=$(node -e '
-      const fs=require("fs"),path=require("path");
-      const src=process.argv[1];
-      const lv=fs.readFileSync(path.join(src,"src/setup/common/loadVariables.js"),"utf8");
-      const m={exports:{}};
-      new Function("module","exports","require","__dirname",lv)(m,m.exports,(id)=>id==="fs"?{...fs,existsSync:()=>true,readFileSync:(p,e)=>p.endsWith("variables.json")?fs.readFileSync(process.argv[2],e):fs.readFileSync(p,e)}:require(id),path.join(src,"src/setup/common"));
-      try{(m.exports.default||m.exports)();console.log("accepted")}catch(e){console.log(e.message)}
-    ' "$REPO" "$T/v.json")
-    assert_contains "$out" "TARGET_DIR_NAME" "TARGET_DIR_NAME '$bad' is refused"
-  done
-}
+# TARGET_DIR_NAME validation is covered in tests/js/loadVariables.test.cjs.
 
 run_tests

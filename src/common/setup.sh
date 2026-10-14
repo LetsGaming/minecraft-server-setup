@@ -499,6 +499,9 @@ run_preflight_check() {
     if [[ -z "$api_key" ]]; then
       echo "  ⚠ API_SERVER enabled but no API_KEY set — wrapper will be unauthenticated"
       warnings=$((warnings + 1))
+    elif [[ "$api_key" == "replace-with-a-long-random-secret" ]]; then
+      echo "  ✗ API_KEY is still the example's placeholder — generate one: openssl rand -hex 32"
+      warnings=$((warnings + 1))
     elif [[ ${#api_key} -lt 32 ]]; then
       echo "  ⚠ API_KEY is shorter than 32 characters — the wrapper will refuse to start (openssl rand -hex 32)"
       warnings=$((warnings + 1))

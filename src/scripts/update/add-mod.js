@@ -14,6 +14,10 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
+// S-015: a half-open connection must not hang this script forever, least of
+// all during an upgrade, with the server stopped and the lock held. File
+// downloads set their own deadlines (lib/download.js).
+axios.defaults.timeout = axios.defaults.timeout || 30_000;
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 

@@ -20,6 +20,16 @@ SERVICE_FILE="/etc/systemd/system/$INSTANCE_NAME.service"
 SERVICE_CONTENT="[Unit]
 Description=$INSTANCE_NAME Server
 After=network.target
+# Crash-loop protection: 5 failed starts inside 2 minutes and systemd stops
+# retrying (StartLimitAction=none — it just gives up, nothing more drastic).
+# These belong in [Unit]: systemd ignores them in [Service] (S-016), and with
+# RestartSec=3s its own default 10s window never trips, so a broken server
+# (e.g. a bad mod) restarts forever. Recovery after a trip: fix the cause,
+# then \`systemctl reset-failed && systemctl start $INSTANCE_NAME\` (the
+# wrapper's restart-instance action already does the reset-failed step).
+StartLimitIntervalSec=120
+StartLimitBurst=5
+StartLimitAction=none
 
 [Service]
 User=$USER
@@ -29,17 +39,6 @@ ExecStart=/usr/bin/screen -DmS $INSTANCE_NAME /usr/bin/bash $START_SCRIPT
 Restart=always
 RestartSec=3s
 LimitNOFILE=4096
-# Crash-loop protection: 5 failed starts inside 2 minutes and systemd stops
-# retrying (StartLimitAction=none — it just gives up, nothing more drastic).
-# Without this, RestartSec=3s can straddle systemd's own default 10s window
-# and never trip the built-in limit, so a broken server (e.g. a bad mod)
-# restarts forever until someone SSHes in and stops it by hand. Recovery
-# after a trip: fix the cause, then \`systemctl reset-failed &&
-# systemctl start $INSTANCE_NAME\` (the wrapper's restart-instance action
-# already does the reset-failed step — see server_control.sh).
-StartLimitIntervalSec=120
-StartLimitBurst=5
-StartLimitAction=none
 
 [Install]
 WantedBy=multi-user.target

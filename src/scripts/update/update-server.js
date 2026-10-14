@@ -32,6 +32,10 @@ const { readManifest, writeManifest } = require("./lib/manifest");
 const readline = require("readline");
 const { spawn, execFile, execSync, execFileSync } = require("child_process");
 const axios = require("axios");
+// S-015: a half-open connection must not hang this script forever, least of
+// all during an upgrade, with the server stopped and the lock held. File
+// downloads set their own deadlines (lib/download.js).
+axios.defaults.timeout = axios.defaults.timeout || 30_000;
 const { parseArgs } = require("./lib/args");
 const { loadVariables: readVariables } = require("./lib/variables");
 const { downloadVerified } = require("./lib/download");
@@ -234,7 +238,9 @@ function installJabbaVerified() {
   const crypto = require("crypto");
   const installUrl =
     process.env.JABBA_INSTALL_URL ||
-    "https://raw.githubusercontent.com/Jabba-Team/jabba/main/install.sh";
+    // Jabba 0.15.0, by commit (S-027): the pinned hash below is of this exact
+    // file, and a branch URL broke every install the day upstream changed it.
+    "https://raw.githubusercontent.com/Jabba-Team/jabba/b045bf217b9e2890c37a767097d7d2e8f147ad97/install.sh";
   const expectedSha =
     process.env.JABBA_INSTALL_SHA256 ||
     "7298872bae6a19bf22b36c302cb260e6fa88cc09ee21d50cdd0755b4270a9e5e";
@@ -246,8 +252,8 @@ function installJabbaVerified() {
   try {
     // -f: fail on HTTP error, --proto =https / --tlsv1.2: refuse downgrades.
     execSync(
-      `curl -fsSL --proto '=https' --tlsv1.2 ${JSON.stringify(installUrl)} -o ${JSON.stringify(tmp)}`,
-      { stdio: childStdio() },
+      `curl -fsSL --proto '=https' --tlsv1.2 --max-time 120 ${JSON.stringify(installUrl)} -o ${JSON.stringify(tmp)}`,
+      { stdio: childStdio(), timeout: 150_000 },
     );
     const actualSha = crypto
       .createHash("sha256")
@@ -262,7 +268,7 @@ function installJabbaVerified() {
       );
     }
     console.log("[update-server] Jabba installer checksum OK, running.");
-    execSync(`bash ${JSON.stringify(tmp)}`, { stdio: childStdio() });
+    execSync(`bash ${JSON.stringify(tmp)}`, { stdio: childStdio(), timeout: 10 * 60_000 });
   } finally {
     try {
       fs.rmSync(tmp, { force: true });
@@ -348,7 +354,7 @@ async function ensureJavaVersion(mcVersion) {
   try {
     const listOutput = execSync(
       "bash -c '. ~/.jabba/jabba.sh && jabba ls-remote'",
-      { encoding: "utf8" },
+      { encoding: "utf8", timeout: 120_000 },
     );
     const candidates = listOutput
       .split("\n")
@@ -367,7 +373,8 @@ async function ensureJavaVersion(mcVersion) {
     console.log(`Installing ${candidate}...`);
     execSync(
       `bash -c '. ~/.jabba/jabba.sh && jabba install ${candidate} && jabba use ${candidate}'`,
-      { stdio: childStdio() },
+      // S-015: a JDK install that stalls must not hold the upgrade forever.
+      { stdio: childStdio(), timeout: 20 * 60_000 },
     );
     console.log(`Java ${requiredJava} installed.`);
     return { requiredJava, javaBin: path.join(jabbaJdkDir(), candidate, "bin", "java") };
