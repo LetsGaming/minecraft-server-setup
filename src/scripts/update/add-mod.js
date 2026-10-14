@@ -14,6 +14,10 @@
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
+// S-015: a half-open connection must not hang this script forever, least of
+// all during an upgrade, with the server stopped and the lock held. File
+// downloads set their own deadlines (lib/download.js).
+axios.defaults.timeout = axios.defaults.timeout || 30_000;
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
@@ -34,6 +38,10 @@ const downloadedVersionsPath = path.resolve(
 //   slug       Modrinth slug or project ID — positional or --slug=.
 //   mcVersion  Target MC version. Falls back to downloaded_versions.json.
 //   modLoader  Mod loader (e.g. fabric). Falls back to downloaded_versions.json.
+// Serialized with other mod changes and with restore, rollback and upgrade
+// (S-024): re-runs this script under the instance's operation lock.
+require("./lib/opLock").guardModOperation();
+const { readManifest, writeManifest } = require("./lib/manifest");
 const { parseArgs } = require("./lib/args");
 const { loadVariables } = require("./lib/variables");
 const { createJsonMode } = require("./lib/json-mode");
@@ -81,24 +89,16 @@ if (!slug) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function readVersionsFile() {
-  if (!fs.existsSync(downloadedVersionsPath)) {
-    console.error(
-      `downloaded_versions.json not found at: ${downloadedVersionsPath}`,
-    );
-    process.exit(1);
-  }
   try {
-    return JSON.parse(fs.readFileSync(downloadedVersionsPath, "utf8"));
-  } catch {
-    console.error("Could not parse downloaded_versions.json.");
+    return readManifest(downloadedVersionsPath);
+  } catch (err) {
+    console.error(err.message);
     process.exit(1);
   }
 }
 
 function writeVersionsFile(data) {
-  const tmp = `${downloadedVersionsPath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  fs.renameSync(tmp, downloadedVersionsPath);
+  writeManifest(downloadedVersionsPath, data);
 }
 
 /**
@@ -222,7 +222,7 @@ async function installMod(
       console.log(
         `${indent}Skipping "${canonicalSlug}" — already registered (${existing.versionId}).`,
       );
-      return null;
+      return { alreadyRegistered: true, versionId: existing.versionId };
     }
 
     // Registered but filename is missing — fetch the known version, download
@@ -256,7 +256,7 @@ async function installMod(
     existing.filename = filename;
     writeVersionsFile(downloadedVersions);
     console.log(`${indent}Updated filename for "${canonicalSlug}" in downloaded_versions.json.`);
-    return { filenameUpdated: true };
+    return { filenameUpdated: true, dependencies: knownVersion.dependencies ?? [] };
   }
 
   const version = versionId
@@ -349,7 +349,7 @@ async function main() {
   if (versionId) console.log(`  Version ID : ${versionId}\n`);
 
   // ── Install the requested mod ────────────────────────────────────────────────
-  const version = await installMod(
+  let version = await installMod(
     slug,
     mcVersion,
     modLoader,
@@ -359,18 +359,21 @@ async function main() {
     versionId,
   );
 
-  if (!version) {
-    // Was already registered with a filename — nothing to do.
-    console.log(
-      "Remove it from downloaded_versions.json first if you want to re-add it.",
-    );
-    process.exit(0);
-  }
-
-  if (version.filenameUpdated) {
-    // Filename was missing and has now been patched — nothing else to do.
-    console.log("\nDone.\n");
-    process.exit(0);
+  // S-023: the mod is registered before its dependencies are installed, so a
+  // run that failed on a dependency left it registered without it, and every
+  // later add stopped right here. An already registered mod still gets its
+  // required dependencies checked and installed.
+  if (version?.alreadyRegistered) {
+    console.log("Checking that its required dependencies are installed...");
+    try {
+      version = await fetchVersion(version.versionId);
+    } catch {
+      version = null;
+    }
+    if (!version) {
+      console.log("Its registered version could not be fetched; dependencies not checked.");
+      process.exit(0);
+    }
   }
 
   console.log("\nDone.\n");

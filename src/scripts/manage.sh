@@ -105,7 +105,10 @@ cmd_status() {
     local status="Stopped"
     local players="-"
 
-    if screen -list 2>/dev/null | grep -q "$instance"; then
+    # The whole session name (S-030): "survival" must not match "survival2".
+    local name_re
+    name_re=$(printf '%s' "$instance" | sed 's/[][\.*^$(){}+?|]/\\&/g')
+    if screen -list 2>/dev/null | grep -Eq "^[[:space:]]*[0-9]+\.${name_re}[[:space:]]"; then
       status="Running"
       # Try to get player count
       players=$(bash "$scripts_dir/misc/status.sh" 2>/dev/null | grep -oP 'Player List: \K.*' || echo "?")

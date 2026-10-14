@@ -87,7 +87,8 @@ function sha256(file) {
 
 async function download(url, dest) {
   if (typeof fetch !== "function") throw new Error("This Node.js has no fetch(); use Node 18 or newer, or pass --tarball.");
-  const res = await fetch(url, { redirect: "follow" });
+  // Bounded (S-015): a stalled download must not hang setup.
+  const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(300_000) });
   if (!res.ok) throw new Error(`Download failed: ${url} answered ${res.status}`);
   fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
 }

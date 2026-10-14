@@ -7,9 +7,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load the server_control.sh script from the common directory
 source "$SCRIPT_DIR/../common/server_control.sh"
+source "$SCRIPT_DIR/../common/archive_restore.sh"
 
-# Get the server running status and player list
-if ! session_running; then
+# Get the server running status and player list. RCON, the screen session and
+# systemd all count (S-030): a server reachable only by RCON is running too.
+_running_rc=0
+server_is_running || _running_rc=$?
+if [[ "$_running_rc" -ne 0 ]]; then
     SERVER_RUNNING="Not Running"
     PLAYER_LIST="Server is not running, no player list available."
 else

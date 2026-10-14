@@ -98,6 +98,7 @@ test_unit_gets_the_crash_loop_limits_after_restartsec() {
   assert_contains "$unit" "StartLimitBurst=5" "the burst limit is added"
   assert_contains "$unit" "StartLimitIntervalSec=120" "and the window"
   assert_contains "$unit" "StartLimitAction=none" "and the action"
+  assert_eq "" "$(awk '/^\[/{s=$0} s=="[Service]" && /^StartLimit/' <<< "$unit")" "in [Unit], where systemd reads them (S-016)"
   assert_contains "$unit" "LimitNOFILE=4096" "the rest of the unit is untouched"
   assert_eq "RestartSec=3s" "$(grep -B0 -A0 '^RestartSec' <<< "$unit")" "RestartSec is unchanged"
   assert_logged "systemctl daemon-reload" "systemd is told, without a restart"
@@ -109,12 +110,30 @@ test_unit_gets_the_crash_loop_limits_after_restartsec() {
   assert_eq 1 "$kept" "the old unit is kept"
 }
 
-test_a_unit_with_its_own_limits_is_left_alone() {
+test_limits_in_unit_are_left_alone() {
   setup
-  printf '%s' "${OLD_UNIT/RestartSec=3s/RestartSec=3s
+  printf '%s' "${OLD_UNIT/\[Unit\]/[Unit]
 StartLimitBurst=10}" > "$SM_UNIT_DIR/testinst.service"
   sm_plan > /dev/null
-  assert_eq "instance_start_script" "${SM_PENDING[*]}" "the operator's own StartLimit settings win"
+  assert_eq "instance_start_script" "${SM_PENDING[*]}" "the operator's own [Unit] StartLimit settings win"
+}
+
+test_limits_in_service_move_to_unit_keeping_their_values() {
+  # S-016: systemd ignores StartLimit* in [Service]; units written that way
+  # never stopped a crash loop. Their values move to [Unit].
+  setup
+  printf '%s' "${OLD_UNIT/RestartSec=3s/RestartSec=3s
+StartLimitIntervalSec=300
+StartLimitBurst=10}" > "$SM_UNIT_DIR/testinst.service"
+  sm_plan > /dev/null
+  assert_contains "${SM_PENDING[*]}" "unit_start_limits" "a unit with the limits in [Service] is pending"
+  sm_apply > /dev/null
+  local unit
+  unit="$(cat "$SM_UNIT_DIR/testinst.service")"
+  assert_eq $'StartLimitIntervalSec=300\nStartLimitBurst=10' "$(awk '/^\[/{s=$0} s=="[Unit]" && /^StartLimit/' <<< "$unit")" "the operator's values now sit in [Unit]"
+  assert_eq "" "$(awk '/^\[/{s=$0} s=="[Service]" && /^StartLimit/' <<< "$unit")" "and none are left in [Service]"
+  sm_plan > /dev/null
+  assert_not_contains "${SM_PENDING[*]}" "unit_start_limits" "applied once, it is done"
 }
 
 test_a_unit_that_does_not_exist_is_skipped() {

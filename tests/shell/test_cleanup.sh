@@ -148,4 +148,20 @@ RMSHIM
   assert_missing "$T/backups/archives/update/minecraft_backup_u1.tar.zst" "later policies still run"
 }
 
+test_a_count_cap_of_zero_keeps_everything() {
+  # S-030: MAX_HOURLY_BACKUPS=0 deleted every hourly backup, and a 0 for an
+  # archive tier stopped the cleanup with an error.
+  setup
+  set_var MAX_HOURLY_BACKUPS 0
+  set_var MAX_DAILY_BACKUPS 0
+  mk_backup hourly minecraft_backup_h1.tar.zst 5
+  mk_backup hourly minecraft_backup_h2.tar.zst 6
+  mk_backup archives/daily minecraft_backup_d1.tar.zst 7
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_exists "$T/backups/hourly/minecraft_backup_h1.tar.zst" "hourly backups are kept"
+  assert_exists "$T/backups/hourly/minecraft_backup_h2.tar.zst" "all of them"
+  assert_exists "$T/backups/archives/daily/minecraft_backup_d1.tar.zst" "and the daily one"
+}
+
 run_tests

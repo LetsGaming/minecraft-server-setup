@@ -3,6 +3,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common/server_control.sh"
+source "$SCRIPT_DIR/common/utils.sh"
+# Not while a backup, restore, rollback or upgrade runs (S-030): a scheduled
+# restart used to stop the server in the middle of a backup. Exit 75 = busy.
+acquire_operation_lock restart || exit 75
 
 # ── Args ──
 FORCE=false

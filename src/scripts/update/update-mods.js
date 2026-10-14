@@ -6,6 +6,7 @@ const { loadVariables } = require("./lib/variables");
 const { detectInstalledJars } = require("./lib/jars");
 const { createJsonMode } = require("./lib/json-mode");
 const { safeFilenameFromUrl, downloadToTemp } = require("./lib/download");
+const { writeManifest } = require("./lib/manifest");
 
 // Usage:
 //   node update-mods.js [mcVersion] [--mcVersion=<ver>] [--migrate]
@@ -83,11 +84,7 @@ function migrateDownloadedVersions(downloadedVersions, modsDir) {
   }
 
   if (changed) {
-    fs.writeFileSync(
-      downloadedVersionsPath,
-      JSON.stringify(downloadedVersions, null, 2),
-      "utf8",
-    );
+    writeManifest(downloadedVersionsPath, downloadedVersions);
     console.log("Migration completed successfully.");
   } else {
     console.log("No legacy entries found. Nothing to migrate.");
@@ -212,11 +209,7 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
         versionId: mod.latestVersionId,
         filename,
       };
-      fs.writeFileSync(
-        downloadedVersionsPath,
-        JSON.stringify(downloadedVersions, null, 2),
-        "utf8",
-      );
+      writeManifest(downloadedVersionsPath, downloadedVersions);
       console.log(`Downloaded and installed: ${filename}\n`);
       updated.push({ slug: mod.slug, toVersionId: mod.latestVersionId, filename });
     } catch (err) {
@@ -272,4 +265,9 @@ async function main() {
 
 module.exports = { runUpdates, emitJson, failWith, JSON_MODE };
 
-if (require.main === module) main();
+if (require.main === module) {
+  // Serialized with other mod changes and with restore, rollback and upgrade
+  // (S-024): re-runs this script under the instance's operation lock.
+  require("./lib/opLock").guardModOperation();
+  main();
+}

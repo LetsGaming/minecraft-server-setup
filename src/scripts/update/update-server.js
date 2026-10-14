@@ -28,12 +28,17 @@
 
 const fs = require("fs");
 const path = require("path");
+const { readManifest, writeManifest } = require("./lib/manifest");
 const readline = require("readline");
 const { spawn, execFile, execSync, execFileSync } = require("child_process");
 const axios = require("axios");
+// S-015: a half-open connection must not hang this script forever, least of
+// all during an upgrade, with the server stopped and the lock held. File
+// downloads set their own deadlines (lib/download.js).
+axios.defaults.timeout = axios.defaults.timeout || 30_000;
 const { parseArgs } = require("./lib/args");
 const { loadVariables: readVariables } = require("./lib/variables");
-const { downloadVerified } = require("./lib/download");
+const { downloadVerified, downloadMavenVerified } = require("./lib/download");
 const { createJsonMode } = require("./lib/json-mode");
 
 // ── Paths ─────────────────────────────────────────────────────────────────
@@ -75,20 +80,14 @@ function loadVariables() {
   return readVariables(VARIABLES_PATH);
 }
 
+// A corrupt manifest is an error (S-024): read as {}, the next save kept only
+// gameVersion and dropped every mod entry.
 function readDownloadedVersions() {
-  try {
-    return JSON.parse(fs.readFileSync(DOWNLOADED_VERSIONS_PATH, "utf8"));
-  } catch {
-    return {};
-  }
+  return readManifest(DOWNLOADED_VERSIONS_PATH, { missingOk: true });
 }
 
 function writeDownloadedVersions(data) {
-  fs.writeFileSync(
-    DOWNLOADED_VERSIONS_PATH,
-    JSON.stringify(data, null, 2),
-    "utf8",
-  );
+  writeManifest(DOWNLOADED_VERSIONS_PATH, data);
 }
 
 function saveGameVersion(versionId) {
@@ -239,7 +238,9 @@ function installJabbaVerified() {
   const crypto = require("crypto");
   const installUrl =
     process.env.JABBA_INSTALL_URL ||
-    "https://raw.githubusercontent.com/Jabba-Team/jabba/main/install.sh";
+    // Jabba 0.15.0, by commit (S-027): the pinned hash below is of this exact
+    // file, and a branch URL broke every install the day upstream changed it.
+    "https://raw.githubusercontent.com/Jabba-Team/jabba/b045bf217b9e2890c37a767097d7d2e8f147ad97/install.sh";
   const expectedSha =
     process.env.JABBA_INSTALL_SHA256 ||
     "7298872bae6a19bf22b36c302cb260e6fa88cc09ee21d50cdd0755b4270a9e5e";
@@ -251,8 +252,8 @@ function installJabbaVerified() {
   try {
     // -f: fail on HTTP error, --proto =https / --tlsv1.2: refuse downgrades.
     execSync(
-      `curl -fsSL --proto '=https' --tlsv1.2 ${JSON.stringify(installUrl)} -o ${JSON.stringify(tmp)}`,
-      { stdio: childStdio() },
+      `curl -fsSL --proto '=https' --tlsv1.2 --max-time 120 ${JSON.stringify(installUrl)} -o ${JSON.stringify(tmp)}`,
+      { stdio: childStdio(), timeout: 150_000 },
     );
     const actualSha = crypto
       .createHash("sha256")
@@ -267,7 +268,7 @@ function installJabbaVerified() {
       );
     }
     console.log("[update-server] Jabba installer checksum OK, running.");
-    execSync(`bash ${JSON.stringify(tmp)}`, { stdio: childStdio() });
+    execSync(`bash ${JSON.stringify(tmp)}`, { stdio: childStdio(), timeout: 10 * 60_000 });
   } finally {
     try {
       fs.rmSync(tmp, { force: true });
@@ -281,13 +282,56 @@ function jabbaJdkDir() {
   return path.join(process.env.HOME, ".jabba", "jdk");
 }
 
-/** The installed Jabba JDK directory name for a Java major version, or null. */
+/**
+ * Order Jabba JDK names ("temurin@21.0.10") by their version numbers, newest
+ * first. A plain string sort put 21.0.9 after 21.0.10 (S-030).
+ */
+function compareJdkNames(a, b) {
+  const nums = (n) => (n.split("@")[1] ?? "").split(/[.+_-]/).map((x) => Number.parseInt(x, 10) || 0);
+  const x = nums(a);
+  const y = nums(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (y[i] ?? 0) - (x[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** The newest installed Jabba JDK directory name for a Java major version, or null. */
 function findInstalledJava(requiredJava) {
   const jabbaDir = jabbaJdkDir();
-  return fs.existsSync(jabbaDir)
-    ? (fs.readdirSync(jabbaDir).find((n) => n.includes(`@${requiredJava}.`)) ??
-        null)
-    : null;
+  if (!fs.existsSync(jabbaDir)) return null;
+  const matches = fs.readdirSync(jabbaDir).filter((n) => n.includes(`@${requiredJava}.`));
+  return matches.sort(compareJdkNames)[0] ?? null;
+}
+
+/**
+ * Point the server's JAVA= at `javaBin` (S-007). Vanilla installs launch
+ * ${JAVA} from <server>/variables.txt, which setup wrote once; an upgrade to
+ * a version that needs a newer Java installed that JDK and then started the
+ * old one, so it always failed and rolled back. The line lives in the server
+ * folder, so the job's restore puts the old one back if the upgrade fails.
+ * Installs whose start does not read JAVA= are left alone.
+ */
+function setServerJava(serverPath, javaBin) {
+  const file = path.join(serverPath, "variables.txt");
+  let content;
+  try {
+    content = fs.readFileSync(file, "utf8");
+  } catch {
+    return false;
+  }
+  if (!/^JAVA=.*$/m.test(content)) return false;
+  if (!/^[A-Za-z0-9._/+@-]+$/.test(javaBin)) {
+    throw new Error(`Refusing to write an unusual Java path into variables.txt: ${javaBin}`);
+  }
+  const next = content.replace(/^JAVA=.*$/m, `JAVA="${javaBin}"`);
+  if (next === content) return true;
+  const tmp = `${file}.${process.pid}.tmp`;
+  const mode = fs.statSync(file).mode & 0o7777;
+  fs.writeFileSync(tmp, next, { mode });
+  fs.renameSync(tmp, file);
+  return true;
 }
 
 async function ensureJavaVersion(mcVersion) {
@@ -303,14 +347,14 @@ async function ensureJavaVersion(mcVersion) {
 
   if (installed) {
     console.log(`Java ${requiredJava} already installed (${installed}).`);
-    return requiredJava;
+    return { requiredJava, javaBin: path.join(jabbaJdkDir(), installed, "bin", "java") };
   }
 
   console.log(`Java ${requiredJava} not found. Installing automatically...`);
   try {
     const listOutput = execSync(
       "bash -c '. ~/.jabba/jabba.sh && jabba ls-remote'",
-      { encoding: "utf8" },
+      { encoding: "utf8", timeout: 120_000 },
     );
     const candidates = listOutput
       .split("\n")
@@ -320,8 +364,7 @@ async function ensureJavaVersion(mcVersion) {
           l.startsWith(`adopt@${requiredJava}.`) ||
           l.startsWith(`temurin@${requiredJava}.`),
       )
-      .sort()
-      .reverse();
+      .sort(compareJdkNames);
     if (!candidates.length)
       throw new Error(
         `No Jabba candidates for Java ${requiredJava}. Install manually.`,
@@ -330,15 +373,16 @@ async function ensureJavaVersion(mcVersion) {
     console.log(`Installing ${candidate}...`);
     execSync(
       `bash -c '. ~/.jabba/jabba.sh && jabba install ${candidate} && jabba use ${candidate}'`,
-      { stdio: childStdio() },
+      // S-015: a JDK install that stalls must not hold the upgrade forever.
+      { stdio: childStdio(), timeout: 20 * 60_000 },
     );
     console.log(`Java ${requiredJava} installed.`);
+    return { requiredJava, javaBin: path.join(jabbaJdkDir(), candidate, "bin", "java") };
   } catch (err) {
     throw new Error(
       `Failed to auto-install Java ${requiredJava}: ${err.message}`,
     );
   }
-  return requiredJava;
 }
 
 // ── Server update ─────────────────────────────────────────────────────────
@@ -369,13 +413,9 @@ async function updateFabric(versionId, serverPath) {
   const installerJar = `fabric-installer-${installerVer}.jar`;
   const installerPath = path.join(serverPath, installerJar);
   const url = `https://maven.fabricmc.net/net/fabricmc/fabric-installer/${installerVer}/${installerJar}`;
-  const writer = fs.createWriteStream(installerPath);
-  const resp = await axios.get(url, { responseType: "stream" });
-  resp.data.pipe(writer);
-  await new Promise((res, rej) => {
-    writer.on("finish", res);
-    writer.on("error", rej);
-  });
+  // Verified against the checksum Fabric's maven publishes (S-021): this jar
+  // is executed next.
+  await downloadMavenVerified(url, installerPath);
   const javaVersion = await getJavaVersionFor(versionId);
   const javaInstall = findInstalledJava(javaVersion);
   if (!javaInstall)
@@ -409,15 +449,35 @@ async function updateFabric(versionId, serverPath) {
   console.log("Fabric updated.");
 }
 
+/**
+ * Update every mod for `version`. Resolves with the mods that could not be
+ * updated (S-014): update-mods carries on past a failed download or a hash
+ * mismatch and exits 0, so its summary is the only place that says a mod is
+ * still on its old build.
+ */
 function runModUpdate(version) {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", [UPDATE_MODS_SCRIPT, version], {
-      stdio: childStdio(),
+    const stdio = childStdio();
+    const child = spawn("node", [UPDATE_MODS_SCRIPT, version, "--json"], {
+      stdio: ["ignore", "pipe", Array.isArray(stdio) ? stdio[2] : "inherit"],
     });
-    child.on("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error("update-mods.js failed")),
-    );
+    let out = "";
+    child.stdout.on("data", (d) => {
+      out += d.toString();
+    });
     child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) return reject(new Error("update-mods.js failed"));
+      const last = out.trim().split("\n").reverse().find((l) => l.startsWith("{"));
+      let summary;
+      try {
+        summary = JSON.parse(last ?? "");
+      } catch {
+        return reject(new Error("update-mods.js gave no summary"));
+      }
+      if (!summary.ok) return reject(new Error(summary.error || "update-mods.js failed"));
+      resolve((summary.failed ?? []).map((f) => ({ slug: String(f.slug), error: String(f.error ?? "") })));
+    });
   });
 }
 
@@ -497,7 +557,10 @@ async function applyMode({ serverPath, targetVersionArg, emit }) {
     targetVersionArg || "latest",
   );
   emit({ phase: "java", msg: `Ensuring Java for ${versionId}` });
-  await ensureJavaVersion(versionId);
+  const { javaBin } = await ensureJavaVersion(versionId);
+  if (setServerJava(serverPath, javaBin)) {
+    emit({ phase: "java", msg: `The server now starts with ${javaBin}` });
+  }
   emit({ phase: "jar", msg: `Installing the ${versionId} server` });
   await swapServer({
     modLoader: installed.modLoader,
@@ -506,8 +569,14 @@ async function applyMode({ serverPath, targetVersionArg, emit }) {
     serverPath,
   });
   emit({ phase: "mods", msg: "Updating mods" });
-  await runModUpdate(versionId);
-  emit({ ok: true, version: versionId });
+  const modUpdateFailed = await runModUpdate(versionId);
+  if (modUpdateFailed.length > 0) {
+    emit({
+      phase: "mods",
+      msg: `Could not update: ${modUpdateFailed.map((f) => `${f.slug} (${f.error})`).join(", ")}`,
+    });
+  }
+  emit({ ok: true, version: versionId, modUpdateFailed: modUpdateFailed.map((f) => f.slug) });
 }
 
 /** The interactive flow for a person at a terminal. */
@@ -521,7 +590,8 @@ async function interactiveMode({ vars, serverPath, args }) {
   console.log(`Target version: ${versionId}`);
   console.log(`Mod loader: ${modLoader}`);
 
-  await ensureJavaVersion(versionId);
+  const { javaBin } = await ensureJavaVersion(versionId);
+  if (setServerJava(serverPath, javaBin)) console.log(`The server now starts with ${javaBin}`);
 
   console.log("\nChecking mod compatibility...");
   const updateInfo = await runCheckUpdatesJSON(versionId);
@@ -560,7 +630,8 @@ async function interactiveMode({ vars, serverPath, args }) {
   }
 
   await swapServer({ modLoader, versionId, metadataUrl, serverPath });
-  await runModUpdate(versionId);
+  const modUpdateFailed = await runModUpdate(versionId);
+  for (const f of modUpdateFailed) console.warn(`[WARN] ${f.slug} was not updated: ${f.error}`);
 
   if (incompatible.length > 0 && disableIncompatible) {
     disableMods(incompatible);
@@ -602,6 +673,21 @@ async function main() {
     process.exit(2);
   }
 
+  const requested = args.get("version");
+  // S-022: the version must look like one, and --apply must be told which:
+  // defaulting to "latest" there turned a mangled argument into an upgrade to
+  // a version nobody chose.
+  if (requested !== null && requested !== "latest" && !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,39}$/.test(requested)) {
+    emit({ ok: false, error: `Not a Minecraft version: ${JSON.stringify(requested)}` });
+    console.error(`Not a Minecraft version: ${JSON.stringify(requested)}`);
+    process.exit(2);
+  }
+  if (args.bool("apply") && (requested === null || requested === "latest")) {
+    emit({ ok: false, error: "--apply needs the exact version to install." });
+    console.error("--apply needs the exact version to install.");
+    process.exit(2);
+  }
+
   const vars = loadVariables();
   const serverPath = vars.SERVER_PATH;
   const ctx = {
@@ -635,4 +721,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { unavailableMods, UNAVAILABLE_STATUSES };
+module.exports = { unavailableMods, UNAVAILABLE_STATUSES, setServerJava, compareJdkNames };

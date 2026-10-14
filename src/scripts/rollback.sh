@@ -54,6 +54,8 @@ if [[ -z "$LATEST_BACKUP" || ! -e "$LATEST_BACKUP" ]]; then
   echo "[ERROR] No update backups found in $BACKUP_DIR"
   exit 1
 fi
+# "Newest" is decided by whoever can write into the folder (S-004).
+archive_is_trusted "$LATEST_BACKUP" || exit 1
 
 BACKUP_DATE=$(basename "$LATEST_BACKUP" | sed 's/minecraft_backup_//' | sed 's/\.tar\..*//' | tr '_' ' ')
 echo "[INFO] Most recent pre-update backup:"
@@ -103,13 +105,15 @@ notify_warning "rollback_start" "Server $INSTANCE_NAME is rolling back to backup
 # Extract next to the server directory and swap, so a failure leaves the
 # current files in place.
 STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
-trap 'rm -rf -- "$STAGING_DIR"; release_operation_lock' EXIT
+trap 'swap_recover; rm -rf -- "$STAGING_DIR"; release_operation_lock' EXIT
+trap 'exit 130' INT TERM
 
 echo "[INFO] Restoring backup..."
 if ! extract_archive "$LATEST_BACKUP" "$STAGING_DIR"; then
   restart_after_failure
   exit 1
 fi
+complete_staged_jars "$STAGING_DIR" "$SERVER_PATH"
 # Extraction takes a while; confirm nothing started the server in the meantime.
 if ! require_server_stopped; then
   echo "[ERROR] Aborting. Server files were not changed." >&2

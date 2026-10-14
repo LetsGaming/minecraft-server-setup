@@ -26,7 +26,7 @@ src/scripts/common/variables.txt
 src/scripts/common/curseforge.txt
 src/scripts/common/downloaded_versions.json
 
-# NOTE: package-lock.json is intentionally committed for reproducible installs.
+# NOTE: package-lock.json is committed for reproducible installs (npm ci).
 
 # Tool state
 .claude-flow/

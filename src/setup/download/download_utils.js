@@ -54,7 +54,20 @@ function downloadFile(url, fileName, totalSize) {
           }
         });
 
+        // A dropped connection ends the response stream with an error; without
+        // a handler the partial file counted as a finished download (S-020).
+        response.data.on("error", (err) => {
+          writer.destroy();
+          fs.rm(fileName, { force: true }, () => {});
+          reject(err);
+        });
+
         writer.on("finish", () => {
+          if (totalSize && downloaded < totalSize) {
+            fs.rm(fileName, { force: true }, () => {});
+            reject(new Error(`Download of ${url} ended after ${downloaded} of ${totalSize} bytes.`));
+            return;
+          }
           console.log("\nDownload complete!");
           resolve();
         });
@@ -106,7 +119,7 @@ function writeVersionsFile(data) {
     fs.mkdirSync(dir, { recursive: true });
   }
   // Atomic write: write to temp file, then rename into place
-  const tmpPath = `${VERSIONS_FILE_PATH}.tmp`;
+  const tmpPath = `${VERSIONS_FILE_PATH}.${process.pid}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
   fs.renameSync(tmpPath, VERSIONS_FILE_PATH);
 }

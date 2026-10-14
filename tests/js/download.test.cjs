@@ -215,3 +215,27 @@ test("downloadToTemp cleans up when the body stream errors", async (t) => {
   }
   assert.equal(fs.existsSync(temp), false);
 });
+
+test("downloadMavenVerified checks the repository's published checksum and fails closed (S-021)", async (t) => {
+  const url = "https://maven.example/net/fabricmc/fabric-installer/1.0/fabric-installer-1.0.jar";
+  const { dir, lib } = inProcess(t, {
+    [url]: { bodyBase64: b64("INSTALLER"), headers: {} },
+    [`${url}.sha512`]: { json: `${sha("sha512", "INSTALLER")}  fabric-installer-1.0.jar\n` },
+  });
+  const target = path.join(dir, "installer.jar");
+  await lib.downloadMavenVerified(url, target);
+  assert.equal(fs.readFileSync(target, "utf8"), "INSTALLER");
+
+  const other = "https://maven.example/x/y/1/y-1.jar";
+  const { dir: dir2, lib: lib2 } = inProcess(t, {
+    [other]: { bodyBase64: b64("TAMPERED"), headers: {} },
+    [`${other}.sha1`]: { json: sha("sha1", "ORIGINAL") },
+  });
+  await assert.rejects(lib2.downloadMavenVerified(other, path.join(dir2, "y.jar")), /sha1/);
+  assert.equal(fs.existsSync(path.join(dir2, "y.jar")), false);
+
+  const bare = "https://maven.example/z/1/z-1.jar";
+  const { dir: dir3, lib: lib3 } = inProcess(t, { [bare]: { bodyBase64: b64("Z"), headers: {} } });
+  await assert.rejects(lib3.downloadMavenVerified(bare, path.join(dir3, "z.jar")), /No published checksum/);
+  assert.equal(fs.existsSync(path.join(dir3, "z.jar")), false);
+});

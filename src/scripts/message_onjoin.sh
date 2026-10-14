@@ -47,6 +47,11 @@ while [[ $# -gt 0 ]]; do
             if [[ ! -f "$mf" ]]; then
                 log "ERROR" "Message file not found: $mf"; exit 1
             fi
+            # Only a file this user owns (S-026): the option must not read
+            # any file the server user can see into a title players get.
+            if [[ "$(stat -c %u -- "$mf")" != "$(id -u)" ]]; then
+                log "ERROR" "Message file is not owned by $(id -un): $mf"; exit 1
+            fi
             while IFS= read -r line; do
                 if [[ "$line" =~ ^title=\"(.*)\" ]]; then
                     TITLE="${BASH_REMATCH[1]}"
@@ -64,6 +69,19 @@ while [[ $# -gt 0 ]]; do
             print_usage; exit 1
             ;;
     esac
+done
+
+# JSON string contents: \ and " escaped, control characters refused (S-026).
+json_text() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "$s"
+}
+for text in "$TITLE" "$MESSAGE"; do
+    if [[ "$text" =~ [[:cntrl:]] ]]; then
+        log "ERROR" "Title and message must be one line without control characters."; exit 1
+    fi
 done
 
 touch "$MESSAGE_FILE"
@@ -85,8 +103,8 @@ handle_player_welcome() {
     log "INFO" "Sending title to $player"
     # Build JSON components
     local title_json subtitle_json
-    title_json="{\"text\":\"$TITLE\"}"
-    subtitle_json="{\"text\":\"$MESSAGE\"}"
+    title_json="{\"text\":\"$(json_text "$TITLE")\"}"
+    subtitle_json="{\"text\":\"$(json_text "$MESSAGE")\"}"
 
     # Java Edition JSON /title
     send_command "/title $player title $title_json"

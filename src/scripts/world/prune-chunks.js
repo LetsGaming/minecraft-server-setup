@@ -10,8 +10,7 @@
  *   node prune-chunks.js --inspect --plan=<id> --dimension=<id> --cx=<n> --cz=<n>   one chunk, in full
  *   node prune-chunks.js --dimensions             (names and region counts, no chunk is read)
  *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path> | --params-stdin] [--profile] [--no-cache] [--workers=<n>]
- *   node prune-chunks.js --apply  --plan=<id> [--workers=<n>] [--time-budget=<seconds>]
- *   node prune-chunks.js --apply  --plan=<id>
+ *   node prune-chunks.js --apply  --plan=<id> [--backed-up] [--workers=<n>] [--time-budget=<seconds>]
  *   node prune-chunks.js --settings=get
  *   node prune-chunks.js --settings=set --params=<json>
  *
@@ -20,8 +19,9 @@
  * and only what a fresh scan still agrees on; it refuses to run while the
  * server is up, because a JVM holds region files open and rewrites them.
  *
- * The caller is responsible for a backup. upgrade-server.js takes one before it
- * calls --apply; run by hand, take one yourself.
+ * --apply needs a backup behind it: upgrade-server.js takes one before it calls
+ * --apply (and says so with MC_PRUNE_BACKED_UP=1); run by hand, take one
+ * yourself and pass --backed-up.
  */
 
 const fs = require("fs");
@@ -230,7 +230,7 @@ function workersOf(args) {
 async function main() {
   const args = parseArgs({
     flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null, dimension: null, cx: null, cz: null, rx: null, rz: null },
-    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin", "inspect", "tile"],
+    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin", "inspect", "tile", "backed-up"],
   });
   const vars = loadVariables(path.join(SCRIPTS_DIR, "common", "variables.txt"), { optional: true });
 
@@ -347,6 +347,15 @@ async function main() {
       fail("plan_missing", "That plan does not exist any more. Scan again.");
     }
     if (serverIsRunning(vars)) fail("server_running", "The server must be stopped before chunks are deleted.");
+    // S-025: deleting chunks cannot be undone, so it only runs with a backup
+    // behind it: inside the upgrade job (update/upgrade.sh --prune-only), which
+    // takes one first and sets MC_PRUNE_BACKED_UP, or by hand with --backed-up.
+    if (process.env.MC_PRUNE_BACKED_UP !== "1" && !args.bool("backed-up")) {
+      fail(
+        "no_backup",
+        "Deleting chunks needs a backup first. Run it through update/upgrade.sh --prune-only, which takes one, or take a backup yourself and pass --backed-up.",
+      );
+    }
     out({ phase: "prune", msg: "Deleting unused chunks" });
     const budget = Number(args.get("time-budget") ?? DEFAULT_TIME_BUDGET_SECONDS);
     const startedAt = new Date().toISOString();

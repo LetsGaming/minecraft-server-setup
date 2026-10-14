@@ -99,16 +99,23 @@ sm_instance_start_script_apply() {
 _sm_unit_file() { echo "$(_sm_unit_dir)/${SM_INSTANCE_NAME}.service"; }
 
 sm_unit_start_limits_describe() {
-  echo "systemd unit ${SM_INSTANCE_NAME}.service: add crash-loop limits (StartLimitBurst=5 within 120 s); a daemon-reload, no restart"
+  echo "systemd unit ${SM_INSTANCE_NAME}.service: crash-loop limits in [Unit], where systemd reads them (StartLimitBurst=5 within 120 s unless set); a daemon-reload, no restart"
 }
 
+# StartLimit* lines of one section of a unit file.
+_sm_section_limits() { # section unit
+  awk -v want="[$1]" '/^\[/ { in_s = ($0 == want) } in_s && /^StartLimit/' "$2"
+}
+
+# S-016: systemd reads StartLimitIntervalSec/StartLimitBurst only in [Unit];
+# in [Service] they are ignored ("Unknown key name"), so units written with
+# them there never stopped a crash loop. Pending while any such line sits in
+# [Service], or while [Unit] has none at all.
 sm_unit_start_limits_check() {
   local unit
   unit="$(_sm_unit_file)"
-  [[ -f "$unit" ]] \
-    && grep -q '^\[Service\]' "$unit" \
-    && grep -q '^RestartSec=' "$unit" \
-    && ! grep -q '^StartLimit' "$unit"
+  [[ -f "$unit" ]] && grep -q '^\[Service\]' "$unit" && grep -q '^RestartSec=' "$unit" || return 1
+  [[ -n "$(_sm_section_limits Service "$unit")" || -z "$(_sm_section_limits Unit "$unit")" ]]
 }
 
 sm_unit_start_limits_apply() {
@@ -119,14 +126,21 @@ sm_unit_start_limits_apply() {
   keep="$dir/${SM_INSTANCE_NAME}.service.$(_sm_stamp)"
   patched="$keep.patched"
   cp "$unit" "$keep" || return 1
-  awk '
+  # Lines already in [Service] move to [Unit] with their values (they are the
+  # operator's, or the ones an earlier setup wrote); defaults only when the
+  # unit has none anywhere. Lines already in [Unit] stay as they are.
+  local moved existing
+  moved="$(_sm_section_limits Service "$unit")"
+  existing="$(_sm_section_limits Unit "$unit")"
+  if [[ -z "$moved" && -z "$existing" ]]; then
+    moved=$'StartLimitIntervalSec=120\nStartLimitBurst=5\nStartLimitAction=none'
+  fi
+  awk -v add="$moved" '
+    /^\[/ { section = $0 }
+    section == "[Service]" && /^StartLimit/ { next }
     { print }
-    /^RestartSec=/ && !done {
-      print "StartLimitIntervalSec=120"
-      print "StartLimitBurst=5"
-      print "StartLimitAction=none"
-      done = 1
-    }' "$unit" > "$patched" || return 1
+    $0 == "[Unit]" && !done && add != "" { print add; done = 1 }
+  ' "$unit" > "$patched" || return 1
 
   local sudo_cmd="${SM_SUDO-sudo -n}"
   # shellcheck disable=SC2086  # SM_SUDO is a command with its own arguments

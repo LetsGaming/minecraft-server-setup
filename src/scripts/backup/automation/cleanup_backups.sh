@@ -62,10 +62,15 @@ delete_old_archives() {
   local dir="$BACKUP_BASE/archives/$type"
   local max_value="${!max_var}"
 
-  [[ -n "$max_value" && "$max_value" -gt 0 ]] || {
+  [[ "$max_value" =~ ^[0-9]+$ ]] || {
     log "ERROR: $max_var is not set or invalid (value: '$max_value')" >&2
     exit 1
   }
+  # 0 means no count limit (S-030); MAX_STORAGE_GB still applies.
+  if (( max_value == 0 )); then
+    log "$max_var is 0: keeping every $type backup (the storage limit still applies)."
+    return
+  fi
 
   log "Checking $type backups in: $dir"
   mapfile -t backups < <(list_archives "$dir")
@@ -83,6 +88,13 @@ delete_old_hourly_backups() {
   local dir="$BACKUP_BASE/hourly"
   local max="${MAX_HOURLY_BACKUPS:-3}"
 
+  # 0 means no count limit (S-030). It used to mean "keep none" and deleted
+  # every hourly backup, the newest one included.
+  if [[ ! "$max" =~ ^[0-9]+$ ]] || (( max == 0 )); then
+    log "MAX_HOURLY_BACKUPS is ${max:-unset}: no count limit on hourly backups (the storage limit still applies)."
+    return
+  fi
+
   log "Checking hourly backups in: $dir"
   mapfile -t snapshots < <(list_archives "$dir")
   if (( ${#snapshots[@]} > max )); then
@@ -95,8 +107,10 @@ delete_old_hourly_backups() {
   fi
 }
 
-# Jars are stored once under jars/ and archives symlink to them (see
-# backup.sh), so a jar is only garbage once no remaining archive links to it.
+# Archives made before backup.sh kept real jars symlink into jars/, so a jar
+# there is only garbage once no remaining archive links to it. Every archive
+# folder counts, general and custom ones included: a jar referenced only by
+# one of those used to be deleted after a day (S-002).
 # Any archive that cannot be listed aborts the pruning: an unreadable archive
 # might be the one that references the jar. Jars younger than a day are kept so
 # a backup that has stored a jar but not yet finished its archive is safe.
@@ -106,9 +120,8 @@ prune_orphan_jars() {
 
   log "Checking for orphaned jars in: $jar_dir"
   declare -A referenced=()
-  local dir archive listing target
-  for dir in "${STORAGE_EVICTION_DIRS[@]}"; do
-    [[ "$dir" == "$BACKUP_BASE/archives/"* ]] || continue
+  local archive listing target
+  [[ -d "$BACKUP_BASE/archives" ]] && {
     while IFS= read -r archive; do
       [[ -n "$archive" ]] || continue
       if [[ "$archive" == *.tar.zst ]]; then
@@ -121,8 +134,8 @@ prune_orphan_jars() {
       while IFS= read -r target; do
         [[ -n "$target" ]] && referenced["${target##*/}"]=1
       done < <(printf '%s\n' "$listing" | sed -n 's/.* -> //p')
-    done < <(list_archives "$dir")
-  done
+    done < <(find "$BACKUP_BASE/archives" -type f \( -name '*.tar.zst' -o -name '*.tar.gz' \) 2>/dev/null)
+  }
 
   local jar removed=0
   while IFS= read -r jar; do

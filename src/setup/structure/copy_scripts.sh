@@ -33,7 +33,8 @@ echo "Scripts copied successfully."
 UPDATE_DIR="$SCRIPTS_DIR/update"
 if [ -f "$UPDATE_DIR/package.json" ]; then
   echo "Installing npm dependencies in scripts/$INSTANCE_NAME/update..."
-  if ( cd "$UPDATE_DIR" && npm install --omit=dev ); then
+  # npm ci from the shipped lockfile when there is one (S-027).
+  if ( cd "$UPDATE_DIR" && if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi ); then
     echo "  done"
   else
     echo "  Failed to install in $UPDATE_DIR" >&2

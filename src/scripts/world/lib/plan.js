@@ -763,8 +763,19 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = n
     }
 
     // A region the engine cannot rewrite safely is left whole, in every folder.
+    // All three files are checked before any is touched (S-025): pruning the
+    // terrain while a damaged entities or poi file was skipped brought old
+    // entities back into the regenerated chunks.
     const regionFile = path.join(dimDir, "region", region.regionName(rx, rz));
-    if (!fs.existsSync(regionFile) || !region.isSafeToRewrite(regionFile)) {
+    if (!fs.existsSync(regionFile)) {
+      skippedFiles++;
+      continue;
+    }
+    const unsafeFolder = world.CHUNK_FOLDERS.find((folder) => {
+      const file = path.join(dimDir, folder, region.regionName(rx, rz));
+      return fs.existsSync(file) && !region.isSafeToRewrite(file);
+    });
+    if (unsafeFolder) {
       skippedFiles++;
       continue;
     }

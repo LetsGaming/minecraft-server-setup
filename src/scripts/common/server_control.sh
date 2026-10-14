@@ -41,8 +41,22 @@ session_running() {
   screen -list 2>/dev/null | grep -Eq "^[[:space:]]*[0-9]+\.${name_re}[[:space:]]"
 }
 
+# _screen_escape <text>: one console line, safe for `screen -X stuff`.
+# Control characters are dropped (a CR or LF would type a second command),
+# and \ ^ $ are escaped: stuff turns ^M and \015 into Enter and expands
+# $VAR, so text like "hi^Mop Mallory" ran a second command (S-026, the
+# wrapper's W-001).
+_screen_escape() {
+  local s="${1//[[:cntrl:]]/}"
+  s="${s//\\/\\\\}"
+  s="${s//^/\\^}"
+  s="${s//\$/\\\$}"
+  printf '%s' "$s"
+}
+
 _screen_send() {
-  local command="$1"
+  local command
+  command="$(_screen_escape "$1")"
   if [ "$(id -u)" -eq 0 ]; then
     sudo -n -u "$USER" screen -S "$INSTANCE_NAME" -p 0 -X stuff "$command$(printf \\r)"
   else
@@ -279,7 +293,9 @@ wait_for_save_completion() {
 
   local waited
   for ((waited = 0; waited < timeout; waited++)); do
-    if _log_has_since "$offset" 'Saved the (game|world)|Saved'; then
+    # The server's own line only (S-009): the old bare "Saved" also matched
+    # any player who typed the word in chat.
+    if _log_has_since "$offset" '\]: Saved the (game|world)'; then
       echo "Save completed."
       return 0
     fi
@@ -294,7 +310,9 @@ save_and_wait() {
   local offset
   offset=$(_log_size)
   send_message "Saving the server now to ensure no data is lost..."
-  send_command "/save-all"
+  # flush (S-009): without it, 1.17+ logs "Saved the game" while chunk
+  # writes are still queued, and a backup can copy torn region files.
+  send_command "/save-all flush"
   wait_for_save_completion 60 "$offset"
 }
 

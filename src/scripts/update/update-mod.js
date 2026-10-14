@@ -10,6 +10,9 @@
 // dashboard's per-mod Update must touch exactly one mod, and add-mod.js refuses
 // an already-installed mod by design.
 
+// Serialized with other mod changes and with restore, rollback and upgrade
+// (S-024): re-runs this script under the instance's operation lock.
+require("./lib/opLock").guardModOperation();
 const { parseArgs } = require("./lib/args");
 const { runUpdates, emitJson, failWith, JSON_MODE } = require("./update-mods.js");
 

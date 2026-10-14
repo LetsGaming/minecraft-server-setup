@@ -21,6 +21,10 @@
 
 const fs = require("fs");
 const path = require("path");
+// Serialized with other mod changes and with restore, rollback and upgrade
+// (S-024): re-runs this script under the instance's operation lock.
+require("./lib/opLock").guardModOperation();
+const { readManifest, writeManifest } = require("./lib/manifest");
 const { parseArgs } = require("./lib/args");
 const { loadVariables } = require("./lib/variables");
 const { detectInstalledJars } = require("./lib/jars");
@@ -70,16 +74,11 @@ function main() {
   const modsDir = path.join(serverPath, "mods");
   const disabledDir = path.join(modsDir, "disabled");
 
-  if (!fs.existsSync(downloadedVersionsPath)) {
-    fail("manifest", "downloaded_versions.json not found.");
-  }
   let downloadedVersions;
   try {
-    downloadedVersions = JSON.parse(
-      fs.readFileSync(downloadedVersionsPath, "utf8"),
-    );
-  } catch {
-    fail("manifest", "Could not parse downloaded_versions.json.");
+    downloadedVersions = readManifest(downloadedVersionsPath);
+  } catch (err) {
+    fail("manifest", err.message);
   }
   downloadedVersions.mods ??= {};
 
@@ -98,13 +97,28 @@ function main() {
   const recordedFilename =
     typeof entry === "string" ? null : (entry.filename ?? null);
 
+  // S-008: a recorded filename names exactly this mod's jar, so only that file
+  // goes. The slug scan used to run as well, and its token match also took
+  // other mods' jars (removing "sodium" deleted sodium-extra). The scan is
+  // only for legacy entries without a filename, and refuses to guess between
+  // several jars.
   const toRemove = new Set();
   if (recordedFilename) {
+    if (path.basename(recordedFilename) !== recordedFilename) {
+      fail("manifest", `The recorded filename for "${key}" is not a plain file name.`);
+    }
     toRemove.add(path.join(modsDir, recordedFilename));
     toRemove.add(path.join(disabledDir, recordedFilename));
+  } else {
+    const found = [...detectInstalledJars(modsDir, key), ...detectInstalledJars(disabledDir, key)];
+    if (found.length > 1) {
+      fail(
+        "ambiguous",
+        `Several jars match "${key}" (${found.map((j) => j.file).join(", ")}); remove the right one by hand.`,
+      );
+    }
+    for (const jar of found) toRemove.add(jar.fullPath);
   }
-  for (const jar of detectInstalledJars(modsDir, key)) toRemove.add(jar.fullPath);
-  for (const jar of detectInstalledJars(disabledDir, key)) toRemove.add(jar.fullPath);
 
   let removedFile = null;
   for (const jarPath of toRemove) {
@@ -120,9 +134,7 @@ function main() {
   }
 
   delete downloadedVersions.mods[key];
-  const tmp = `${downloadedVersionsPath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(downloadedVersions, null, 2), "utf8");
-  fs.renameSync(tmp, downloadedVersionsPath);
+  writeManifest(downloadedVersionsPath, downloadedVersions);
   console.log(`Removed "${key}" from downloaded_versions.json.`);
 
   if (JSON_MODE) {

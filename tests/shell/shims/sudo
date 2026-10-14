@@ -1,10 +1,13 @@
 #!/bin/bash
-# Only systemctl is forwarded (to the systemctl shim). Everything else is
+# Only systemctl and screen are forwarded (to the systemctl shim). Everything else is
 # recorded and swallowed so no test can write outside its scratch directory.
 echo "sudo $*" >> "$SHIM_LOG"
 while [[ "$1" == -* ]]; do
   if [[ "$1" == -u ]]; then shift 2; else shift; fi
 done
 if [[ "$1" == systemctl ]]; then exec "$@"; fi
+# screen too: as uid 0 the scripts reach their session through sudo -u, and the
+# screen shim only records and fakes state.
+if [[ "$1" == screen ]]; then exec "$@"; fi
 echo "SUDO_BLOCKED $*" >> "$SHIM_LOG"
 exit 0

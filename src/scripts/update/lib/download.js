@@ -153,9 +153,38 @@ async function downloadVerified(url, finalPath, opts = {}) {
   return result;
 }
 
+/**
+ * Download an artifact from a Maven repository, verified against the checksum
+ * the repository publishes next to it (S-021): `.sha512` when there is one,
+ * else `.sha1`. Fails closed when neither can be read, because the file is
+ * about to be run (the Fabric installer is executed with java -jar).
+ */
+async function downloadMavenVerified(url, finalPath, opts = {}) {
+  for (const algo of ["sha512", "sha1"]) {
+    let text;
+    try {
+      const res = await axios.get(`${url}.${algo}`, {
+        responseType: "text",
+        timeout: DEFAULT_TIMEOUT_MS,
+        maxContentLength: 4096,
+        validateStatus: (s) => s === 200,
+      });
+      text = String(res.data);
+    } catch {
+      continue;
+    }
+    const hex = text.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+    const length = algo === "sha512" ? 128 : 40;
+    if (!new RegExp(`^[0-9a-f]{${length}}$`).test(hex)) continue;
+    return downloadVerified(url, finalPath, { ...opts, [algo]: hex });
+  }
+  throw new Error(`No published checksum for ${url}; refusing to use it unverified.`);
+}
+
 module.exports = {
   safeFilenameFromUrl,
   assertPlainFilename,
   downloadToTemp,
   downloadVerified,
+  downloadMavenVerified,
 };

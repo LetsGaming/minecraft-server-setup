@@ -157,3 +157,43 @@ test(
     assert.equal(inst.readManifest().mods["fabric-api"].versionId, "fapi1");
   }),
 );
+
+test(
+  "re-adding a registered mod installs a required dependency an earlier run missed (S-023)",
+  withInstance((inst) => {
+    const FAPI_CDN = "https://cdn.modrinth.com/data/P7dR8mSH/versions/f1";
+    inst.writeManifest({
+      gameVersion: "1.21.4",
+      modLoader: "fabric",
+      mods: { sodium: { versionId: "ver1", filename: "sodium-1.0.jar" } },
+    });
+    inst.stub({
+      [`${API}/project/sodium`]: { json: { id: "AANobbMI", slug: "sodium" } },
+      [`${API}/version/ver1`]: {
+        json: {
+          id: "ver1",
+          dependencies: [{ project_id: "P7dR8mSH", dependency_type: "required" }],
+          files: [{ primary: true, url: `${CDN}/sodium-1.0.jar` }],
+        },
+      },
+      [`${API}/project/P7dR8mSH`]: { json: { id: "P7dR8mSH", slug: "fabric-api" } },
+      [`${API}/project/P7dR8mSH/version`]: {
+        json: [
+          {
+            id: "f1",
+            date_published: "2026-01-01T00:00:00Z",
+            game_versions: ["1.21.4"],
+            loaders: ["fabric"],
+            dependencies: [],
+            files: [{ primary: true, url: `${FAPI_CDN}/fabric-api-1.0.jar` }],
+          },
+        ],
+      },
+      [`${FAPI_CDN}/fabric-api-1.0.jar`]: { bodyBase64: b64("FAPI"), headers: {} },
+    });
+    const res = inst.run("add-mod.js", ["sodium", "--json"]);
+    assert.equal(lastJson(res.stdout).ok, true, res.stderr);
+    assert.deepEqual(inst.readManifest().mods["fabric-api"], { versionId: "f1", filename: "fabric-api-1.0.jar" });
+    assert.equal(fs.readFileSync(path.join(inst.mods, "fabric-api-1.0.jar"), "utf8"), "FAPI");
+  }),
+);

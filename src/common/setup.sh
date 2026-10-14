@@ -25,6 +25,22 @@ setup_api_wrapper() {
   run_or_echo "sudo systemctl restart \"${TARGET_DIR_NAME}-api-server.service\""
 }
 
+# variables.json holds this install's secrets, so it is not tracked by git
+# (S-028); a fresh clone has only variables.example.json. Create the live file
+# from it on the first run and stop, so it is edited before anything happens.
+ensure_variables_json() {
+  local live="$SCRIPT_DIR/variables.json" example="$SCRIPT_DIR/variables.example.json"
+  [[ -f "$live" ]] && return 0
+  if [[ ! -f "$example" ]]; then
+    error "variables.json is missing and there is no variables.example.json to start from."
+    exit 1
+  fi
+  ( umask 077; cp "$example" "$live" )
+  warn "Created variables.json from variables.example.json."
+  warn "Edit it (instance name, RCON, API key, ...), then run this again."
+  exit 1
+}
+
 # Validate variables.json once, up front, and export the two fields the setup
 # steps need (INSTANCE_NAME, TARGET_DIR_NAME). Previously the first call to
 # loadVariables() happened implicitly inside create_directories.js; now that the
@@ -172,52 +188,142 @@ run_optional_setup() {
   fi
 }
 
+# ── Rollback bookkeeping (S-001) ────────────────────────────────────────────
+# Re-running setup to add an instance is a supported flow, so a failed run must
+# undo only what that run created. The old rollback removed the whole base
+# directory, which took every other instance, world and backup with it. These
+# record what already existed before the run touched anything.
+_ROLLBACK_ARMED=false
+_PRE_BASE_EXISTED=false
+declare -A _PRE_PATH_EXISTED=()
+declare -A _PRE_UNIT_EXISTED=()
+_PRE_CRONTAB_FILE=""
+_PRE_CRONTAB_EXISTED=false
+# The shared wrapper's config, which a run for a new instance adds itself to.
+_PRE_API_CONFIG_COPY=""
+
+# Paths a setup run for this instance creates, in the order they are removed.
+_rollback_paths() {
+  local base="$MAIN_DIR/$TARGET_DIR_NAME"
+  printf '%s\n' \
+    "$base/instances/$INSTANCE_NAME" \
+    "$base/scripts/$INSTANCE_NAME" \
+    "$base/backups/$INSTANCE_NAME" \
+    "$base/services/api-server" \
+    "$base/services"
+  local custom
+  custom=$(node -e "try{const p=require('$SCRIPT_DIR/variables.json').BACKUPS?.BACKUPS_PATH;if(p&&p!=='none')process.stdout.write(p)}catch(e){}" 2>/dev/null || true)
+  [[ -n "$custom" ]] && printf '%s\n' "$custom"
+  return 0
+}
+
+_rollback_units() {
+  printf '%s\n' "$INSTANCE_NAME" "${TARGET_DIR_NAME}-api-server" "${TARGET_DIR_NAME}-manager"
+}
+
+# Call once, after the config is validated and before the first change.
+snapshot_setup_state() {
+  resolve_instance_vars
+  local base="$MAIN_DIR/$TARGET_DIR_NAME"
+  [[ -e "$base" ]] && _PRE_BASE_EXISTED=true
+  local p u
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    if [[ -e "$p" ]]; then _PRE_PATH_EXISTED["$p"]=true; else _PRE_PATH_EXISTED["$p"]=false; fi
+  done < <(_rollback_paths)
+  while IFS= read -r u; do
+    if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" ]]; then _PRE_UNIT_EXISTED["$u"]=true; else _PRE_UNIT_EXISTED["$u"]=false; fi
+  done < <(_rollback_units)
+  local api_config="$base/services/api-server/api-server-config.json"
+  if [[ -f "$api_config" ]]; then
+    _PRE_API_CONFIG_COPY=$(mktemp)
+    # shellcheck disable=SC2024  # sudo reads the file; the copy is ours on purpose
+    sudo cat "$api_config" > "$_PRE_API_CONFIG_COPY" 2>/dev/null || _PRE_API_CONFIG_COPY=""
+  fi
+  _PRE_CRONTAB_FILE=$(mktemp)
+  if crontab -l > "$_PRE_CRONTAB_FILE" 2>/dev/null; then _PRE_CRONTAB_EXISTED=true; fi
+  _ROLLBACK_ARMED=true
+  if [[ "$_PRE_BASE_EXISTED" == true ]]; then
+    warn "$base already exists. If this run fails, only what it created is rolled back;"
+    warn "existing instances, worlds and backups are left as they are."
+  fi
+}
+
+# True when a path is safe to hand to rm -rf: absolute, under MAIN_DIR, and
+# not MAIN_DIR, the base dir or / itself.
+_rollback_path_ok() {
+  local p="$1" base="$MAIN_DIR/$TARGET_DIR_NAME"
+  [[ "$p" == /* && "$p" != "/" && "$p" != "$MAIN_DIR" && "$p" != "$MAIN_DIR/" && "$p" != "$base" && "$p" != "$base/" ]] || return 1
+  [[ "$p" != *"/../"* && "$p" != *"/.." && "$p" != *"/./"* && "$p" != *"/." ]]
+}
+
 run_rollback() {
-  warn "Setup failed — rolling back all changes..."
+  warn "Setup failed — rolling back what this run changed..."
 
-  # Read instance config from variables.json
-  local instance_name target_dir
-  instance_name=$(node -e "try{process.stdout.write(require('$SCRIPT_DIR/variables.json').INSTANCE_NAME||'')}catch(e){}" 2>/dev/null || true)
-  target_dir=$(node -e "try{process.stdout.write(require('$SCRIPT_DIR/variables.json').TARGET_DIR_NAME||'')}catch(e){}" 2>/dev/null || true)
-
-  if [[ -z "$instance_name" || -z "$target_dir" ]]; then
-    warn "Could not read instance config from variables.json — skipping rollback."
+  if [[ "$_ROLLBACK_ARMED" != true ]]; then
+    warn "Nothing was recorded before the failure — leaving everything in place."
     warn "You may need to clean up manually."
     return
   fi
 
-  local base_dir="$MAIN_DIR/$target_dir"
+  local base="$MAIN_DIR/$TARGET_DIR_NAME"
 
-  # Guard: never remove HOME or /
-  if [[ "$base_dir" == "$MAIN_DIR" || "$base_dir" == "/" || -z "$base_dir" ]]; then
-    warn "Unsafe base_dir detected ('$base_dir') — skipping directory removal."
-  else
-    # Stop and remove all created systemd services. The -manager unit is no
-    # longer created, but an install from before the web interface was retired
-    # still has one — uninstall has to clear it or it stays enabled forever.
-    for svc in "$instance_name" "${target_dir}-api-server" "${target_dir}-manager"; do
-      if sudo systemctl list-unit-files "${svc}.service" &>/dev/null; then
-        log "Stopping service: ${svc}.service"
-        sudo systemctl stop    "${svc}.service" 2>/dev/null || true
-        sudo systemctl disable "${svc}.service" 2>/dev/null || true
-      fi
-      sudo rm -f "/etc/systemd/system/${svc}.service"
-    done
-    sudo systemctl daemon-reload 2>/dev/null || true
-
-    # Remove cron entries that reference this instance's directory
-    if crontab -l 2>/dev/null | grep -qF "$base_dir"; then
-      log "Removing cron entries for $base_dir"
-      crontab -l 2>/dev/null | grep -vF "$base_dir" | crontab - 2>/dev/null || true
+  # Units this run installed. A unit that existed before (the shared
+  # api-server unit of an earlier instance) is left running and in place.
+  local u removed_unit=false
+  while IFS= read -r u; do
+    [[ "${_PRE_UNIT_EXISTED[$u]:-true}" == false ]] || continue
+    if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" ]]; then
+      log "Removing service: ${u}.service"
+      sudo systemctl stop    "${u}.service" 2>/dev/null || true
+      sudo systemctl disable "${u}.service" 2>/dev/null || true
+      sudo rm -f "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service"
+      removed_unit=true
     fi
+  done < <(_rollback_units)
+  [[ "$removed_unit" == true ]] && { sudo systemctl daemon-reload 2>/dev/null || true; }
 
-    # Remove the entire instance directory tree
-    # (server files, scripts, api-server, and any retired manager deployment)
-    if [[ -d "$base_dir" ]]; then
-      log "Removing $base_dir"
-      sudo rm -rf "$base_dir"
+  # The crontab goes back to exactly what it was, rather than losing every
+  # line that mentions the base dir (other instances' backups included).
+  if [[ -n "$_PRE_CRONTAB_FILE" ]]; then
+    if [[ "$_PRE_CRONTAB_EXISTED" == true ]]; then
+      crontab "$_PRE_CRONTAB_FILE" 2>/dev/null || warn "Could not restore the previous crontab."
+    else
+      crontab -r 2>/dev/null || true
+    fi
+    rm -f "$_PRE_CRONTAB_FILE"
+  fi
+
+  # The shared wrapper's config goes back to what it was, without this
+  # run's instance in it; contents only, so its owner, mode and ACL stay.
+  local api_config="$base/services/api-server/api-server-config.json"
+  if [[ -n "$_PRE_API_CONFIG_COPY" ]]; then
+    if [[ -f "$api_config" ]] && ! cmp -s "$_PRE_API_CONFIG_COPY" "$api_config"; then
+      log "Restoring $api_config"
+      sudo tee "$api_config" < "$_PRE_API_CONFIG_COPY" > /dev/null || warn "Could not restore $api_config."
+    fi
+    rm -f "$_PRE_API_CONFIG_COPY"
+  fi
+
+  if [[ "$_PRE_BASE_EXISTED" == false ]]; then
+    # Everything under the base dir is this run's.
+    if [[ -d "$base" ]] && _rollback_path_ok "$base/x"; then
+      log "Removing $base (created by this run)"
+      sudo rm -rf -- "$base"
     fi
   fi
+  # Paths outside the base dir (a custom BACKUPS_PATH), and the per-instance
+  # paths of a run into an existing base dir: only those this run created.
+  local p
+  for p in "${!_PRE_PATH_EXISTED[@]}"; do
+    [[ "${_PRE_PATH_EXISTED[$p]}" == false && -e "$p" ]] || continue
+    if _rollback_path_ok "$p"; then
+      log "Removing $p (created by this run)"
+      sudo rm -rf -- "$p"
+    else
+      warn "Not removing '$p': not a path this rollback may delete."
+    fi
+  done
 
   # Remove source-tree artifacts written during setup
   local src_common="$SCRIPT_DIR/src/scripts/common"
@@ -409,6 +515,9 @@ run_preflight_check() {
     api_key=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.API_KEY || '')" 2>/dev/null)
     if [[ -z "$api_key" ]]; then
       echo "  ⚠ API_SERVER enabled but no API_KEY set — wrapper will be unauthenticated"
+      warnings=$((warnings + 1))
+    elif [[ "$api_key" == "replace-with-a-long-random-secret" ]]; then
+      echo "  ✗ API_KEY is still the example's placeholder — generate one: openssl rand -hex 32"
       warnings=$((warnings + 1))
     elif [[ ${#api_key} -lt 32 ]]; then
       echo "  ⚠ API_KEY is shorter than 32 characters — the wrapper will refuse to start (openssl rand -hex 32)"

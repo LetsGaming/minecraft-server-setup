@@ -162,11 +162,17 @@ test_two_real_concurrent_backups_do_not_interleave() {
     return
   fi
   setup
-  run_script "$BACKUP" &
-  command sleep 0.2
+  # Hold the real lock the way a running backup does, rather than racing a
+  # first run that finishes in about 200 ms here.
+  mkdir -p "$T/backups"
+  local ready="$T/lock-held"
+  # /bin/sleep: the fixture's sleep shim returns at once.
+  ( exec 9>"$T/backups/.backup.lock"; "$REAL_FLOCK" -n 9 && touch "$ready" && /bin/sleep 3 ) &
+  local holder=$! _
+  for _ in $(seq 1 50); do [[ -e "$ready" ]] && break; /bin/sleep 0.05; done
   local second_out second_rc
   second_out="$(cd "$T/scripts" && bash "$BACKUP" 2>&1)"; second_rc=$?
-  wait
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
   assert_eq "75" "$second_rc" "second run is refused while the first is active"
 }
 
@@ -223,6 +229,35 @@ test_backup_umask_can_be_widened_explicitly() {
   export BACKUP_UMASK=027
   run_script "$BACKUP"
   assert_logged "zstd-umask 0027" "BACKUP_UMASK is honoured"
+}
+
+test_a_failed_backup_still_runs_cleanup() {
+  # S-013: with a full disk every backup fails; retention must still run, or
+  # the disk never recovers by itself.
+  setup
+  export RSYNC_SHIM_FAIL=1
+  run_script "$RUN_BACKUP"
+  assert_nonzero "$RC" "the failed backup is reported"
+  assert_contains "$OUT" "Backup cleanup complete." "cleanup ran anyway"
+}
+
+test_an_archive_backup_restores_to_real_jars() {
+  # S-002: the archive used to swap server.jar for a link into the backups'
+  # jars/ folder, which dangles once restored. Backup, restore, then look.
+  setup
+  mkdir -p "$T/server/mods"
+  echo server-jar > "$T/server/server.jar"
+  echo mod-jar > "$T/server/mods/a.jar"
+  run_script "$BACKUP" --archive weekly
+  assert_rc 0 "$RC" "archive backup exits 0"
+  local a; a="$(first_archive "$T/backups/archives")"
+  rm -f "$T/server/server.jar" "$T/server/mods/a.jar"
+  run_script backup/restore.sh --archive --file "$a" --y
+  assert_rc 0 "$RC" "restore exits 0"
+  if [[ -f "$T/server/server.jar" && ! -L "$T/server/server.jar" ]]; then _ok "server.jar is a regular file"; else _bad "server.jar is a regular file" "$(ls -l "$T/server/server.jar" 2>&1)"; fi
+  assert_file_content "$T/server/server.jar" server-jar "with the archived contents"
+  assert_file_content "$T/server/mods/a.jar" mod-jar "and so are the mods"
+  assert_missing "$T/server/a.jar" "no stray jar links at the top level"
 }
 
 run_tests

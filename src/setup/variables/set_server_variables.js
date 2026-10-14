@@ -104,7 +104,16 @@ function updateJavaArgsInVariablesFile() {
     throw new Error("Missing JAVA_ARGS_CONFIG in variables.json");
   }
 
-  const javaArgsString = `"${buildJavaArgs(JAVA_ARGS_CONFIG)}"`; // wrap in quotes
+  // variables.txt is sourced by bash, so the value is escaped like every other
+  // one setup writes (S-030): a miscFlags entry with " $ ` or \ in it was
+  // shell code at source time. One line, always.
+  const escaped = buildJavaArgs(JAVA_ARGS_CONFIG)
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, "\\$")
+    .replace(/`/g, "\\`")
+    .replace(/\r?\n/g, " ");
+  const javaArgsString = `"${escaped}"`;
 
   if (!fs.existsSync(variablesTxtPath)) {
     fs.writeFileSync(variablesTxtPath, `JAVA_ARGS=${javaArgsString}`, "utf-8");
@@ -114,10 +123,8 @@ function updateJavaArgsInVariablesFile() {
 
   const regex = /^JAVA_ARGS=.*$/m;
   if (regex.test(variablesContent)) {
-    variablesContent = variablesContent.replace(
-      regex,
-      `JAVA_ARGS=${javaArgsString}`,
-    );
+    // A function, so "$&" or "$1" in the value is not a replacement pattern.
+    variablesContent = variablesContent.replace(regex, () => `JAVA_ARGS=${javaArgsString}`);
   } else {
     variablesContent += `\nJAVA_ARGS=${javaArgsString}`;
   }

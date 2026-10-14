@@ -40,4 +40,27 @@ test_a_child_of_the_holder_passes() {
   assert_rc 0 "$RC" "scripts the holder starts do not wait on it"
 }
 
+try_mkdir_lock() { # kind -> sets RC, OUT; forces the mkdir fallback
+  OUT="$( cd "$T/scripts" && source common/utils.sh && _have_flock() { return 1; } && acquire_operation_lock "$1" && echo "held=${MC_OPERATION_LOCK_HELD:-}" )" 2>&1
+  RC=$?
+}
+
+test_mkdir_lock_is_not_taken_over_before_its_pid_is_written() {
+  setup
+  mkdir -p "$T/locks/operation_testinst.lock.d"
+  try_mkdir_lock upgrade
+  assert_rc 1 "$RC" "a fresh lock with no pid yet is busy, not abandoned (S-030)"
+  touch -d "5 minutes ago" "$T/locks/operation_testinst.lock.d"
+  try_mkdir_lock upgrade
+  assert_rc 0 "$RC" "an old one without a pid is abandoned and taken over"
+}
+
+test_mkdir_lock_of_a_dead_holder_is_taken_over() {
+  setup
+  mkdir -p "$T/locks/operation_testinst.lock.d"
+  echo 999999 > "$T/locks/operation_testinst.lock.d/pid"
+  try_mkdir_lock upgrade
+  assert_rc 0 "$RC" "the holder is gone"
+}
+
 run_tests

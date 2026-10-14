@@ -33,6 +33,7 @@ require_sudo
 set_environment
 
 parse_args "$@"
+ensure_variables_json
 
 # Check-only mode: validate and exit
 if [ "$CHECK_ONLY" = true ]; then
@@ -45,6 +46,9 @@ prompt_for_flags
 
 # Arm the rollback trap now that we are about to make real changes.
 _SETUP_SUCCESS=false
+# Record what exists before the first change, so a failure removes only what
+# this run created (S-001). Skipped in a dry run, which changes nothing.
+if [[ "$DRY_RUN" != true ]]; then snapshot_setup_state; fi
 _rollback_if_needed() {
   if [[ "$_SETUP_SUCCESS" != true && "$DRY_RUN" != true ]]; then
     run_rollback

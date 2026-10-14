@@ -106,7 +106,6 @@ $VERBOSE && log INFO "Verbose mode enabled"
 
 # ——— setup ———
 BACKUP_BASE="$BACKUPS_PATH"
-JAR_STORAGE="$BACKUP_BASE/jars"
 DATE=$(date +'%Y-%m-%d_%H-%M-%S')
 START_TIME=$(date +%s)
 
@@ -121,7 +120,7 @@ fi
 # users. Set BACKUP_UMASK to widen it when another account must read backups.
 umask "${BACKUP_UMASK:-077}"
 
-mkdir -p "$BACKUP_DIR" "$JAR_STORAGE"
+mkdir -p "$BACKUP_DIR"
 
 # ——— no backup while a restore, rollback or upgrade is rewriting the server ———
 # The upgrade job runs this script itself and passes (MC_OPERATION_LOCK_HELD).
@@ -149,7 +148,10 @@ log INFO "Backup directory: $BACKUP_DIR"
 # ——— disable auto‑save ———
 log INFO "Disabling auto-save..."
 if ! $DRY_RUN; then
-  disable_auto_save && _AUTO_SAVE_DISABLED=true || log WARN "disable_auto_save failed"
+  # Marked before the call (S-011): save-off can take effect even when its
+  # reply is lost, and then only the trap's save-on turns saving back on.
+  _AUTO_SAVE_DISABLED=true
+  disable_auto_save || log WARN "disable_auto_save failed"
 fi
 
 # ——— force a save ———
@@ -199,18 +201,12 @@ $DRY_RUN || nice_run rsync -a --inplace --numeric-ids "${EXCLUDES[@]}" "${INCLUD
     exit 1
 }
 
-# ——— handle jar files separately in archive mode ———
-if $ARCHIVE_MODE && ! $DRY_RUN; then
-  log INFO "Handling .jar files for archive mode..."
-  while IFS= read -r -d '' jar; do
-    jarname="$(basename "$jar")"
-    if [[ ! -e "$JAR_STORAGE/$jarname" ]]; then
-      log INFO "Storing jar: $jarname"
-      cp "$jar" "$JAR_STORAGE/$jarname"
-    fi
-    ln -sf "../../../jars/$jarname" "$TMP_DIR/$jarname"
-  done < <(find "$SERVER_PATH" -type f -name '*.jar' -print0)
-fi
+# ——— jars in archive mode ———
+# An archive keeps the real jars rsync copied above (S-002). It used to swap
+# them for links into a shared jars/ folder: the links only resolved inside the
+# backups tree, so every restored archive had a dangling server.jar, and the
+# server could not start after a restore, an upgrade rollback or rollback.sh.
+# restore.sh repairs those links in archives made before this change.
 
 # ——— stage instance metadata (archive mode only) ———
 # Everything outside SERVER_PATH that is needed to fully rebuild the management
@@ -325,7 +321,7 @@ TIME_TAKEN_STMP=$(printf '%02d:%02d:%02d' $((TIME_TAKEN/3600)) $((TIME_TAKEN%360
 log SUCCESS "Backup complete: $FINAL_ARCHIVE"
 
 BACKUP_SIZE=""
-if [[ -n "$FINAL_ARCHIVE" && ! $DRY_RUN ]]; then
+if [[ -n "$FINAL_ARCHIVE" ]] && ! $DRY_RUN; then
   BACKUP_SIZE=$(du -sh "$FINAL_ARCHIVE" | cut -f1)
   log INFO "Backup size: $BACKUP_SIZE"
 fi

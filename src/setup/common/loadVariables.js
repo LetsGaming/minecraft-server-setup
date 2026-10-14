@@ -4,6 +4,8 @@ const fs = require("fs");
 const VALID_DIFFICULTIES = ["peaceful", "easy", "normal", "hard"];
 const VALID_GC = ["g1gc", "zgc"];
 const MEMORY_PATTERN = /^\d+[GMK]$/i;
+/** Placeholders shipped in variables.example.json; never a real key. */
+const EXAMPLE_API_KEYS = ["replace-with-a-long-random-secret"];
 
 function loadVariables() {
   const variablesPath = path.resolve(__dirname, "..", "..", "..", "variables.json");
@@ -24,6 +26,12 @@ function loadVariables() {
   // Validate INSTANCE_NAME format (safe for filenames, systemd, screen)
   if (!/^[a-zA-Z0-9_-]+$/.test(data.INSTANCE_NAME)) {
     throw new Error('INSTANCE_NAME must only contain letters, numbers, hyphens, and underscores.');
+  }
+
+  // TARGET_DIR_NAME becomes $HOME/<name>, the root every instance lives
+  // under. "." or ".." would make that $HOME or its parent (S-001).
+  if (!/^[a-zA-Z0-9_-]+$/.test(data.TARGET_DIR_NAME)) {
+    throw new Error('TARGET_DIR_NAME must only contain letters, numbers, hyphens, and underscores.');
   }
 
   // ── BACKUPS ──
@@ -59,6 +67,13 @@ function loadVariables() {
     }
     if (api.SERVICE_USER !== undefined && api.SERVICE_USER !== "" && !/^[a-z_][a-z0-9_-]{0,31}$/.test(String(api.SERVICE_USER))) {
       throw new Error("API_SERVER.SERVICE_USER must be a Linux user name (lowercase letters, digits, - and _).");
+    }
+    // S-018: the example's placeholder is 33 characters, so the length check
+    // let an install run with a key printed in this repository.
+    if (api.ENABLED && api.API_KEY && EXAMPLE_API_KEYS.includes(api.API_KEY)) {
+      throw new Error(
+        "API_SERVER.API_KEY is still the example's placeholder. Generate a real one with: openssl rand -hex 32",
+      );
     }
     if (api.ENABLED && api.API_KEY && api.API_KEY.length < 32) {
       throw new Error(

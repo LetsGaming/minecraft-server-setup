@@ -38,7 +38,7 @@ The API wrapper is not in this repository: setup downloads it only when you enab
 
 ## Configuration
 
-Edit [`variables.json`](./variables.json) — all settings are in one file:
+Copy [`variables.example.json`](./variables.example.json) to `variables.json` and edit it — all settings are in one file (the first setup run creates the copy for you if it is missing). `variables.json` is git-ignored because it holds your RCON password, API key and webhook URL; edit only your copy:
 
 ```jsonc
 {

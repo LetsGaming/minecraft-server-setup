@@ -31,6 +31,7 @@ require_sudo
 set_environment
 
 parse_args "$@"
+ensure_variables_json
 
 if [ "$CHECK_ONLY" = true ]; then
   run_preflight_check
@@ -44,6 +45,9 @@ prompt_for_flags
 # It fires on any unhandled error (set -e) or SIGINT (Ctrl+C).
 # Dry-run mode makes no real changes so no rollback is needed.
 _SETUP_SUCCESS=false
+# Record what exists before the first change, so a failure removes only what
+# this run created (S-001). Skipped in a dry run, which changes nothing.
+if [[ "$DRY_RUN" != true ]]; then snapshot_setup_state; fi
 _rollback_if_needed() {
   if [[ "$_SETUP_SUCCESS" != true && "$DRY_RUN" != true ]]; then
     run_rollback

@@ -1,6 +1,5 @@
 // download_server.js
 const axios  = require("axios");
-const crypto = require("crypto");
 const fs     = require("fs");
 const path   = require("path");
 const { spawn } = require("child_process");
@@ -11,30 +10,14 @@ const {
   saveModLoader,
 } = require("../../setup/download/download_utils.js");
 const { JAVA } = require("../../../variables.json");
+const {
+  downloadVerified,
+  downloadMavenVerified,
+} = require("../../scripts/update/lib/download");
 
 const outputDir = path.resolve(__dirname, "..", "temp");
 if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-/**
- * Verify a file's SHA-1 digest matches the expected value from Mojang's manifest.
- * Deletes the file and throws if the digest does not match, preventing a
- * silently corrupted or MITM-substituted server JAR from being launched.
- */
-function verifyFileSha1(filePath, expectedSha1) {
-  const hash = crypto.createHash("sha1");
-  hash.update(fs.readFileSync(filePath));
-  const actual = hash.digest("hex");
-  if (actual !== expectedSha1) {
-    fs.unlinkSync(filePath); // remove the corrupted/tampered file
-    throw new Error(
-      `SHA-1 mismatch for ${path.basename(filePath)}:\n` +
-      `  expected: ${expectedSha1}\n` +
-      `  actual:   ${actual}\n` +
-      "The file may be corrupted or have been tampered with."
-    );
-  }
-  console.log(`SHA-1 verified: ${path.basename(filePath)}`);
-}
 
 async function installMinecraftServer() {
   const config = JAVA.SERVER.VANILLA;
@@ -67,22 +50,12 @@ async function installVanillaServer(versionId, metadataUrl) {
   if (!serverUrl) throw new Error(`No vanilla server jar for ${versionId}`);
 
   const jarPath = path.join(outputDir, "server.jar");
-  const writer  = fs.createWriteStream(jarPath);
-  const response = await axios.get(serverUrl, { responseType: "stream" });
-
-  response.data.pipe(writer);
-  await new Promise((res, rej) => {
-    writer.on("finish", res);
-    writer.on("error", rej);
-  });
-
-  // Verify the downloaded JAR against Mojang's manifest SHA-1.
-  // This detects CDN corruption and MITM-substituted binaries.
-  if (expectedSha) {
-    verifyFileSha1(jarPath, expectedSha);
-  } else {
-    console.warn("[WARN] No SHA-1 in manifest for this version — skipping integrity check.");
+  // Verified against Mojang's manifest SHA-1, and refused without one (S-021):
+  // the upgrade path already failed closed here, setup skipped the check.
+  if (!expectedSha) {
+    throw new Error(`Mojang published no SHA-1 for the ${versionId} server jar; refusing it unverified.`);
   }
+  await downloadVerified(serverUrl, jarPath, { sha1: expectedSha });
 
   console.log(`Vanilla server jar saved to ${jarPath}`);
   saveInformation(versionId, null);
@@ -108,7 +81,9 @@ async function installFabricServer(versionId) {
   const installerPath = path.join(outputDir, installerJar);
   const url = `https://maven.fabricmc.net/net/fabricmc/fabric-installer/${installerVersion}/${installerJar}`;
 
-  await downloadFile(url, installerPath);
+  // Verified against the checksum Fabric's maven publishes (S-021): this jar
+  // is executed next.
+  await downloadMavenVerified(url, installerPath);
 
   // Get the Java version for the Minecraft version (async API lookup)
   const javaVersion = await getJavaVersionFor(versionId);
@@ -184,16 +159,6 @@ async function installMods(versionId) {
   }
 }
 
-async function downloadFile(url, destPath) {
-  const writer = fs.createWriteStream(destPath);
-  const resp = await axios.get(url, { responseType: "stream" });
-  resp.data.pipe(writer);
-
-  return new Promise((res, rej) => {
-    writer.on("finish", res);
-    writer.on("error", rej);
-  });
-}
 
 async function spawnModDownloader(modsFilePath, modsDir, versionId) {
   const modDownloader = path.resolve(

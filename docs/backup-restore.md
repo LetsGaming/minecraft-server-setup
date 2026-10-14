@@ -21,7 +21,7 @@ How `backup/backup.sh`, `backup/restore.sh` and `rollback.sh` treat your data, a
 
 `backup/automation/cleanup_backups.sh` applies the retention policy.
 
-- **Count caps.** `MAX_HOURLY_BACKUPS`, `MAX_DAILY_BACKUPS`, `MAX_WEEKLY_BACKUPS` and `MAX_MONTHLY_BACKUPS` keep the newest N of each tier. `MAX_UPDATE_BACKUPS` (default `5`, optional `BACKUPS.MAX_UPDATE_BACKUPS` in `variables.json`) does the same for `archives/update/`, the rollback targets.
+- **Count caps.** `MAX_HOURLY_BACKUPS`, `MAX_DAILY_BACKUPS`, `MAX_WEEKLY_BACKUPS` and `MAX_MONTHLY_BACKUPS` keep the newest N of each tier; `0` means no count limit for that tier (the storage limit still applies). `MAX_UPDATE_BACKUPS` (default `5`, optional `BACKUPS.MAX_UPDATE_BACKUPS` in `variables.json`) does the same for `archives/update/`, the rollback targets.
 - **Storage limit.** Above `MAX_STORAGE_GB` the script evicts oldest-first within a tier, tier by tier: hourly, daily, weekly, update, then monthly. A monthly archive is only evicted once nothing else is left.
 - **Jars.** Archives link to the jars stored once under `jars/`. A jar that no remaining archive references and that is older than a day is deleted. If any archive cannot be listed, no jar is deleted.
 - **A file that cannot be deleted** is reported and skipped; the rest of the run continues.
