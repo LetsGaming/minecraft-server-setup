@@ -5,12 +5,17 @@ const axios = require("axios");
 const {
   createDownloadDir,
   formatBytes,
-  downloadFile,
   saveDownloadedVersion,
   isAlreadyDownloaded,
   getMinecraftVersion,
   getModLoader,
 } = require("./download_utils");
+// The upgrade path's downloader (S-020): a safe file name, verified hashes, a
+// size cap and an atomic rename, so setup gets the same guarantees.
+const {
+  safeFilenameFromUrl,
+  downloadVerified,
+} = require("../../scripts/update/lib/download");
 
 // ==== Argument Helpers ====
 
@@ -137,10 +142,15 @@ async function downloadModrinthProject(projectId, mcVersion, loader, downloadDir
       return;
     }
 
-    const fileName = file.filename;
+    // The name comes from the URL, reduced to one plain file name; the API's
+    // own filename field was joined onto the path as it came.
+    const fileName = safeFilenameFromUrl(file.url);
     const outputPath = path.join(downloadDir, fileName);
     console.log(`Downloading ${fileName} to ${downloadDir}...`);
-    await downloadFile(file.url, outputPath, file.size || null);
+    await downloadVerified(file.url, outputPath, {
+      sha512: file.hashes?.sha512,
+      sha1: file.hashes?.sha1,
+    });
     saveDownloadedVersion("mods", projectId, versionId, null, null, fileName);
 
     // Handle dependencies

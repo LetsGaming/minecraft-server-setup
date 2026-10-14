@@ -39,6 +39,8 @@ function respond(entry, config) {
 function axios(config) {
   return Promise.resolve().then(() => respond(lookup(config.url), config));
 }
+// Like the real module, so scripts can set a default timeout on it.
+axios.defaults = { timeout: 0 };
 axios.get = (url, config) => Promise.resolve().then(() => respond(lookup(url), config));
 
 Module._load = function (request, ...rest) {

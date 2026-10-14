@@ -54,7 +54,20 @@ function downloadFile(url, fileName, totalSize) {
           }
         });
 
+        // A dropped connection ends the response stream with an error; without
+        // a handler the partial file counted as a finished download (S-020).
+        response.data.on("error", (err) => {
+          writer.destroy();
+          fs.rm(fileName, { force: true }, () => {});
+          reject(err);
+        });
+
         writer.on("finish", () => {
+          if (totalSize && downloaded < totalSize) {
+            fs.rm(fileName, { force: true }, () => {});
+            reject(new Error(`Download of ${url} ended after ${downloaded} of ${totalSize} bytes.`));
+            return;
+          }
           console.log("\nDownload complete!");
           resolve();
         });

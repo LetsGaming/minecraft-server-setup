@@ -38,7 +38,7 @@ const axios = require("axios");
 axios.defaults.timeout = axios.defaults.timeout || 30_000;
 const { parseArgs } = require("./lib/args");
 const { loadVariables: readVariables } = require("./lib/variables");
-const { downloadVerified } = require("./lib/download");
+const { downloadVerified, downloadMavenVerified } = require("./lib/download");
 const { createJsonMode } = require("./lib/json-mode");
 
 // ── Paths ─────────────────────────────────────────────────────────────────
@@ -413,13 +413,9 @@ async function updateFabric(versionId, serverPath) {
   const installerJar = `fabric-installer-${installerVer}.jar`;
   const installerPath = path.join(serverPath, installerJar);
   const url = `https://maven.fabricmc.net/net/fabricmc/fabric-installer/${installerVer}/${installerJar}`;
-  const writer = fs.createWriteStream(installerPath);
-  const resp = await axios.get(url, { responseType: "stream" });
-  resp.data.pipe(writer);
-  await new Promise((res, rej) => {
-    writer.on("finish", res);
-    writer.on("error", rej);
-  });
+  // Verified against the checksum Fabric's maven publishes (S-021): this jar
+  // is executed next.
+  await downloadMavenVerified(url, installerPath);
   const javaVersion = await getJavaVersionFor(versionId);
   const javaInstall = findInstalledJava(javaVersion);
   if (!javaInstall)
