@@ -97,3 +97,20 @@ run_script() { # script args... ; sets OUT and RC
   OUT="$(cd "$T/scripts" && bash "$@" 2>&1 < /dev/null)"
   RC=$?
 }
+
+# use_install_layout: move the fixture into the layout setup creates, so scripts
+# that derive the install root from their own path see a real one:
+#   $R/scripts/testinst  $R/instances/testinst  $R/services/
+# Run scripts there with run_in_layout (run_script would cd into $T/scripts).
+use_install_layout() {
+  R="$T/mc-root"
+  mkdir -p "$R/scripts" "$R/instances" "$R/services"
+  mv "$T/scripts" "$R/scripts/testinst"
+  mv "$T/server" "$R/instances/testinst"
+  sed -i "s|^SERVER_PATH=.*|SERVER_PATH=\"$R/instances/testinst\"|" "$R/scripts/testinst/common/variables.txt"
+}
+
+run_in_layout() { # script args... ; sets OUT and RC
+  OUT="$(cd "$R/scripts/testinst" && bash "$@" 2>&1 < /dev/null)"
+  RC=$?
+}

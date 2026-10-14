@@ -31,6 +31,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- **Archive backups and restores lost the API wrapper config.** `backup.sh` and `restore.sh` took the server folder's parent as the install root, which in the `instances/` layout is `<root>/instances`. Archive backups therefore never carried `api-server-config.json`, `restore.sh` wrote it to `<root>/instances/api-server/` where the wrapper never reads it, and both named the wrapper's unit `instances-api-server.service`. The root now comes from the scripts folder, and the config is read from and restored to `services/api-server/` (`api-server/` on an older layout). After a restore with `API_SERVER.SERVICE_USER`, run `service_user.sh` again so the wrapper can read it.
 - The shell tests for the backup, operation and instance locks passed only on hosts without `flock`: with a real one the busy-lock shim was never installed, and the held-lock helper slept through the sleep shim. The shim is now always installed and hands over to the real `flock` unless a test asks for a busy lock.
 - A world with regions very far apart no longer fails a prune scan with a buffer; the buffer is computed per region.
 - `prune-chunks.js --apply`: a chunk that was already corrupt no longer makes the post-prune check fail and roll the whole job back; the check now compares kept chunks byte for byte instead of re-reading them.

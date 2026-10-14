@@ -181,9 +181,10 @@ META_DIR="$SERVER_PATH/.mc-meta"
 if [[ -d "$META_DIR" ]]; then
   echo "[INFO] Restoring instance metadata..."
 
-  BASE_DIR="$(dirname "$SERVER_PATH")"
+  INSTANCE_SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"   # <root>/scripts/<instance>
+  # The install root, not the server dir's parent (<root>/instances).
+  BASE_DIR="$(dirname "$(dirname "$INSTANCE_SCRIPTS_DIR")")"
   TARGET_DIR_NAME="$(basename "$BASE_DIR")"
-  INSTANCE_SCRIPTS_DIR="$SCRIPT_DIR/.."
 
   # 1. Scripts tree
   if [[ -d "$META_DIR/scripts" ]]; then
@@ -225,12 +226,17 @@ if [[ -d "$META_DIR" ]]; then
     fi
   fi
 
-  # 3. api-server-config.json
+  # 3. api-server-config.json, into the wrapper's folder (services/api-server/,
+  # or api-server/ on an install that predates the services/ layout)
   if [[ -f "$META_DIR/api-server-config.json" ]]; then
-    mkdir -p "$BASE_DIR/api-server"
-    cp "$META_DIR/api-server-config.json" "$BASE_DIR/api-server/api-server-config.json"
-    chmod 600 "$BASE_DIR/api-server/api-server-config.json"
-    echo "[INFO]   ✓ api-server-config.json"
+    API_DIR="$BASE_DIR/services/api-server"
+    [[ ! -d "$API_DIR" && -d "$BASE_DIR/api-server" ]] && API_DIR="$BASE_DIR/api-server"
+    mkdir -p "$API_DIR"
+    cp "$META_DIR/api-server-config.json" "$API_DIR/api-server-config.json"
+    chmod 600 "$API_DIR/api-server-config.json"
+    echo "[INFO]   ✓ api-server-config.json → $API_DIR/"
+    echo "[INFO]     If the wrapper runs as its own user (API_SERVER.SERVICE_USER), run"
+    echo "[INFO]     src/setup/management/service_user.sh again so it can read the file."
   fi
 
   # Clean .mc-meta out of the server root — it has no place there at runtime
