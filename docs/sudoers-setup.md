@@ -6,81 +6,66 @@ The setup and management scripts run as a non-root application user (e.g. `mcbot
 
 ## Required sudoers entries
 
-Create `/etc/sudoers.d/minecraft-management` with the following content.  
+Create `/etc/sudoers.d/minecraft-management` with the following content.
 **Always edit sudoers with `sudo /usr/sbin/visudo -f /etc/sudoers.d/minecraft-management`.**
 
+The example is for an install at `/home/minecraft/mc` with one instance named `survival`, run by the `minecraft` user, and the wrapper running as `mcbot`. Replace every path and name with yours; one block per instance. These are the same rules `service_user.sh --print-sudoers` generates.
+
 ```
-# ── Command aliases ────────────────────────────────────────────────────────────
+# Alias names must be upper case, or visudo rejects the file.
 
-# The RUNTIME actions the app actually issues: start / stop / restart / status.
-# enable/disable/daemon-reload and service *creation* are one-time setup steps
-# (run by an admin with their own sudo) — the network-facing app user does not
-# need them at runtime, so they are deliberately NOT granted here. (SEC-03)
+# The runtime unit actions, for this instance only. reset-failed clears a
+# crash-loop-tripped `failed` state; show is read-only (the health probe reads
+# NRestarts and ActiveState). enable, disable, daemon-reload and installing
+# units are setup steps an admin runs with their own sudo.
+Cmnd_Alias MC_SURVIVAL_UNIT = \
+    /usr/bin/systemctl start survival.service, \
+    /usr/bin/systemctl stop survival.service, \
+    /usr/bin/systemctl restart survival.service, \
+    /usr/bin/systemctl status survival.service, \
+    /usr/bin/systemctl reset-failed survival.service, \
+    /usr/bin/systemctl show survival.service *
 
-# Game server instance(s) — add a line per instance if you have more than one
-# reset-failed: clears a unit's crash-loop-tripped `failed` state (see
-# StartLimitBurst in create_service.sh) so start/restart can recover from a
-# fixed problem without SSH. show: read-only, lets the health probe report
-# NRestarts/ActiveState so the bot can tell a crash loop from a clean outage.
-# Both are runtime actions, not setup ones — kept here per the note above.
-Cmnd_Alias MC_GAME_SERVER = \
-    /usr/bin/systemctl start server.service, \
-    /usr/bin/systemctl stop server.service, \
-    /usr/bin/systemctl restart server.service, \
-    /usr/bin/systemctl status server.service, \
-    /usr/bin/systemctl reset-failed server.service, \
-    /usr/bin/systemctl show server.service *
+# The scripts the wrapper runs, each with exactly the arguments it passes.
+# A script named without arguments may only run without arguments.
+Cmnd_Alias MC_SURVIVAL_SCRIPTS = \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/start.sh, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/shutdown.sh, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/smart_restart.sh, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/misc/status.sh, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/rollback.sh, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/rollback.sh --y, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/backup/backup.sh, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/backup/backup.sh --archive, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/backup/restore.sh --file /home/minecraft/mc/backups/survival/* --y, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/backup/restore.sh --y --archive --file /home/minecraft/mc/backups/survival/*, \
+    /usr/bin/bash /home/minecraft/mc/scripts/survival/update/upgrade.sh *, \
+    /usr/bin/node /home/minecraft/mc/scripts/survival/world/prune-chunks.js *, \
+    /usr/bin/node /home/minecraft/mc/scripts/survival/update/add-mod.js *, \
+    /usr/bin/node /home/minecraft/mc/scripts/survival/update/remove-mod.js *, \
+    /usr/bin/node /home/minecraft/mc/scripts/survival/update/update-mod.js *, \
+    /usr/bin/node /home/minecraft/mc/scripts/survival/update/update-mods.js *, \
+    /usr/bin/node /home/minecraft/mc/scripts/survival/update/check-updates.js *, \
+    /usr/bin/node /home/minecraft/mc/scripts/survival/update/toggle-mod.js *
 
-# Support services (api-server) — matched by prefix wildcard
-Cmnd_Alias MC_SUPPORT_SERVICES = \
-    /usr/bin/systemctl start minecraft-server-*.service, \
-    /usr/bin/systemctl stop minecraft-server-*.service, \
-    /usr/bin/systemctl restart minecraft-server-*.service, \
-    /usr/bin/systemctl status minecraft-server-*.service, \
-    /usr/bin/systemctl reset-failed minecraft-server-*.service
+# Console input into this instance's screen session, and listing sessions.
+Cmnd_Alias MC_SURVIVAL_SCREEN = \
+    /usr/bin/screen -list, \
+    /usr/bin/screen -S survival -X stuff *
 
-# ── User grants ────────────────────────────────────────────────────────────────
-
-# Allow the minecraft user to manage its own services
-minecraft ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES
-
-# Allow the application user to run management scripts as the minecraft user.
-# IMPORTANT (SEC-03): the directories this glob matches MUST be owned by
-# `minecraft` and MUST NOT be writable by `mcbot`. If mcbot can write into a
-# matched scripts/ directory it can run arbitrary code as minecraft. Prefer
-# pinning this to the exact deployed instance directory rather than a wildcard,
-# e.g.:
-#   mcbot ALL=(minecraft) NOPASSWD: /usr/bin/bash /home/minecraft/mc/instances/survival/scripts/
-# NOTE the two patterns: management scripts live at BOTH depths.
-#   scripts/start.sh, shutdown.sh, smart_restart.sh, restart.sh, rollback.sh
-#   scripts/backup/backup.sh, scripts/backup/restore.sh, scripts/misc/status.sh
-# sudo wildcards do not match "/", so a single */* glob silently misses every
-# top-level script — including rollback.sh, which the dashboard's Rollback
-# button needs. Grant both, and adjust the depth to your actual install path.
-mcbot ALL=(minecraft) NOPASSWD: /usr/bin/bash /home/minecraft/*/scripts/*, \
-                                /usr/bin/bash /home/minecraft/*/scripts/*/*
-
-# The API wrapper's mod operations (install, remove, update, enable, disable)
-# run the update scripts with node, as the minecraft user:
-#   sudo -n -u minecraft /usr/bin/node <scripts>/update/<name>.js [flags] --json -- [slug]
-# That needs its own grant, separate from the bash scripts above. Without it
-# every mod operation fails with a generic sudo error. Name each script and
-# the absolute node binary; the trailing * covers the flags. The same
-# directory-ownership warning as above applies.
-Cmnd_Alias MC_MOD_SCRIPTS = \
-    /usr/bin/node /home/minecraft/*/scripts/update/add-mod.js *, \
-    /usr/bin/node /home/minecraft/*/scripts/update/remove-mod.js *, \
-    /usr/bin/node /home/minecraft/*/scripts/update/update-mod.js *, \
-    /usr/bin/node /home/minecraft/*/scripts/update/update-mods.js *, \
-    /usr/bin/node /home/minecraft/*/scripts/update/check-updates.js *, \
-    /usr/bin/node /home/minecraft/*/scripts/update/toggle-mod.js *
-mcbot ALL=(minecraft) NOPASSWD: MC_MOD_SCRIPTS
-
-# Allow the application user to manage all Minecraft services
-mcbot ALL=(root) NOPASSWD: MC_GAME_SERVER, MC_SUPPORT_SERVICES
+mcbot ALL=(root) NOPASSWD: MC_SURVIVAL_UNIT
+mcbot ALL=(minecraft) NOPASSWD: MC_SURVIVAL_SCRIPTS, MC_SURVIVAL_SCREEN
 ```
 
-Replace `mcbot` and `minecraft` with your actual application and server users, and adjust service names if your instance is named differently.
+Replace `mcbot` and `minecraft` with your actual application and server users.
+
+> **Changed in 5.x:** earlier versions of this page recommended
+> `/usr/bin/bash /home/minecraft/*/scripts/*` and
+> `systemctl stop minecraft-server-*.service`. Both are wider than they look.
+> In a command's *arguments* a sudoers `*` matches `/` and spaces, so the first
+> matches `bash /home/minecraft/x/scripts/../../../tmp/evil.sh`, any script on
+> the machine; the second matches `systemctl stop minecraft-server-a.service
+> sshd.service`, any unit as root. Replace them with the rules above.
 
 > **Removed in v3.x (SEC-03):** the old `MC_DEPLOY` alias granted
 > `mv /tmp/minecraft-*.service /etc/systemd/system/` to the app user. Because
@@ -100,39 +85,28 @@ command -v bash node          # for example /usr/bin/bash and /usr/bin/node
 
 Set `MC_BASH_PATH` and `MC_NODE_PATH` in the wrapper's environment (the systemd unit or `.env`) to those absolute paths, and use exactly the same paths in the sudoers rules above. The wrapper refuses to start if either variable is set to a relative path.
 
-## Default service names
+## Service names
 
-The entries above use the default service names created by the setup script:
-
-| Service | Description |
-|---|---|
-| `server.service` | The Minecraft game server |
-| `minecraft-server-api-server.service` | The API server (mc-api-server) |
-
-If you have multiple game server instances, add a matching set of `server.service` entries for each (e.g. `creative.service`, `survival.service`).
+The game server's unit is named after the instance (`survival.service` above). The API wrapper's unit is `<install folder>-api-server.service`; it is managed by the admin, not by the wrapper, so it needs no grant here.
 
 ## Verifying the configuration
 
 After saving, verify each user can run their commands without a password:
 
 ```bash
-# As minecraft user
-sudo -n systemctl status server.service
-
-# As mcbot user
-sudo -n systemctl status server.service
-sudo -n -u minecraft echo "ok"
-
-# The mod scripts (needs a real instance path)
-sudo -n -u minecraft /usr/bin/node /home/minecraft/mc/instances/survival/scripts/update/check-updates.js --json
+# As mcbot: list what it may run, then try a harmless one
+sudo -l
+sudo -n systemctl status survival.service
+sudo -n -u minecraft /usr/bin/node /home/minecraft/mc/scripts/survival/update/check-updates.js --json --
 ```
 
 If either command asks for a password, the sudoers entry is not applied correctly.
 
 ## Principle of least privilege
 
-- Only the runtime actions (`start`/`stop`/`restart`/`status`, plus `reset-failed` and the read-only `show`) are granted. `enable`, `disable`, `daemon-reload`, and unit-file creation are **setup-time** operations performed by an admin's own sudo. They are intentionally not granted to the app user (SEC-03).
-- The `*/scripts/*/*` pattern restricts script execution to files inside an instance's `scripts/` directory. **Those directories must be owned by `minecraft` and not writable by `mcbot`** — otherwise the app user could drop a script there and run it as `minecraft`. Pin the path to the exact instance directory where you can.
-- Never grant `ALL=(minecraft) NOPASSWD: ALL` — that gives unlimited shell access as the MC user.
-- Never grant a `mv`/`cp`/`tee` from a world-writable location (e.g. `/tmp`) into `/etc/systemd/system/` — that is an arbitrary-root-unit install. Write unit files straight to their final path (the setup scripts now do this).
+- Only the runtime actions (`start`/`stop`/`restart`/`status`, plus `reset-failed` and the read-only `show`) are granted, for the instance's own unit. `enable`, `disable`, `daemon-reload` and unit-file creation are **setup-time** operations performed by an admin's own sudo.
+- Scripts are named one by one with the arguments the wrapper passes. A wildcard only ever follows a full script path, and only where the script checks what follows: restore refuses an archive outside the backups folder or one the server user did not make.
+- **The scripts folder must be owned by `minecraft` and not writable by `mcbot`**, and `mcbot` must not be able to write anywhere the server loads code from (`plugins/`, `mods/`, the scripts). Otherwise these grants let it run anything as `minecraft`.
+- Never grant `ALL=(minecraft) NOPASSWD: ALL`, or a bare `/usr/bin/screen`: `screen -dm bash -c …` is a shell.
+- Never grant a `mv`/`cp`/`tee` from a world-writable location (e.g. `/tmp`) into `/etc/systemd/system/` — that is an arbitrary-root-unit install.
 - `visudo` validates syntax before writing; a malformed sudoers file can lock you out of `sudo` entirely, so always use it instead of editing the file directly.

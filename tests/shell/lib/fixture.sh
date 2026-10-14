@@ -98,6 +98,15 @@ run_script() { # script args... ; sets OUT and RC
   RC=$?
 }
 
+# run_script_tty: like run_script, but with a terminal on stdin, the way an
+# operator runs a script by hand. Needs util-linux `script`.
+run_script_tty() {
+  local cmd
+  cmd="bash $(printf '%q ' "$@")"
+  OUT="$(cd "$T/scripts" && script -qec "$cmd" /dev/null 2>&1 < /dev/null | tr -d '\r')"
+  RC=${PIPESTATUS[0]}
+}
+
 # use_install_layout: move the fixture into the layout setup creates, so scripts
 # that derive the install root from their own path see a real one:
 #   $R/scripts/testinst  $R/instances/testinst  $R/services/

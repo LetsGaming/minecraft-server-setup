@@ -66,7 +66,7 @@ test_latest_backup_is_default() {
   make_archive "$T/backups/hourly/minecraft_backup_old.tar.zst" old
   touch -d "2 hours ago" "$T/backups/hourly/minecraft_backup_old.tar.zst"
   make_archive "$T/backups/hourly/minecraft_backup_new.tar.zst" new
-  run_script "$RESTORE" --y
+  run_script_tty "$RESTORE" --y
   assert_rc 0 "$RC" "default restore exits 0"
   assert_file_content "$T/server/world/level.dat" new "newest archive chosen"
 }
@@ -170,7 +170,7 @@ test_ago_picks_closest_backup() {
   make_archive "$T/backups/hourly/minecraft_backup_old.tar.zst" old
   touch -d "5 hours ago" "$T/backups/hourly/minecraft_backup_old.tar.zst"
   make_archive "$T/backups/hourly/minecraft_backup_new.tar.zst" new
-  run_script "$RESTORE" --ago 5h --y
+  run_script_tty "$RESTORE" --ago 5h --y
   assert_rc 0 "$RC" "--ago exits 0"
   assert_file_content "$T/server/world/level.dat" old "closest-to-5h archive chosen"
 }
@@ -318,6 +318,77 @@ test_wrapper_config_goes_to_the_old_folder_on_an_old_layout() {
   run_in_layout "$RESTORE" --archive --file minecraft_backup_c.tar.zst --y
   assert_file_content "$R/api-server/api-server-config.json" '{"apiKey":"restored"}' "config lands in api-server/"
   assert_missing "$R/services/api-server" "no services/ folder is made beside it"
+}
+
+# ── S-004: nothing implicit without a terminal, and only trusted archives ──
+
+test_without_a_terminal_a_file_and_y_are_required() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --y
+  assert_rc 1 "$RC" "no --file: refused"
+  assert_contains "$OUT" "needs both --file" "says what is missing"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst
+  assert_rc 1 "$RC" "no --y: refused rather than reading a y from stdin"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_an_archive_owned_by_someone_else_is_refused() {
+  if [[ "$(id -u)" != 0 ]]; then skip "foreign-owner archive" "needs root to chown"; return; fi
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" planted
+  chown 65534 "$T/backups/hourly/minecraft_backup_a.tar.zst"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 1 "$RC" "refused"
+  assert_contains "$OUT" "owned by uid 65534" "says whose it is"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_archived_scripts_are_not_restored_without_a_terminal() {
+  setup
+  local src; src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world" "$src/.mc-meta/scripts"
+  echo restored > "$src/world/level.dat"
+  echo "echo planted" > "$src/.mc-meta/scripts/start.sh"
+  mkdir -p "$T/backups/hourly"
+  "$REAL_TAR" -cf - -C "$src" . | gzip -c > "$T/backups/hourly/minecraft_backup_m.tar.gz"
+  run_script "$RESTORE" --file minecraft_backup_m.tar.gz --y
+  assert_rc 0 "$RC" "the world is restored"
+  assert_contains "$OUT" "scripts/ left as they are" "says the scripts were skipped"
+  assert_not_contains "$(cat "$T/scripts/start.sh" 2>/dev/null)" "planted" "the scripts were not replaced"
+}
+
+# ── S-002/S-003: a restored server keeps runnable jars ──
+
+test_an_hourly_restore_keeps_the_current_jars() {
+  setup
+  mkdir -p "$T/server/mods" "$T/server/libraries/x"
+  echo jar > "$T/server/server.jar"; echo mod > "$T/server/mods/a.jar"; echo lib > "$T/server/libraries/x/l.jar"
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore exits 0"
+  assert_file_content "$T/server/world/level.dat" restored "world comes from the archive"
+  assert_file_content "$T/server/server.jar" jar "server.jar is kept"
+  assert_file_content "$T/server/mods/a.jar" mod "mods are kept"
+  assert_file_content "$T/server/libraries/x/l.jar" lib "libraries are kept"
+}
+
+test_dangling_jar_links_of_older_archives_are_repaired() {
+  setup
+  mkdir -p "$T/backups/jars"
+  echo stored > "$T/backups/jars/server.jar"
+  local src; src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world" "$src/mods"
+  echo restored > "$src/world/level.dat"
+  echo mod > "$src/mods/a.jar"
+  ln -s ../../../jars/server.jar "$src/server.jar"
+  mkdir -p "$T/backups/hourly"
+  "$REAL_TAR" -cf - -C "$src" . | gzip -c > "$T/backups/hourly/minecraft_backup_old.tar.gz"
+  rm -f "$T/server/server.jar"
+  run_script "$RESTORE" --file minecraft_backup_old.tar.gz --y
+  assert_rc 0 "$RC" "restore exits 0"
+  if [[ -f "$T/server/server.jar" && ! -L "$T/server/server.jar" ]]; then _ok "server.jar is a regular file"; else _bad "server.jar is a regular file" "$(ls -l "$T/server/server.jar" 2>&1)"; fi
+  assert_file_content "$T/server/server.jar" stored "taken from the stored copy"
 }
 
 run_tests

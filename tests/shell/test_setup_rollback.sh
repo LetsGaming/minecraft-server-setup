@@ -47,7 +47,8 @@ run_rollback_after() { # body to run between snapshot and rollback
 test_existing_instances_survive_a_failed_second_instance() {
   setup
   local base="$MAIN_DIR/mc"
-  mkdir -p "$base/instances/first/world" "$base/scripts/first" "$base/backups/first/hourly" "$base/api-server"
+  mkdir -p "$base/instances/first/world" "$base/scripts/first" "$base/backups/first/hourly" "$base/services/api-server"
+  echo '{"instances":{"first":{}}}' > "$base/services/api-server/api-server-config.json"
   echo world > "$base/instances/first/world/level.dat"
   touch "$SYSTEMD_UNIT_DIR/first.service" "$SYSTEMD_UNIT_DIR/mc-api-server.service"
   printf '0 * * * * bash %s/scripts/first/backup.sh\n' "$base" > "$CRONTAB_FILE"
@@ -55,13 +56,15 @@ test_existing_instances_survive_a_failed_second_instance() {
   run_rollback_after '
     mkdir -p "$MAIN_DIR/mc/instances/second" "$MAIN_DIR/mc/scripts/second" "$MAIN_DIR/mc/backups/second"
     touch "$SYSTEMD_UNIT_DIR/second.service"
+    echo "{\"instances\":{\"first\":{},\"second\":{}}}" > "$MAIN_DIR/mc/services/api-server/api-server-config.json"
     printf "0 * * * * bash %s/scripts/second/backup.sh\n" "$MAIN_DIR/mc" >> "$CRONTAB_FILE"
   '
 
   assert_exists "$base/instances/first/world/level.dat" "the first instance's world is kept"
   assert_exists "$base/scripts/first" "its scripts are kept"
   assert_exists "$base/backups/first/hourly" "its backups are kept"
-  assert_exists "$base/api-server" "the shared wrapper is kept"
+  assert_exists "$base/services/api-server" "the shared wrapper is kept"
+  assert_file_content "$base/services/api-server/api-server-config.json" '{"instances":{"first":{}}}' "the wrapper config no longer lists the failed instance"
   assert_exists "$SYSTEMD_UNIT_DIR/mc-api-server.service" "the shared wrapper unit is kept"
   assert_exists "$SYSTEMD_UNIT_DIR/first.service" "the first instance's unit is kept"
   assert_missing "$base/instances/second" "the new instance's directory is removed"
@@ -75,7 +78,7 @@ test_existing_instances_survive_a_failed_second_instance() {
 test_a_first_run_removes_its_whole_base_dir() {
   setup
   run_rollback_after '
-    mkdir -p "$MAIN_DIR/mc/instances/second" "$MAIN_DIR/mc/api-server"
+    mkdir -p "$MAIN_DIR/mc/instances/second" "$MAIN_DIR/mc/services/api-server"
     touch "$SYSTEMD_UNIT_DIR/second.service"
     echo "0 * * * * x" > "$CRONTAB_FILE"
   '

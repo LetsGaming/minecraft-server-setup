@@ -76,6 +76,81 @@ extract_archive() {
   }
 }
 
+# archive_is_trusted <file>
+# S-004: the wrapper's service user may write into the backups folders (to
+# delete archives), so an archive it planted there must never be restored: the
+# restore would run its start.sh and scripts as the server's owner. Only an
+# archive owned by the user running the restore, or by root, is accepted.
+archive_is_trusted() {
+  local file="$1" owner
+  owner="$(stat -c %u -- "$file" 2>/dev/null)" || { _ar_error "Cannot read the owner of $file"; return 1; }
+  if [[ "$owner" != "$(id -u)" && "$owner" != 0 ]]; then
+    _ar_error "Refusing $file: it is owned by uid $owner, not by $(id -un). Only archives this user made are restored."
+    return 1
+  fi
+}
+
+# complete_staged_jars <staging_dir> <server_dir>
+# Makes the jars of a restored tree usable before it is swapped in.
+#  - S-003: hourly archives leave every *.jar out (server jar, mods,
+#    libraries). When the archive holds no jar at all, the current server's
+#    jars are carried over at their own paths, so the restored world starts on
+#    the same server and mods it ran with.
+#  - S-002: archives made before backup.sh kept real jars replaced jars with
+#    links into the backups' jars/ folder, which dangle once restored. Each
+#    such link is replaced by the real file: the current server's copy at the
+#    same path, else the stored copy in jars/.
+complete_staged_jars() {
+  local staging="$1" server="${2%/}" link rel name src
+  if [[ -z "$(find "$staging" -name '*.jar' \( -type f -o -type l \) -print -quit 2>/dev/null)" ]]; then
+    if [[ -d "$server" ]]; then
+      echo "[INFO] The archive has no jars (an hourly backup); keeping the current server's jars."
+      ( cd "$server" && find . -name '*.jar' -type f -print0 ) |
+        while IFS= read -r -d '' rel; do
+          mkdir -p -- "$staging/$(dirname "$rel")"
+          cp -p -- "$server/$rel" "$staging/$rel"
+        done
+    fi
+    return 0
+  fi
+  while IFS= read -r -d '' link; do
+    [[ -e "$link" ]] && continue   # resolves: a link the server put there itself
+    rel="${link#"$staging"/}"
+    name="$(basename "$link")"
+    src=""
+    if [[ -f "$server/$rel" && ! -L "$server/$rel" ]]; then
+      src="$server/$rel"
+    elif [[ -n "${BACKUPS_PATH:-}" && -f "$BACKUPS_PATH/jars/$name" ]]; then
+      src="$BACKUPS_PATH/jars/$name"
+    fi
+    if [[ -n "$src" ]]; then
+      rm -f -- "$link"
+      cp -p -- "$src" "$link"
+    else
+      echo "[WARN] $rel points to a stored jar that no longer exists; the server may not start without it." >&2
+    fi
+  done < <(find "$staging" -name '*.jar' -type l -print0 2>/dev/null)
+  return 0
+}
+
+# Set by swap_server_dir while a swap is half done, for swap_recover.
+_SWAP_SERVER=""
+_SWAP_OLD=""
+
+# swap_recover
+# For an EXIT/INT trap (S-031): when a signal lands between the two renames of
+# swap_server_dir, the server directory is gone and the original is only at
+# <server>.pre-restore.<pid>. Put it back.
+swap_recover() {
+  if [[ -n "$_SWAP_OLD" && -e "$_SWAP_OLD" && ! -e "$_SWAP_SERVER" ]]; then
+    mv -- "$_SWAP_OLD" "$_SWAP_SERVER" \
+      && echo "[WARN] Restore interrupted; the original server files were put back." >&2 \
+      || _ar_error "Restore interrupted; the original server files are at: $_SWAP_OLD"
+  fi
+  _SWAP_OLD=""
+  _SWAP_SERVER=""
+}
+
 # swap_server_dir <staging_dir> <server_dir>
 # Replaces <server_dir> with <staging_dir> by renaming, so the server directory
 # is either the old contents or the new ones, never a half-written mix. If the
@@ -85,17 +160,21 @@ swap_server_dir() {
   local staging="$1" server="${2%/}" old
   old="$server.pre-restore.$$"
 
+  _SWAP_SERVER="$server"
   if [[ -e "$server" ]]; then
     chmod --reference="$server" -- "$staging" 2>/dev/null || true
-    mv -- "$server" "$old" || { _ar_error "Could not move the current server directory aside"; return 1; }
+    _SWAP_OLD="$old"
+    mv -- "$server" "$old" || { _SWAP_OLD=""; _ar_error "Could not move the current server directory aside"; return 1; }
   fi
   if ! mv -- "$staging" "$server"; then
     _ar_error "Could not move the restored files into place"
     if [[ -e "$old" ]]; then
       mv -- "$old" "$server" || _ar_error "Original server data is preserved at: $old"
     fi
+    _SWAP_OLD=""
     return 1
   fi
+  _SWAP_OLD=""
   rm -rf -- "$old"
 }
 

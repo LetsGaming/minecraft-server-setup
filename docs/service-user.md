@@ -37,9 +37,9 @@ It is safe to run again.
 |---|---|---|
 | Traverse (`x`) | each folder from the install root up to `/` | ACL, no read |
 | Read | the instance folder, the scripts folder, the backups folder, the wrapper's own folder and its config | ACL, recursive, with defaults so new files inherit it |
-| Write | `config/`, `defaultconfigs/`, `world/serverconfig/`, `plugins/`, `server.properties`, `.mcbot-config-snapshots/`, `world/stats/` | ACL, recursive (the dashboard's config editor and the stats cleanup) |
+| Write | `config/`, `defaultconfigs/`, `world/serverconfig/`, `server.properties`, `.mcbot-config-snapshots/`, `world/stats/` | ACL, recursive (the dashboard's config editor and the stats cleanup). Not `plugins/`: a jar dropped there runs as the server user at the next start, so plugin configs are read-only to the wrapper |
 | Write on folders only | every folder under the backups folder | lets it delete an archive; archives stay read-only |
-| Run as the server user | the exact scripts the wrapper uses (start, stop, restart, rollback, backup, restore, status, upgrade, prune, the mod scripts), and `screen -list` and `screen -S <instance> -X stuff` | sudoers file, one per instance |
+| Run as the server user | the exact scripts the wrapper uses (start, stop, restart, rollback, backup, restore, status, upgrade, prune, the mod scripts) with the arguments it passes, and `screen -list` and `screen -S <instance> -X stuff` | sudoers file, one per instance. Restore runs only on an archive in the backups folder that the server user made, with `--file` and `--y`; it never restores the archived scripts without a terminal |
 | Run as root | `systemctl start/stop/restart/status/reset-failed/show <instance>.service` | the same sudoers file |
 
 Ownership is never changed; everything is an ACL entry for that one user. Nothing is granted

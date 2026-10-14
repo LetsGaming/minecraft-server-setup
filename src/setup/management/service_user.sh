@@ -34,7 +34,10 @@ SU_SCREEN_PATH=""
 SU_SYSTEMCTL_PATH=""
 
 # Configuration folders the wrapper's editor may write, relative to the server folder.
-SU_CONFIG_ROOTS=(config defaultconfigs world/serverconfig plugins)
+# Not plugins/ (S-004): a jar dropped there is code the server runs as its owner
+# at the next start. Plugin configs stay readable; editing them through the
+# dashboard needs the wrapper to run as the server user.
+SU_CONFIG_ROOTS=(config defaultconfigs world/serverconfig)
 SU_SNAPSHOT_DIR=".mcbot-config-snapshots"
 
 su_usage() {
@@ -73,10 +76,22 @@ su_var() {
 }
 
 # The sudoers file for one instance. Pure: prints it, touches nothing.
-# Args: service-user server-user instance scripts-dir
+# Args: service-user server-user instance scripts-dir backups-dir
+#
+# S-005: alias names must be upper case (visudo rejects MCS_testinst_UNIT), and
+# a rule that names arguments matches only those arguments: "bash restore.sh"
+# allows restore.sh with none at all. Each script is listed with the argument
+# shapes the API wrapper really uses, and no more:
+#   - the scripts/run actions take no arguments; backup also takes --archive
+#   - restore takes the archive the wrapper resolved: --file <backups>/... --y
+#   - upgrade, prune and the mod scripts take their flags and a slug
+# A "*" here also matches spaces; it is only used where the script itself
+# validates what follows (restore refuses archives outside the backups folder
+# and archives this user did not make).
 su_sudoers_content() {
-  local svc="$1" owner="$2" inst="$3" sd="$4"
+  local svc="$1" owner="$2" inst="$3" sd="$4" bk="$5"
   local id="${inst//[^A-Za-z0-9]/_}"
+  id="${id^^}"
   local b="$SU_BASH_PATH" n="$SU_NODE_PATH" s="$SU_SCREEN_PATH" c="$SU_SYSTEMCTL_PATH"
   cat << EOF
 # Written by service_user.sh for the API wrapper's user '$svc'. Do not edit by hand:
@@ -95,18 +110,21 @@ Cmnd_Alias MCS_${id}_SCRIPTS = \\
     $b $sd/start.sh, \\
     $b $sd/shutdown.sh, \\
     $b $sd/smart_restart.sh, \\
-    $b $sd/rollback.sh, \\
-    $b $sd/backup/backup.sh, \\
-    $b $sd/backup/restore.sh, \\
     $b $sd/misc/status.sh, \\
-    $b $sd/update/upgrade.sh, \\
-    $n $sd/world/prune-chunks.js, \\
-    $n $sd/update/add-mod.js, \\
-    $n $sd/update/remove-mod.js, \\
-    $n $sd/update/update-mod.js, \\
-    $n $sd/update/update-mods.js, \\
-    $n $sd/update/check-updates.js, \\
-    $n $sd/update/toggle-mod.js
+    $b $sd/rollback.sh, \\
+    $b $sd/rollback.sh --y, \\
+    $b $sd/backup/backup.sh, \\
+    $b $sd/backup/backup.sh --archive, \\
+    $b $sd/backup/restore.sh --file $bk/* --y, \\
+    $b $sd/backup/restore.sh --y --archive --file $bk/*, \\
+    $b $sd/update/upgrade.sh *, \\
+    $n $sd/world/prune-chunks.js *, \\
+    $n $sd/update/add-mod.js *, \\
+    $n $sd/update/remove-mod.js *, \\
+    $n $sd/update/update-mod.js *, \\
+    $n $sd/update/update-mods.js *, \\
+    $n $sd/update/check-updates.js *, \\
+    $n $sd/update/toggle-mod.js *
 
 Cmnd_Alias MCS_${id}_SCREEN = \\
     $s -list, \\
@@ -213,7 +231,7 @@ su_install_sudoers() {
   local file="$SU_SUDOERS_DIR/mc-service-$SU_USER-$SU_INSTANCE"
   local tmp
   tmp="$(mktemp)"
-  su_sudoers_content "$SU_USER" "$SU_OWNER" "$SU_INSTANCE" "$SU_SCRIPTS_DIR" > "$tmp"
+  su_sudoers_content "$SU_USER" "$SU_OWNER" "$SU_INSTANCE" "$SU_SCRIPTS_DIR" "$SU_BACKUPS_DIR" > "$tmp"
   if ! visudo -cf "$tmp" > /dev/null; then
     rm -f "$tmp"
     su_die "The generated sudoers rules do not parse; nothing was installed." 1
@@ -265,6 +283,9 @@ su_main() {
   su_valid_name "$SU_OWNER" || su_die "The server user '$SU_OWNER' is not a valid user name." 1
   [[ "$SU_USER" != "$SU_OWNER" && "$SU_USER" != root ]] || su_die "The service user must be neither root nor the server user." 2
   su_safe_path "$server_dir" || su_die "The server path has characters sudoers cannot take literally." 2
+  [[ -n "$backups_dir" && "$backups_dir" != none ]] || su_die "variables.txt lacks BACKUPS_PATH." 1
+  su_safe_path "$backups_dir" || su_die "The backups path has characters sudoers cannot take literally." 2
+  SU_BACKUPS_DIR="$backups_dir"
 
   SU_BASH_PATH="$(su_resolve_tool bash "$SU_BASH_PATH")"
   SU_NODE_PATH="$(su_resolve_tool node "$SU_NODE_PATH")"
@@ -272,7 +293,7 @@ su_main() {
   SU_SYSTEMCTL_PATH="$(su_resolve_tool systemctl "$SU_SYSTEMCTL_PATH")"
 
   if [[ "$SU_PRINT_SUDOERS" == true ]]; then
-    su_sudoers_content "$SU_USER" "$SU_OWNER" "$SU_INSTANCE" "$SU_SCRIPTS_DIR"
+    su_sudoers_content "$SU_USER" "$SU_OWNER" "$SU_INSTANCE" "$SU_SCRIPTS_DIR" "$SU_BACKUPS_DIR"
     return 0
   fi
 

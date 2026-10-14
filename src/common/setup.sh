@@ -183,6 +183,8 @@ declare -A _PRE_PATH_EXISTED=()
 declare -A _PRE_UNIT_EXISTED=()
 _PRE_CRONTAB_FILE=""
 _PRE_CRONTAB_EXISTED=false
+# The shared wrapper's config, which a run for a new instance adds itself to.
+_PRE_API_CONFIG_COPY=""
 
 # Paths a setup run for this instance creates, in the order they are removed.
 _rollback_paths() {
@@ -191,7 +193,8 @@ _rollback_paths() {
     "$base/instances/$INSTANCE_NAME" \
     "$base/scripts/$INSTANCE_NAME" \
     "$base/backups/$INSTANCE_NAME" \
-    "$base/api-server"
+    "$base/services/api-server" \
+    "$base/services"
   local custom
   custom=$(node -e "try{const p=require('$SCRIPT_DIR/variables.json').BACKUPS?.BACKUPS_PATH;if(p&&p!=='none')process.stdout.write(p)}catch(e){}" 2>/dev/null || true)
   [[ -n "$custom" ]] && printf '%s\n' "$custom"
@@ -215,6 +218,11 @@ snapshot_setup_state() {
   while IFS= read -r u; do
     if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" ]]; then _PRE_UNIT_EXISTED["$u"]=true; else _PRE_UNIT_EXISTED["$u"]=false; fi
   done < <(_rollback_units)
+  local api_config="$base/services/api-server/api-server-config.json"
+  if [[ -f "$api_config" ]]; then
+    _PRE_API_CONFIG_COPY=$(mktemp)
+    sudo cat "$api_config" > "$_PRE_API_CONFIG_COPY" 2>/dev/null || _PRE_API_CONFIG_COPY=""
+  fi
   _PRE_CRONTAB_FILE=$(mktemp)
   if crontab -l > "$_PRE_CRONTAB_FILE" 2>/dev/null; then _PRE_CRONTAB_EXISTED=true; fi
   _ROLLBACK_ARMED=true
@@ -267,6 +275,17 @@ run_rollback() {
       crontab -r 2>/dev/null || true
     fi
     rm -f "$_PRE_CRONTAB_FILE"
+  fi
+
+  # The shared wrapper's config goes back to what it was, without this
+  # run's instance in it; contents only, so its owner, mode and ACL stay.
+  local api_config="$base/services/api-server/api-server-config.json"
+  if [[ -n "$_PRE_API_CONFIG_COPY" ]]; then
+    if [[ -f "$api_config" ]] && ! cmp -s "$_PRE_API_CONFIG_COPY" "$api_config"; then
+      log "Restoring $api_config"
+      sudo tee "$api_config" < "$_PRE_API_CONFIG_COPY" > /dev/null || warn "Could not restore $api_config."
+    fi
+    rm -f "$_PRE_API_CONFIG_COPY"
   fi
 
   if [[ "$_PRE_BASE_EXISTED" == false ]]; then

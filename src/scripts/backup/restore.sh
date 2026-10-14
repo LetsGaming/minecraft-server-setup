@@ -13,6 +13,7 @@ SPECIFIC_BACKUP=""
 RELATIVE_TIME=""
 FROM_ARCHIVE=false
 INSTALL_UNITS=false
+WITH_SCRIPTS=false
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 
 print_help() {
@@ -27,9 +28,13 @@ print_help() {
     echo "  --install-units       Install the systemd units stored in an archive (with sudo) after"
     echo "                        showing what changes. Without it, units are installed only after"
     echo "                        an interactive confirmation, and skipped when run non-interactively."
+    echo "  --with-scripts        Also put back the management scripts stored in an archive"
+    echo "                        (asked for when run interactively; skipped otherwise)"
     echo "  --help                Show this help message and exit"
     echo ""
     echo "The server must be stopped; the restore refuses to run (exit 3) while it is online."
+    echo "Run without a terminal (by the API wrapper), it needs --file and --y, and only"
+    echo "restores an archive owned by the user running it."
 }
 
 # review_and_install_unit <unit-file> <unit-name>
@@ -102,10 +107,19 @@ while [[ $# -gt 0 ]]; do
         --ago) require_value "$@"; RELATIVE_TIME="$2"; shift 2 ;;
         --archive) FROM_ARCHIVE=true; shift ;;
         --install-units) INSTALL_UNITS=true; shift ;;
+        --with-scripts) WITH_SCRIPTS=true; shift ;;
         --help) print_help; exit 0 ;;
         *) echo "$(date +'%F %T') [ERROR] Unknown argument: $1" >&2; exit 1 ;;
     esac
 done
+
+# S-004: run without a terminal (through sudo by the wrapper), nothing may be
+# chosen implicitly: not "the newest archive" (which anyone who can write into
+# the backups folder decides) and not a "y" read from stdin.
+if [[ ! -t 0 ]] && [[ -z "$SPECIFIC_BACKUP" || "$SKIP_CONFIRMATION" != true ]]; then
+    echo "$(date +'%F %T') [ERROR] Without a terminal, restore needs both --file <archive> and --y." >&2
+    exit 1
+fi
 
 acquire_operation_lock restore || exit 75
 
@@ -142,6 +156,7 @@ else
 fi
 
 [[ -e "$BACKUP_TO_RESTORE" ]] || { echo "[ERROR] No suitable backup found."; exit 1; }
+archive_is_trusted "$BACKUP_TO_RESTORE" || exit 1
 
 echo "[INFO] Selected backup: $BACKUP_TO_RESTORE"
 
@@ -163,10 +178,16 @@ fi
 # The archive is unpacked next to the server directory and swapped in only
 # once extraction succeeded, so a failure leaves the current world untouched.
 STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
-trap 'rm -rf -- "$STAGING_DIR"' EXIT
+# Puts the original back if a signal lands mid-swap (S-031), and releases the
+# operation lock this trap would otherwise have replaced (S-030).
+trap 'swap_recover; rm -rf -- "$STAGING_DIR"; release_operation_lock' EXIT
+trap 'exit 130' INT TERM
 
 echo "[INFO] Restoring backup..."
 extract_archive "$BACKUP_TO_RESTORE" "$STAGING_DIR" || exit 1
+# Hourly archives hold no jars, older archives hold dangling jar links (S-002,
+# S-003); either way the restored tree gets runnable jars before it goes live.
+complete_staged_jars "$STAGING_DIR" "$SERVER_PATH"
 # Extraction takes a while; confirm nothing started the server in the meantime.
 require_server_stopped || exit 3
 swap_server_dir "$STAGING_DIR" "$SERVER_PATH" || exit 1
@@ -186,8 +207,18 @@ if [[ -d "$META_DIR" ]]; then
   BASE_DIR="$(dirname "$(dirname "$INSTANCE_SCRIPTS_DIR")")"
   TARGET_DIR_NAME="$(basename "$BASE_DIR")"
 
-  # 1. Scripts tree
-  if [[ -d "$META_DIR/scripts" ]]; then
+  # 1. Scripts tree. These run as this user (and some through sudo grants), so
+  # they are only replaced when someone asked for it (S-004): --with-scripts,
+  # or a "y" at a terminal.
+  restore_scripts=$WITH_SCRIPTS
+  if [[ -d "$META_DIR/scripts" ]] && ! $restore_scripts && [[ -t 0 ]]; then
+    read -rp "Also restore the management scripts stored in the archive? (y/N): " answer
+    [[ "$answer" =~ ^[Yy]$ ]] && restore_scripts=true
+  fi
+  if [[ -d "$META_DIR/scripts" ]] && ! $restore_scripts; then
+    echo "[INFO]   — scripts/ left as they are (pass --with-scripts to restore them)"
+  fi
+  if [[ -d "$META_DIR/scripts" ]] && $restore_scripts; then
     rsync -a "$META_DIR/scripts/" "$INSTANCE_SCRIPTS_DIR/"
     echo "[INFO]   ✓ scripts/"
 

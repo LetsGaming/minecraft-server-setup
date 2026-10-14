@@ -95,8 +95,10 @@ delete_old_hourly_backups() {
   fi
 }
 
-# Jars are stored once under jars/ and archives symlink to them (see
-# backup.sh), so a jar is only garbage once no remaining archive links to it.
+# Archives made before backup.sh kept real jars symlink into jars/, so a jar
+# there is only garbage once no remaining archive links to it. Every archive
+# folder counts, general and custom ones included: a jar referenced only by
+# one of those used to be deleted after a day (S-002).
 # Any archive that cannot be listed aborts the pruning: an unreadable archive
 # might be the one that references the jar. Jars younger than a day are kept so
 # a backup that has stored a jar but not yet finished its archive is safe.
@@ -106,9 +108,8 @@ prune_orphan_jars() {
 
   log "Checking for orphaned jars in: $jar_dir"
   declare -A referenced=()
-  local dir archive listing target
-  for dir in "${STORAGE_EVICTION_DIRS[@]}"; do
-    [[ "$dir" == "$BACKUP_BASE/archives/"* ]] || continue
+  local archive listing target
+  [[ -d "$BACKUP_BASE/archives" ]] && {
     while IFS= read -r archive; do
       [[ -n "$archive" ]] || continue
       if [[ "$archive" == *.tar.zst ]]; then
@@ -121,8 +122,8 @@ prune_orphan_jars() {
       while IFS= read -r target; do
         [[ -n "$target" ]] && referenced["${target##*/}"]=1
       done < <(printf '%s\n' "$listing" | sed -n 's/.* -> //p')
-    done < <(list_archives "$dir")
-  done
+    done < <(find "$BACKUP_BASE/archives" -type f \( -name '*.tar.zst' -o -name '*.tar.gz' \) 2>/dev/null)
+  }
 
   local jar removed=0
   while IFS= read -r jar; do
