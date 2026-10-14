@@ -940,3 +940,21 @@ test("a chunk with no InhabitedTime reads as undefined", () => {
   const r = chunkSignalsFast(Buffer.from([10, 0, 0, 0]));
   assert.equal(r.inhabited, undefined);
 });
+
+test("terrain is not pruned when the region's entities file cannot be rewritten safely (S-025)", withServer((s) => {
+  fx.writeLevelDat(s.worldDir, 100_000, 100_000);
+  const regionFile = s.regionFile(null, "region", 0, 0);
+  fx.writeRegion(regionFile, 0, 0, [chunk(0, 0, 0), chunk(1, 0, 90), chunk(2, 0, 90)]);
+  const entities = s.regionFile(null, "entities", 0, 0);
+  fx.writeRegion(entities, 0, 0, [chunk(0, 0, 0), chunk(1, 0, 0), chunk(2, 0, 0)]);
+  const { plan: p } = plan.scanWorld({ serverPath: s.dir, params: LEAN });
+  const regionBefore = fs.readFileSync(regionFile);
+  const buf = fs.readFileSync(entities);
+  buf.writeUInt32BE(buf.readUInt32BE(4), 8); // overlapping sectors: unsafe
+  fs.writeFileSync(entities, buf);
+  const res = plan.applyPlan({ serverPath: s.dir, plan: p });
+  assert.equal(res.deletedChunks, 0, "no terrain deleted");
+  assert.equal(res.skippedFiles, 1);
+  assert.deepEqual(fs.readFileSync(regionFile), regionBefore, "region file untouched");
+  assert.deepEqual(fs.readFileSync(entities), buf, "entities file untouched");
+}));

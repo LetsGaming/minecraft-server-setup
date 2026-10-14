@@ -383,6 +383,9 @@ function realDeps({ scriptsDir, serverPath, backupsPath, statusFile }) {
       // S-015: every step has a ceiling, so one that hangs (a stalled download,
       // a wedged JVM) cannot keep the server down and the lock held forever.
       const r = spawnSync(cmd, [script, ...args], {
+        // The prune runs only after this job's backup (S-025); this is how
+        // prune-chunks.js knows there is one.
+        ...(kind === "prune" ? { env: { ...process.env, MC_PRUNE_BACKED_UP: "1" } } : {}),
         encoding: "utf8",
         maxBuffer: 16 * 1024 * 1024,
         timeout: STEP_TIMEOUT_MS[kind] ?? 30 * 60_000,

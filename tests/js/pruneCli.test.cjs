@@ -87,7 +87,7 @@ test("--scan changes nothing in the world", withSetup((s) => {
 
 test("--apply deletes what the plan named", withSetup((s) => {
   const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
-  const r = s.run(["--apply", `--plan=${scan.id}`]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, "--backed-up"]);
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.last.ok, true);
   assert.equal(r.last.deletedChunks, 3);
@@ -115,7 +115,7 @@ test("--apply reports a plan that went stale and deletes nothing", withSetup((s)
     0,
     [0, 1, 2, 3].map((i) => ({ x: i, z: 0, nbt: fx.chunkModern({ x: i, z: 0, inhabited: 90 * MIN }) })),
   );
-  const r = s.run(["--apply", `--plan=${scan.id}`]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, "--backed-up"]);
   assert.equal(r.code, 1);
   assert.equal(r.last.code, "plan_stale");
 }));
@@ -151,7 +151,7 @@ test("invalid parameters are an error, not a silent default", withSetup((s) => {
 test("--apply refuses when the server check is missing", withSetup((s) => {
   const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
   fs.rmSync(path.join(s.scripts, "common", "instance_ops.sh"));
-  const r = s.run(["--apply", `--plan=${scan.id}`]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, "--backed-up"]);
   assert.equal(r.code, 1);
   assert.equal(r.last.code, "server_running");
 }));
@@ -197,7 +197,7 @@ test("--apply on worker threads deletes the same chunks", withSetup((s) => {
     fx.writeRegion(s.server.regionFile(null, "region", rx, rz), rx, rz, list);
   }
   const { last: scan } = s.run(["--scan", "--workers=2", `--params=${JSON.stringify(LEAN)}`]);
-  const r = s.run(["--apply", `--plan=${scan.id}`, "--workers=2"]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, "--workers=2", "--backed-up"]);
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.last.deletedChunks, scan.totals.delete);
   assert.equal(s.run(["--scan", "--workers=2", `--params=${JSON.stringify(LEAN)}`]).last.totals.delete, 0);
@@ -287,4 +287,13 @@ test("--tile refuses a bad request and a region that does not exist", withSetup(
   assert.equal(s.run(["--tile", "--rx=0", "--rz=0"]).last.code, "params");
   assert.equal(s.run(["--tile", "--dimension=overworld", "--rx=9", "--rz=9"]).last.code, "no_region");
   assert.equal(s.run(["--tile", "--dimension=the_end", "--rx=0", "--rz=0"]).last.code, "no_region");
+}));
+
+test("--apply refuses without a backup behind it (S-025)", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const r = s.run(["--apply", `--plan=${scan.id}`]);
+  assert.equal(r.last.ok, false);
+  assert.equal(r.last.code, "no_backup");
+  const after = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  assert.equal(after.last.totals.delete, 3, "nothing was deleted");
 }));
