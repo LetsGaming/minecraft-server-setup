@@ -4,20 +4,19 @@
  * Deploys the mc-api-server for this MC instance.
  *
  * One api-server process handles ALL instances on this machine. On the first
- * run it copies the api-server to <target>/api-server/ and creates the
+ * run it installs the release pinned in api-server-release.json to
+ * <target>/services/api-server/ (install_api_server.js) and creates the
  * systemd service. On subsequent runs (adding a new MC instance) it updates
- * api-server-config.json and restarts the existing service.
+ * api-server-config.json and restarts the existing service; upgrading the
+ * wrapper itself is migrate.sh's job.
  *
  * Called during setup when API_SERVER.ENABLED = true in variables.json,
  * or when --api-server is passed to main.sh.
- *
- * Prerequisites:
- *   git submodule update --init   (populates scripts/api-server/)
  */
 
 const path = require("path");
 const fs = require("fs");
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
 const { writeRootFile } = require("../common/writeRootFile");
 const loadVariables = require("../common/loadVariables");
 
@@ -36,15 +35,7 @@ const VARS_FILE = path.join(SCRIPTS_DIR, "common", "variables.txt");
 const API_SERVER_DIR = path.join(BASE_DIR, "services", "api-server");
 const API_SERVER_CONFIG = path.join(API_SERVER_DIR, "api-server-config.json");
 const API_SERVER_ENTRY = path.join(API_SERVER_DIR, "index.js");
-
-// Source: the submodule in this setup repo (scripts/api-server/)
-const SETUP_REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
-const API_SERVER_SRC = path.join(
-  SETUP_REPO_ROOT,
-  "src",
-  "scripts",
-  "api-server",
-);
+const INSTALLER = path.join(__dirname, "install_api_server.js");
 
 const currentUser = process.env.USER;
 // A dedicated, unprivileged user for the wrapper (see docs/service-user.md). Without
@@ -65,41 +56,29 @@ Environment="MC_NODE_PATH=${process.execPath}"`
 const serviceName = `${TARGET_DIR_NAME}-api-server.service`;
 const serviceFile = `/etc/systemd/system/${serviceName}`;
 
-// ── Guard: submodule must be populated ───────────────────────────────────
-
-if (!fs.existsSync(path.join(API_SERVER_SRC, "index.js"))) {
-  console.error(
-    "[api-server] scripts/api-server/ is missing or empty.\n" +
-      "  Initialise the submodule first:\n" +
-      "    git submodule update --init",
-  );
-  process.exit(1);
-}
-
-// ── Deploy api-server (first time only) ──────────────────────────────────
+// ── Install the pinned release (first time only) ─────────────────────────
 
 if (!fs.existsSync(API_SERVER_ENTRY)) {
-  console.log("[api-server] Deploying api-server to", API_SERVER_DIR);
-  fs.mkdirSync(path.dirname(API_SERVER_DIR), { recursive: true });
-  fs.cpSync(API_SERVER_SRC, API_SERVER_DIR, { recursive: true });
-}
-
-if (!fs.existsSync(path.join(API_SERVER_DIR, "node_modules", "express"))) {
-  console.log("[api-server] Installing dependencies...");
   try {
-    execSync("npm install --omit=dev", {
-      cwd: API_SERVER_DIR,
-      stdio: "inherit",
-    });
-  } catch (err) {
-    console.error(`[api-server] npm install failed: ${err.message}`);
+    execFileSync(process.execPath, [INSTALLER, "--dir", API_SERVER_DIR], { stdio: "inherit" });
+  } catch {
+    console.error("[api-server] Installing the wrapper failed (see above).");
     process.exit(1);
+  }
+} else {
+  const { readPin, inspect } = require("./install_api_server");
+  const { state, installed, pinned } = inspect(API_SERVER_DIR, readPin());
+  if (state !== "current") {
+    console.log(
+      `[api-server] The installed wrapper (${installed || "unknown version"}) is not the pinned release ${pinned}; ` +
+        "migrate.sh upgrades it.",
+    );
   }
 }
 
 // ── Read instance paths from the deployed variables.txt ──────────────────
 
-// Inline parser — avoids a dependency on the api-server submodule's parseVars.js
+// Inline parser — avoids a dependency on the wrapper's own parseVars.js
 function parseVarsFile(filePath) {
   const vars = {};
   for (const line of fs.readFileSync(filePath, "utf-8").split(/\r?\n/)) {

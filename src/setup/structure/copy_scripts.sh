@@ -4,9 +4,10 @@ set -e
 # Replaces copy_scripts.js — copies the runtime management scripts into this
 # instance's scripts dir, then installs the update tooling's npm deps.
 #
-# The api-server is intentionally skipped: it is a shared, single-process
-# deployment placed at <target>/services/api-server/ by
-# create_api_server_service.js, not copied per instance.
+# The API wrapper is not part of these scripts: it is a shared, single-process
+# deployment that create_api_server_service.js installs from its release at
+# <target>/services/api-server/. A checkout from the submodule days can still
+# hold an untracked src/scripts/api-server/; it is skipped.
 
 : "${SCRIPT_DIR:?SCRIPT_DIR not set}"
 : "${MAIN_DIR:?MAIN_DIR not set}"
@@ -21,7 +22,7 @@ mkdir -p "$SCRIPTS_DIR"
 shopt -s dotglob nullglob
 for entry in "$SOURCE_DIR"/*; do
   name="$(basename "$entry")"
-  [ "$name" = "api-server" ] && continue  # deployed separately
+  [ "$name" = "api-server" ] && continue  # leftover submodule checkout
   cp -r "$entry" "$SCRIPTS_DIR/"
 done
 shopt -u dotglob nullglob

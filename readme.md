@@ -29,15 +29,12 @@ Automated Minecraft server setup and management with backup rotation, mod update
 ## Installation
 
 ```bash
-git clone --recurse-submodules https://github.com/LetsGaming/minecraft-server-setup.git
+git clone https://github.com/LetsGaming/minecraft-server-setup.git
 cd minecraft-server-setup
 npm install
 ```
 
-> **Submodules:** The API server (`src/scripts/api-server/`) is a git submodule pointing to the [mc-api-server](https://github.com/LetsGaming/minecraft-server-api) repo. `--recurse-submodules` pulls it automatically. If you already cloned without it, run:
-> ```bash
-> git submodule update --init
-> ```
+The API wrapper is not in this repository: setup downloads it only when you enable it (see [minecraft-bot API Wrapper](#minecraft-bot-api-wrapper)).
 
 ## Configuration
 
@@ -162,7 +159,7 @@ If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. Names in the li
 | API keys, RCON passwords, `.env` | [docs/secrets-management.md](docs/secrets-management.md) |
 | sudo rules the scripts need | [docs/sudoers-setup.md](docs/sudoers-setup.md) |
 | Retiring the bundled web interface | [docs/retiring-web-interface.md](docs/retiring-web-interface.md) |
-| Bumping the API wrapper submodule | [docs/wrapper-submodule.md](docs/wrapper-submodule.md) |
+| Which API wrapper release is installed, and bumping it | [docs/wrapper-release.md](docs/wrapper-release.md) |
 
 ## Upgrading to 4.0
 
@@ -201,7 +198,7 @@ Set `"VERSION": "latest"` for newest release, or any specific version string.
 
 ## minecraft-bot API Wrapper
 
-The API wrapper (`src/scripts/api-server/`) is a standalone [mc-api-server](https://github.com/LetsGaming/minecraft-server-api) repo included as a git submodule. It lets the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot manage and monitor this MC instance over HTTP from a different machine.
+The API wrapper is a standalone [mc-api-server](https://github.com/LetsGaming/minecraft-server-api) project. Setup installs the release pinned in [`api-server-release.json`](./api-server-release.json) from GitHub, checked against its sha256, and `migrate.sh` upgrades it when the pin moves ([docs/wrapper-release.md](docs/wrapper-release.md)); a host that does not enable it downloads nothing. It lets the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot manage and monitor this MC instance over HTTP from a different machine.
 
 ### When to use it
 
@@ -232,7 +229,7 @@ Then run setup normally (it will prompt) or pass the flag explicitly:
 sudo -u <user> bash main.sh --api-server
 ```
 
-This installs dependencies and creates and starts a systemd service named `<TARGET_DIR_NAME>-api-server.service`. One wrapper process serves every instance on the machine.
+This downloads the pinned wrapper release to `<target>/services/api-server/`, installs its production dependencies and creates and starts a systemd service named `<TARGET_DIR_NAME>-api-server.service`. One wrapper process serves every instance on the machine.
 
 The API key must be at least 32 characters (`openssl rand -hex 32`). `variables.json` validation and `--check` reject a shorter one, and the wrapper refuses to start with it. Pick the same key for `apiKey` in the bot's `config.json`.
 
@@ -267,7 +264,7 @@ systemctl restart <TARGET_DIR_NAME>-api-server
 
 ### Standalone deployment
 
-The API server can also be deployed independently without this setup project. See the [mc-api-server README](./src/scripts/api-server/README.md) for standalone install and configuration instructions.
+The API server can also be deployed independently without this setup project. See the [mc-api-server README](https://github.com/LetsGaming/minecraft-server-api#readme) for standalone install and configuration instructions.
 
 ## Tests
 

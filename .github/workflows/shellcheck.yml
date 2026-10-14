@@ -29,7 +29,5 @@ jobs:
           #   severity, check_together, scandir, disable_matcher, format, version
           severity: warning
           scandir: "."
-          # api-server is a submodule with its own CI; nothing else here is
-          # excluded. (scripts/minecraft-server-manager was the retired web
-          # interface — the submodule is gone.)
-          ignore_paths: "src/scripts/api-server"
+          # Nothing is excluded. (The API wrapper is no longer vendored here: it
+          # is installed from its own release, see docs/wrapper-release.md.)
