@@ -176,6 +176,13 @@ Environment="CONFIG_FILE=${API_SERVER_CONFIG}"${pinnedInterpreters}
 # behind it. Bounded server-side concurrency (see instances/*.ts) is the
 # real fix; this is cheap insurance on top of it.
 Environment="UV_THREADPOOL_SIZE=8"
+# Upgrade and prune jobs run in their own process group and outlive a wrapper
+# restart; the next wrapper picks them up from its state folder. systemd's
+# default KillMode would kill them with the wrapper.
+KillMode=process
+StateDirectory=${TARGET_DIR_NAME}-api-server
+StateDirectoryMode=0700
+Environment="MC_STATE_DIR=/var/lib/${TARGET_DIR_NAME}-api-server"
 ExecStart=${serviceUser ? process.execPath : "/usr/bin/node"} ${API_SERVER_ENTRY}
 Restart=on-failure
 RestartSec=5s

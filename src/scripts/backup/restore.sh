@@ -228,7 +228,8 @@ if [[ -d "$META_DIR" ]]; then
     _update_dir="$INSTANCE_SCRIPTS_DIR/update"
     if [[ -f "$_update_dir/package.json" ]]; then
       echo "[INFO]   npm install in update/..."
-      npm install --omit=dev --prefix "$_update_dir" >/dev/null \
+      if [[ -f "$_update_dir/package-lock.json" ]]; then _npm=(npm ci); else _npm=(npm install); fi
+      "${_npm[@]}" --omit=dev --prefix "$_update_dir" >/dev/null \
         && echo "[INFO]     ✓ update/node_modules" \
         || echo "[WARN]     npm install failed in update/ — run manually"
     fi

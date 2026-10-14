@@ -1,6 +1,6 @@
 # Secrets Management
 
-By default, credentials (RCON passwords, API keys, webhook URLs) are stored in `variables.json`. This file is git-ignored but lives on disk in plaintext. For production deployments, use environment variables instead.
+Credentials (RCON password, API key, webhook URL) are read from `variables.json` and written by setup into the instance's `common/variables.txt` (mode 0600) and the wrapper's `api-server-config.json` (mode 0600, readable by the wrapper's own user). `variables.json` is git-ignored and not tracked; it starts as a copy of `variables.example.json`. Both live on disk in plain text, so keep the install directory private and the files' modes as setup leaves them.
 
 ## Environment variables
 

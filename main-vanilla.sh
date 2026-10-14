@@ -31,6 +31,7 @@ require_sudo
 set_environment
 
 parse_args "$@"
+ensure_variables_json
 
 if [ "$CHECK_ONLY" = true ]; then
   run_preflight_check

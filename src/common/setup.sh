@@ -25,6 +25,22 @@ setup_api_wrapper() {
   run_or_echo "sudo systemctl restart \"${TARGET_DIR_NAME}-api-server.service\""
 }
 
+# variables.json holds this install's secrets, so it is not tracked by git
+# (S-028); a fresh clone has only variables.example.json. Create the live file
+# from it on the first run and stop, so it is edited before anything happens.
+ensure_variables_json() {
+  local live="$SCRIPT_DIR/variables.json" example="$SCRIPT_DIR/variables.example.json"
+  [[ -f "$live" ]] && return 0
+  if [[ ! -f "$example" ]]; then
+    error "variables.json is missing and there is no variables.example.json to start from."
+    exit 1
+  fi
+  ( umask 077; cp "$example" "$live" )
+  warn "Created variables.json from variables.example.json."
+  warn "Edit it (instance name, RCON, API key, ...), then run this again."
+  exit 1
+}
+
 # Validate variables.json once, up front, and export the two fields the setup
 # steps need (INSTANCE_NAME, TARGET_DIR_NAME). Previously the first call to
 # loadVariables() happened implicitly inside create_directories.js; now that the

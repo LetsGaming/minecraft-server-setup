@@ -31,9 +31,12 @@ fi
 echo "Updating package list..."
 sudo apt update
 
-# Upgrade all packages
-echo "Upgrading all installed packages..."
-sudo apt upgrade -y
+# Upgrading every system package is the admin's call, not a side effect of
+# setting up one server (S-027): opt in with MC_SETUP_UPGRADE_SYSTEM=true.
+if [[ "${MC_SETUP_UPGRADE_SYSTEM:-false}" == "true" ]]; then
+    echo "Upgrading all installed packages (MC_SETUP_UPGRADE_SYSTEM=true)..."
+    sudo apt upgrade -y
+fi
 
 # Install required packages
 install_if_missing curl curl 
@@ -44,6 +47,9 @@ install_if_missing npm npm
 install_if_missing cron cron
 install_if_missing rsync rsync
 install_if_missing zstd zstd
+# setfacl: the wrapper's service user gets its access through ACLs
+# (service_user.sh stops without it).
+install_if_missing setfacl acl
 
 # Check if cron service is running
 if sudo systemctl is-active --quiet cron; then
@@ -57,6 +63,8 @@ fi
 # Install Node.js dependencies
 echo "Installing Node.js packages..."
 cd "$SCRIPT_DIR"
-npm install --no-package-lock --omit=dev
+# From the committed lockfile (S-027): every install gets the same axios and
+# semver the suite was tested with, not whatever the range resolves to today.
+npm ci --omit=dev
 
 echo "All packages installed and up to date."

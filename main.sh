@@ -33,6 +33,7 @@ require_sudo
 set_environment
 
 parse_args "$@"
+ensure_variables_json
 
 # Check-only mode: validate and exit
 if [ "$CHECK_ONLY" = true ]; then
