@@ -153,3 +153,33 @@ test("unavailableMods picks the statuses that mean no build", () => {
   });
   assert.deepEqual(picked.map((m) => m.slug), ["b", "c"]);
 });
+
+// S-007: an upgrade that needs a newer Java points the server at it.
+test("setServerJava rewrites JAVA= in the server's variables.txt, and only there", () => {
+  const { setServerJava } = require("../../src/scripts/update/update-server.js");
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "java-"));
+  try {
+    const file = path.join(dir, "variables.txt");
+    fs.writeFileSync(file, 'JAVA_ARGS="-Xmx4G"\nJAVA="/old/jdk17/bin/java"\nUSE_FABRIC="false"\n', { mode: 0o640 });
+    assert.equal(setServerJava(dir, "/home/mc/.jabba/jdk/temurin@21.0.5/bin/java"), true);
+    assert.equal(
+      fs.readFileSync(file, "utf8"),
+      'JAVA_ARGS="-Xmx4G"\nJAVA="/home/mc/.jabba/jdk/temurin@21.0.5/bin/java"\nUSE_FABRIC="false"\n',
+    );
+    assert.equal(fs.statSync(file).mode & 0o777, 0o640);
+    assert.throws(() => setServerJava(dir, '/x"; rm -rf ~; "'), /unusual Java path/);
+    fs.writeFileSync(file, 'USE_FABRIC="false"\n');
+    assert.equal(setServerJava(dir, "/j/bin/java"), false, "no JAVA= line: not a vanilla start");
+    assert.equal(setServerJava(path.join(dir, "missing"), "/j/bin/java"), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("JDK names sort by version, not as strings", () => {
+  const { compareJdkNames } = require("../../src/scripts/update/update-server.js");
+  assert.deepEqual(
+    ["temurin@21.0.9", "temurin@21.0.10", "adopt@21.0.2"].sort(compareJdkNames),
+    ["temurin@21.0.10", "temurin@21.0.9", "adopt@21.0.2"],
+  );
+});

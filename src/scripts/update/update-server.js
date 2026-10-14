@@ -28,6 +28,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { readManifest, writeManifest } = require("./lib/manifest");
 const readline = require("readline");
 const { spawn, execFile, execSync, execFileSync } = require("child_process");
 const axios = require("axios");
@@ -75,20 +76,14 @@ function loadVariables() {
   return readVariables(VARIABLES_PATH);
 }
 
+// A corrupt manifest is an error (S-024): read as {}, the next save kept only
+// gameVersion and dropped every mod entry.
 function readDownloadedVersions() {
-  try {
-    return JSON.parse(fs.readFileSync(DOWNLOADED_VERSIONS_PATH, "utf8"));
-  } catch {
-    return {};
-  }
+  return readManifest(DOWNLOADED_VERSIONS_PATH, { missingOk: true });
 }
 
 function writeDownloadedVersions(data) {
-  fs.writeFileSync(
-    DOWNLOADED_VERSIONS_PATH,
-    JSON.stringify(data, null, 2),
-    "utf8",
-  );
+  writeManifest(DOWNLOADED_VERSIONS_PATH, data);
 }
 
 function saveGameVersion(versionId) {
@@ -281,13 +276,56 @@ function jabbaJdkDir() {
   return path.join(process.env.HOME, ".jabba", "jdk");
 }
 
-/** The installed Jabba JDK directory name for a Java major version, or null. */
+/**
+ * Order Jabba JDK names ("temurin@21.0.10") by their version numbers, newest
+ * first. A plain string sort put 21.0.9 after 21.0.10 (S-030).
+ */
+function compareJdkNames(a, b) {
+  const nums = (n) => (n.split("@")[1] ?? "").split(/[.+_-]/).map((x) => Number.parseInt(x, 10) || 0);
+  const x = nums(a);
+  const y = nums(b);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (y[i] ?? 0) - (x[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** The newest installed Jabba JDK directory name for a Java major version, or null. */
 function findInstalledJava(requiredJava) {
   const jabbaDir = jabbaJdkDir();
-  return fs.existsSync(jabbaDir)
-    ? (fs.readdirSync(jabbaDir).find((n) => n.includes(`@${requiredJava}.`)) ??
-        null)
-    : null;
+  if (!fs.existsSync(jabbaDir)) return null;
+  const matches = fs.readdirSync(jabbaDir).filter((n) => n.includes(`@${requiredJava}.`));
+  return matches.sort(compareJdkNames)[0] ?? null;
+}
+
+/**
+ * Point the server's JAVA= at `javaBin` (S-007). Vanilla installs launch
+ * ${JAVA} from <server>/variables.txt, which setup wrote once; an upgrade to
+ * a version that needs a newer Java installed that JDK and then started the
+ * old one, so it always failed and rolled back. The line lives in the server
+ * folder, so the job's restore puts the old one back if the upgrade fails.
+ * Installs whose start does not read JAVA= are left alone.
+ */
+function setServerJava(serverPath, javaBin) {
+  const file = path.join(serverPath, "variables.txt");
+  let content;
+  try {
+    content = fs.readFileSync(file, "utf8");
+  } catch {
+    return false;
+  }
+  if (!/^JAVA=.*$/m.test(content)) return false;
+  if (!/^[A-Za-z0-9._/+@-]+$/.test(javaBin)) {
+    throw new Error(`Refusing to write an unusual Java path into variables.txt: ${javaBin}`);
+  }
+  const next = content.replace(/^JAVA=.*$/m, `JAVA="${javaBin}"`);
+  if (next === content) return true;
+  const tmp = `${file}.${process.pid}.tmp`;
+  const mode = fs.statSync(file).mode & 0o7777;
+  fs.writeFileSync(tmp, next, { mode });
+  fs.renameSync(tmp, file);
+  return true;
 }
 
 async function ensureJavaVersion(mcVersion) {
@@ -303,7 +341,7 @@ async function ensureJavaVersion(mcVersion) {
 
   if (installed) {
     console.log(`Java ${requiredJava} already installed (${installed}).`);
-    return requiredJava;
+    return { requiredJava, javaBin: path.join(jabbaJdkDir(), installed, "bin", "java") };
   }
 
   console.log(`Java ${requiredJava} not found. Installing automatically...`);
@@ -320,8 +358,7 @@ async function ensureJavaVersion(mcVersion) {
           l.startsWith(`adopt@${requiredJava}.`) ||
           l.startsWith(`temurin@${requiredJava}.`),
       )
-      .sort()
-      .reverse();
+      .sort(compareJdkNames);
     if (!candidates.length)
       throw new Error(
         `No Jabba candidates for Java ${requiredJava}. Install manually.`,
@@ -333,12 +370,12 @@ async function ensureJavaVersion(mcVersion) {
       { stdio: childStdio() },
     );
     console.log(`Java ${requiredJava} installed.`);
+    return { requiredJava, javaBin: path.join(jabbaJdkDir(), candidate, "bin", "java") };
   } catch (err) {
     throw new Error(
       `Failed to auto-install Java ${requiredJava}: ${err.message}`,
     );
   }
-  return requiredJava;
 }
 
 // ── Server update ─────────────────────────────────────────────────────────
@@ -497,7 +534,10 @@ async function applyMode({ serverPath, targetVersionArg, emit }) {
     targetVersionArg || "latest",
   );
   emit({ phase: "java", msg: `Ensuring Java for ${versionId}` });
-  await ensureJavaVersion(versionId);
+  const { javaBin } = await ensureJavaVersion(versionId);
+  if (setServerJava(serverPath, javaBin)) {
+    emit({ phase: "java", msg: `The server now starts with ${javaBin}` });
+  }
   emit({ phase: "jar", msg: `Installing the ${versionId} server` });
   await swapServer({
     modLoader: installed.modLoader,
@@ -521,7 +561,8 @@ async function interactiveMode({ vars, serverPath, args }) {
   console.log(`Target version: ${versionId}`);
   console.log(`Mod loader: ${modLoader}`);
 
-  await ensureJavaVersion(versionId);
+  const { javaBin } = await ensureJavaVersion(versionId);
+  if (setServerJava(serverPath, javaBin)) console.log(`The server now starts with ${javaBin}`);
 
   console.log("\nChecking mod compatibility...");
   const updateInfo = await runCheckUpdatesJSON(versionId);
@@ -635,4 +676,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { unavailableMods, UNAVAILABLE_STATUSES };
+module.exports = { unavailableMods, UNAVAILABLE_STATUSES, setServerJava, compareJdkNames };

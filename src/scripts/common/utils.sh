@@ -13,6 +13,21 @@ _UTILS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 _have_flock() { command -v flock > /dev/null 2>&1; }
 
+# _lock_dir_stale <held-dir>
+# True when a mkdir lock's holder is gone. An empty pid file is a holder that
+# made the directory and has not written its pid yet, not an abandoned lock:
+# taking it over then let two processes hold the lock (S-030). It only counts
+# as abandoned once it is more than a minute old.
+_lock_dir_stale() {
+  local held="$1" other
+  other="$(cat "$held/pid" 2> /dev/null || true)"
+  if [[ -n "$other" ]]; then
+    ! kill -0 "$other" 2> /dev/null
+    return
+  fi
+  [[ -n "$(find "$held" -maxdepth 0 -mmin +1 2> /dev/null)" ]]
+}
+
 # acquire_instance_lock <name>
 # Takes an exclusive lock for <name> on this instance and keeps it until the
 # process exits. Returns 1 when another run already holds it.
@@ -52,10 +67,8 @@ acquire_instance_lock() {
 
   local held="$lock.d"
   if ! mkdir "$held" 2> /dev/null; then
-    local other
-    other="$(cat "$held/pid" 2> /dev/null || true)"
-    if [[ -n "$other" ]] && kill -0 "$other" 2> /dev/null; then
-      echo "$name is already running for ${INSTANCE_NAME:-this instance} (pid $other). Exiting."
+    if ! _lock_dir_stale "$held"; then
+      echo "$name is already running for ${INSTANCE_NAME:-this instance} (pid $(cat "$held/pid" 2> /dev/null || echo starting)). Exiting."
       return 1
     fi
     rm -rf "$held"
@@ -100,9 +113,7 @@ acquire_operation_lock() {
   else
     local held="$lock.d"
     if ! mkdir "$held" 2> /dev/null; then
-      local other
-      other="$(cat "$held/pid" 2> /dev/null || true)"
-      if [[ -n "$other" ]] && kill -0 "$other" 2> /dev/null; then
+      if ! _lock_dir_stale "$held"; then
         echo "Another operation ($(cat "$lock.kind" 2> /dev/null || echo unknown)) is running for ${INSTANCE_NAME:-this instance}. Exiting."
         return 1
       fi

@@ -34,6 +34,10 @@ const downloadedVersionsPath = path.resolve(
 //   slug       Modrinth slug or project ID — positional or --slug=.
 //   mcVersion  Target MC version. Falls back to downloaded_versions.json.
 //   modLoader  Mod loader (e.g. fabric). Falls back to downloaded_versions.json.
+// Serialized with other mod changes and with restore, rollback and upgrade
+// (S-024): re-runs this script under the instance's operation lock.
+require("./lib/opLock").guardModOperation();
+const { readManifest, writeManifest } = require("./lib/manifest");
 const { parseArgs } = require("./lib/args");
 const { loadVariables } = require("./lib/variables");
 const { createJsonMode } = require("./lib/json-mode");
@@ -81,24 +85,16 @@ if (!slug) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function readVersionsFile() {
-  if (!fs.existsSync(downloadedVersionsPath)) {
-    console.error(
-      `downloaded_versions.json not found at: ${downloadedVersionsPath}`,
-    );
-    process.exit(1);
-  }
   try {
-    return JSON.parse(fs.readFileSync(downloadedVersionsPath, "utf8"));
-  } catch {
-    console.error("Could not parse downloaded_versions.json.");
+    return readManifest(downloadedVersionsPath);
+  } catch (err) {
+    console.error(err.message);
     process.exit(1);
   }
 }
 
 function writeVersionsFile(data) {
-  const tmp = `${downloadedVersionsPath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf8");
-  fs.renameSync(tmp, downloadedVersionsPath);
+  writeManifest(downloadedVersionsPath, data);
 }
 
 /**

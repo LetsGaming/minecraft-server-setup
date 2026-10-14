@@ -106,7 +106,7 @@ function writeVersionsFile(data) {
     fs.mkdirSync(dir, { recursive: true });
   }
   // Atomic write: write to temp file, then rename into place
-  const tmpPath = `${VERSIONS_FILE_PATH}.tmp`;
+  const tmpPath = `${VERSIONS_FILE_PATH}.${process.pid}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), "utf-8");
   fs.renameSync(tmpPath, VERSIONS_FILE_PATH);
 }

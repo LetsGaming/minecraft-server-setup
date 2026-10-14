@@ -90,3 +90,80 @@ test(
     assert.match(res.stdout, /Done\./);
   }),
 );
+
+// S-008: removing a mod never takes another mod whose name shares its prefix.
+test(
+  "keeps a sibling whose name starts with the removed mod's slug",
+  withInstance((inst) => {
+    fs.writeFileSync(path.join(inst.mods, "sodium-1.0.jar"), "x");
+    fs.writeFileSync(path.join(inst.mods, "sodium-extra-fabric-0.5.jar"), "x");
+    inst.writeManifest({
+      mods: {
+        sodium: { versionId: "v1", filename: "sodium-1.0.jar" },
+        "sodium-extra": { versionId: "v2", filename: "sodium-extra-fabric-0.5.jar" },
+      },
+    });
+    const res = inst.run("remove-mod.js", ["sodium", "--json"]);
+    assert.equal(lastJson(res.stdout).ok, true, res.stderr);
+    assert.equal(fs.existsSync(path.join(inst.mods, "sodium-1.0.jar")), false);
+    assert.equal(fs.existsSync(path.join(inst.mods, "sodium-extra-fabric-0.5.jar")), true);
+    assert.deepEqual(Object.keys(inst.readManifest().mods), ["sodium-extra"]);
+  }),
+);
+
+test(
+  "refuses to guess when a legacy slug scan matches several jars",
+  withInstance((inst) => {
+    fs.writeFileSync(path.join(inst.mods, "carpet-1.4.jar"), "x");
+    fs.writeFileSync(path.join(inst.mods, "carpet-extra-1.4.jar"), "x");
+    inst.writeManifest({ mods: { carpet: "legacy-version-id" } });
+    const res = inst.run("remove-mod.js", ["carpet", "--json"]);
+    const out = lastJson(res.stdout);
+    assert.equal(out.ok, false);
+    assert.equal(out.code, "ambiguous");
+    assert.equal(fs.existsSync(path.join(inst.mods, "carpet-1.4.jar")), true);
+    assert.equal(fs.existsSync(path.join(inst.mods, "carpet-extra-1.4.jar")), true);
+  }),
+);
+
+test(
+  "a corrupt manifest is an error, not an empty one (S-024)",
+  withInstance((inst) => {
+    fs.writeFileSync(inst.manifestPath ?? path.join(inst.scripts, "common", "downloaded_versions.json"), "{ not json");
+    const res = inst.run("remove-mod.js", ["sodium", "--json"]);
+    const out = lastJson(res.stdout);
+    assert.equal(out.ok, false);
+    assert.equal(out.code, "manifest");
+  }),
+);
+
+test(
+  "waits for, then reports, an operation that holds the instance lock (S-024)",
+  withInstance((inst) => {
+    const { spawnSync, spawn } = require("child_process");
+    if (spawnSync("sh", ["-c", "command -v flock"]).status !== 0) return; // no flock here
+    const lockDir = path.join(inst.root ?? path.dirname(inst.scripts), "locks");
+    fs.mkdirSync(lockDir, { recursive: true });
+    const lock = path.join(lockDir, "operation_inst.lock");
+    fs.writeFileSync(`${lock}.kind`, "upgrade\n");
+    const holder = spawn("flock", [lock, "sleep", "90"], { stdio: "ignore" });
+    try {
+      // Give flock a moment to take the lock.
+      spawnSync("sleep", ["0.3"]);
+      fs.writeFileSync(path.join(inst.mods, "sodium-1.0.jar"), "x");
+      inst.writeManifest({ mods: { sodium: { versionId: "v1", filename: "sodium-1.0.jar" } } });
+      const res = inst.run("remove-mod.js", ["sodium", "--json"], {
+        INSTANCE_LOCK_DIR: lockDir,
+        MC_OPERATION_LOCK_HELD: "",
+        MC_TEST_LOCK_WAIT: "1",
+      });
+      const out = lastJson(res.stdout);
+      assert.equal(out.ok, false);
+      assert.equal(out.code, "busy");
+      assert.match(out.error, /upgrade/);
+      assert.equal(fs.existsSync(path.join(inst.mods, "sodium-1.0.jar")), true);
+    } finally {
+      holder.kill();
+    }
+  }),
+);
