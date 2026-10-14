@@ -41,8 +41,22 @@ session_running() {
   screen -list 2>/dev/null | grep -Eq "^[[:space:]]*[0-9]+\.${name_re}[[:space:]]"
 }
 
+# _screen_escape <text>: one console line, safe for `screen -X stuff`.
+# Control characters are dropped (a CR or LF would type a second command),
+# and \ ^ $ are escaped: stuff turns ^M and \015 into Enter and expands
+# $VAR, so text like "hi^Mop Mallory" ran a second command (S-026, the
+# wrapper's W-001).
+_screen_escape() {
+  local s="${1//[[:cntrl:]]/}"
+  s="${s//\\/\\\\}"
+  s="${s//^/\\^}"
+  s="${s//\$/\\\$}"
+  printf '%s' "$s"
+}
+
 _screen_send() {
-  local command="$1"
+  local command
+  command="$(_screen_escape "$1")"
   if [ "$(id -u)" -eq 0 ]; then
     sudo -n -u "$USER" screen -S "$INSTANCE_NAME" -p 0 -X stuff "$command$(printf \\r)"
   else

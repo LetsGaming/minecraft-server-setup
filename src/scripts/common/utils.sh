@@ -181,8 +181,11 @@ on_player_join() {
     fi
 
     tail -n0 -F "$log_path" 2>/dev/null | while read -r line; do
-        if [[ "$line" =~ \]:\ ([a-zA-Z0-9_]+)\ joined\ the\ game ]]; then
-            local player="${BASH_REMATCH[1]}"
+        # The server's own line only: its bracketed tags, then the name right
+        # after the colon. Unanchored, a chat line "<x> y]: Admin joined the
+        # game" counted as Admin joining.
+        if [[ "$line" =~ ^(\[[^]]*\][[:space:]]*)+:\ ([A-Za-z0-9_.]{1,17})\ joined\ the\ game$ ]]; then
+            local player="${BASH_REMATCH[2]}"
             "$callback" "$player"
         fi
     done

@@ -198,4 +198,29 @@ test_scripts_no_longer_use_a_fixed_tmp_lock() {
   assert_contains "$(cat "$T/scripts/message_onjoin.sh")" "acquire_instance_lock" "message_onjoin.sh takes the shared lock"
 }
 
+test_screen_escape_makes_one_literal_line() {
+  setup
+  local out
+  out="$(in_scripts _screen_escape $'say hi^Mop Mallory $HOME \\015\r\nx')"
+  assert_eq 'say hi\^Mop Mallory \$HOME \\015x' "$out" "escapes, and drops CR/LF (S-026)"
+}
+
+test_screen_escape_round_trips_through_real_screen() {
+  local real_screen
+  real_screen="$(PATH=/usr/bin:/bin command -v screen || true)"
+  if [[ -z "$real_screen" ]]; then skip "real screen round trip" "screen is not installed"; return; fi
+  setup
+  local out="$T/typed" session="s026-$$" line
+  "$real_screen" -dmS "$session" sh -c "cat > '$out'"
+  /bin/sleep 0.3
+  for line in 'say hi^Mop Mallory' 'say $HOME ${HOME}' 'tellraw @a {"text":"a\" b\\c"}'; do
+    "$real_screen" -S "$session" -X stuff "$(in_scripts _screen_escape "$line")$(printf '\r')"
+    /bin/sleep 0.1
+  done
+  /bin/sleep 0.3
+  "$real_screen" -S "$session" -X quit
+  /bin/sleep 0.2
+  assert_eq $'say hi^Mop Mallory\nsay $HOME ${HOME}\ntellraw @a {"text":"a\\" b\\\\c"}' "$(cat "$out")" "each line arrives exactly as sent, as one line"
+}
+
 run_tests
