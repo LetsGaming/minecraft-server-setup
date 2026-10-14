@@ -115,8 +115,10 @@ test("a pin without a sha256 is refused unless verification is turned off", scra
   const pin = { repository: REPO, version: "4.1.0", sha256: "" };
   await assert.rejects(install({ dir, pin, tarball: t.file, log: quiet }), /without a sha256/);
   assert.equal(fs.existsSync(dir), false);
-  const r = await install({ dir, pin, tarball: t.file, verify: false, log: quiet });
+  const lines = [];
+  const r = await install({ dir, pin, tarball: t.file, verify: false, log: (m) => lines.push(m) });
   assert.equal(r.changed, true);
+  assert.match(lines.at(-1), /now runs release 4\.1\.0\.$/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, MARKER), "utf8")).sha256, t.sha256);
 }));
 
@@ -127,6 +129,9 @@ test("a tarball that is not a built release, or holds another version, is refuse
     /not a built mc-api-server release/,
   );
   const other = makeTarball(root, "4.1.0", { pkgVersion: "4.0.0" });
+  const lines = [];
+  await install({ dir: path.join(root, "own"), pin: { repository: REPO, version: "4.1.0", sha256: "" }, tarball: other.file, verify: false, log: (m) => lines.push(m) });
+  assert.match(lines.at(-1), /now runs release 4\.0\.0\.$/);
   await assert.rejects(
     install({ dir, pin: { repository: REPO, version: "4.1.0", sha256: other.sha256 }, tarball: other.file, log: quiet }),
     /holds version 4\.0\.0/,

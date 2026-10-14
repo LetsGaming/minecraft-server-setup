@@ -134,6 +134,7 @@ async function install({ dir, pin = readPin(), tarball = "", verify = true, forc
   fs.mkdirSync(parent, { recursive: true });
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "mc-api-server-"));
   const staging = fs.mkdtempSync(path.join(parent, ".api-server-staging-"));
+  let installedVersion = pin.version;
   try {
     let file = tarball;
     if (!file) {
@@ -154,6 +155,7 @@ async function install({ dir, pin = readPin(), tarball = "", verify = true, forc
     if (verify && pkg.version !== pin.version) {
       throw new Error(`The tarball holds version ${pkg.version}, not the pinned ${pin.version}.`);
     }
+    installedVersion = pkg.version;
     npmInstall(staging, (m) => log(`[api-server] ${m}`));
     fs.writeFileSync(
       path.join(staging, MARKER),
@@ -164,7 +166,7 @@ async function install({ dir, pin = readPin(), tarball = "", verify = true, forc
     fs.rmSync(staging, { recursive: true, force: true });
     fs.rmSync(work, { recursive: true, force: true });
   }
-  log(`[api-server] ${dir} now runs release ${pin.version}.`);
+  log(`[api-server] ${dir} now runs release ${installedVersion}.`);
   return { ...before, changed: true };
 }
 
