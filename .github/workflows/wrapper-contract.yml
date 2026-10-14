@@ -2,17 +2,17 @@
 #
 # The suite installs the API wrapper release pinned in api-server-release.json
 # (src/setup/management/install_api_server.js). This job installs exactly that
-# release the way a host does (download, sha256 check, npm ci --omit=dev) and
-# runs the bot's contract check against it (minecraft-bot:
-# scripts/e2e-wrapper-contract.mjs). It is the gate for the pin bump described
-# in docs/wrapper-release.md: a pin that moves to a wrapper the bot cannot use,
-# or stays behind a bot that needs more, is red here instead of on an
-# operator's host.
+# release the way a host does (download, sha256 check, npm ci --omit=dev); a
+# pin that does not install is red here.
 #
-# The bot is checked out at its default branch. A bot change that needs a newer
-# wrapper than the pin names turns this job red until the pin is bumped, which
-# is the order the contract policy asks for: wrapper release, then this pin,
-# then the bot.
+# It then runs the bot's contract check (minecraft-bot:
+# scripts/e2e-wrapper-contract.mjs) against the install. That part is
+# advisory. The suite does not depend on the bot: the bot is one client of the
+# wrapper this suite installs, and it depends on us. Its own contract job runs
+# against the release this suite pins and is where a disagreement fails. A
+# bot that has not caught up with a newer pin shows here as a warning and in
+# the job summary, so the pin can move first, which is the order the contract
+# policy asks for: wrapper release, then this pin, then the bot.
 name: Wrapper contract
 
 on:
@@ -71,10 +71,16 @@ jobs:
           echo "Installed: $(cat "$RUNNER_TEMP/api-server/.release.json")"
 
       - name: Build the bot
+        id: bot-build
+        continue-on-error: true
         working-directory: bot
         run: npm ci && npm run build
 
       - name: Contract check
+        id: contract
+        if: steps.bot-build.outcome == 'success'
+        # Advisory (see the header): the bot lagging behind the pin does not fail us.
+        continue-on-error: true
         working-directory: bot
         env:
           WRAPPER_DIR: ${{ runner.temp }}/api-server
@@ -84,12 +90,26 @@ jobs:
           E2E_REQUIRE_SUDO: "1"
         run: |
           if ! node -e "process.exit(require('./package.json').scripts['e2e:contract'] ? 0 : 1)"; then
-            echo "::error::${BOT_REPO}@${BOT_REF} has no 'e2e:contract' script."
+            echo "${BOT_REPO}@${BOT_REF} has no 'e2e:contract' script; nothing to check against."
             exit 1
           fi
-          if ! npm run e2e:contract; then
-            echo "::error::The wrapper release pinned by this suite fails the bot's contract check."
-            echo "Either the pin is behind what the bot now needs (bump it, see"
-            echo "docs/wrapper-release.md), or the pinned release has a real regression."
-            exit 1
+          npm run e2e:contract
+
+      - name: Report a bot that disagrees with the pin
+        if: steps.bot-build.outcome == 'failure' || steps.contract.outcome == 'failure'
+        env:
+          BUILD_FAILED: ${{ steps.bot-build.outcome == 'failure' }}
+        run: |
+          if [ "$BUILD_FAILED" = "true" ]; then
+            msg="${BOT_REPO}@${BOT_REF} does not build, so it could not be checked against the pinned wrapper."
+          else
+            msg="${BOT_REPO}@${BOT_REF} fails its contract check against the pinned wrapper (see the Contract check step). Either the bot has not caught up with this release yet, or the release regressed; see docs/wrapper-release.md."
           fi
+          echo "::warning title=bot contract::${msg}"
+          {
+            echo "### Bot contract: ${BOT_REPO}@${BOT_REF} disagrees with the pinned wrapper"
+            echo
+            echo "${msg}"
+            echo
+            echo "Advisory only. The bot's own contract job, which runs against this pin, is the gate."
+          } >> "$GITHUB_STEP_SUMMARY"
