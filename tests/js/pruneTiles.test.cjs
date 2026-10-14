@@ -106,10 +106,24 @@ test("chunkTerrain reads the height map, the section palettes and their packed d
   assert.equal(t.sections.get(-4).data, null);
 });
 
-test("the height map entry width follows from its length", () => {
-  assert.equal(tiles.bitsOfHeightmap(37), 9);
-  assert.equal(tiles.bitsOfHeightmap(32), 8);
-  assert.equal(tiles.bitsOfHeightmap(43), 10);
+/** A packed height map of 256 entries, as the game writes it, in the raw big-endian form the reader gets. */
+function packedHeights(values, bits) {
+  const longs = fx.packLongs(values, bits);
+  const raw = Buffer.alloc(longs.length * 8);
+  longs.forEach((l, i) => raw.writeBigUInt64BE(l, i * 8));
+  return raw;
+}
+
+test("the height map entry width follows from its length, and from its padding where the length allows two", () => {
+  const heights = (top) => Array.from({ length: 256 }, (_, i) => top - (i % 7));
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(129), 9)), 9);
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(200), 8)), 8);
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(500), 10)), 10);
+  // 11 and 12 bits both make 52 longs; 13 to 16 bits all make 64.
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(1500), 11)), 11);
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(2100), 12)), 12);
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(2100), 13)), 13);
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(9000), 14)), 14);
   assert.equal(tiles.bitsForPalette(2), 4);
   assert.equal(tiles.bitsForPalette(17), 5);
   assert.equal(tiles.bitsForPalette(513), 10);
@@ -182,6 +196,17 @@ test("deeper water is darker, and a hill shows relief against the ground north o
   assert.ok(hillFront[0] > flat[0], "the step up is lit");
   const behind = px(rgba, 34, 48); // first row after the hill: lower than the hill north of it
   assert.ok(behind[0] < flat[0], "the step down is darker");
+}));
+
+test("a world taller than 2048 blocks (12 bit height map) is drawn whole, not in diagonal stripes", withWorld((s, dir) => {
+  const flat = (bx, y) => (y < 64 ? "minecraft:stone" : y === 64 ? "minecraft:grass_block" : undefined);
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [
+    { x: 0, z: 0, nbt: fx.chunkTerrain({ x: 0, z: 0, blockAt: flat, heightBits: 12 }) },
+  ]);
+  const { rgba } = decodePng(fs.readFileSync(tiles.tileFor({ serverPath: s.dir, dimension: "overworld", rx: 0, rz: 0, tilesDir: dir }).file));
+  for (let z = 0; z < 16; z++) {
+    for (let x = 0; x < 16; x++) assert.deepEqual(px(rgba, x, z), [...grass, 255], `column ${x}, ${z}`);
+  }
 }));
 
 test("chunks without terrain data (older layout) leave their place clear instead of failing", withWorld((s, dir) => {
