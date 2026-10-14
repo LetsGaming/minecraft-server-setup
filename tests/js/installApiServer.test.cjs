@@ -52,6 +52,19 @@ test("the pin in the repo is well formed and names a GitHub release asset", () =
   );
 });
 
+test("a pin pasted from GitHub's release page (sha256:<HEX>) is accepted", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcsetup-pin-"));
+  try {
+    const file = path.join(dir, "pin.json");
+    fs.writeFileSync(file, JSON.stringify({ repository: REPO, version: "4.1.0", sha256: `sha256:${"AB".repeat(32)}` }));
+    assert.equal(readPin(file).sha256, "ab".repeat(32));
+    fs.writeFileSync(file, JSON.stringify({ repository: REPO, version: "4.1.0", sha256: "sha256:abc" }));
+    assert.throws(() => readPin(file), /64 hex characters/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a folder without the wrapper is missing; a copy without a release marker is unmanaged", scratch(async (root, dir) => {
   const pin = { repository: REPO, version: "4.1.0", sha256: "" };
   assert.equal(inspect(dir, pin).state, "missing");
@@ -104,7 +117,7 @@ test("a sha256 mismatch fails before anything in the install changes", scratch(a
   const bad = makeTarball(root, "4.1.0");
   await assert.rejects(
     install({ dir, pin: { repository: REPO, version: "4.1.0", sha256: "0".repeat(64) }, tarball: bad.file, log: quiet }),
-    /sha256 mismatch/,
+    /sha256 mismatch.*not the digest of the \.sha256 file/,
   );
   assert.equal(fs.readFileSync(path.join(dir, "dist", "index.js"), "utf8"), "// 4.0.9\n");
   assert.deepEqual(fs.readdirSync(path.dirname(dir)), ["api-server"]);

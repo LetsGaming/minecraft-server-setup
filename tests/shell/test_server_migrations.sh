@@ -67,7 +67,11 @@ test_start_script_is_replaced_and_the_old_copy_kept() {
   kept="$(ls "$SM_INSTANCE_DIR"/start.sh.pre-migrate-* 2> /dev/null | head -1)"
   assert_contains "$(cat "$kept")" "old start" "the previous file is kept next to it"
   assert_eq true "$SM_NEEDS_RESTART" "the caller is told it takes effect at the next restart"
-  assert_eq "" "$(ls "$SM_INSTANCE_DIR" | grep 'migrate-[0-9]*$' || true)" "no temp file is left behind"
+  local f leftover=""
+  for f in "$SM_INSTANCE_DIR"/*; do
+    [[ "$(basename "$f")" =~ migrate-[0-9]*$ ]] && leftover+="$(basename "$f") "
+  done
+  assert_eq "" "$leftover" "no temp file is left behind"
 }
 
 test_a_current_start_script_is_left_alone() {
@@ -98,7 +102,11 @@ test_unit_gets_the_crash_loop_limits_after_restartsec() {
   assert_eq "RestartSec=3s" "$(grep -B0 -A0 '^RestartSec' <<< "$unit")" "RestartSec is unchanged"
   assert_logged "systemctl daemon-reload" "systemd is told, without a restart"
   assert_not_logged "systemctl restart" "the server is not restarted"
-  assert_eq 1 "$(ls "$SM_SCRIPTS_DIR"/common/migration-backups/testinst.service.* | grep -vc patched)" "the old unit is kept"
+  local f kept=0
+  for f in "$SM_SCRIPTS_DIR"/common/migration-backups/testinst.service.*; do
+    [[ -e "$f" && "$f" != *patched* ]] && kept=$((kept + 1))
+  done
+  assert_eq 1 "$kept" "the old unit is kept"
 }
 
 test_a_unit_with_its_own_limits_is_left_alone() {

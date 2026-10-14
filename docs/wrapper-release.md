@@ -71,7 +71,11 @@ curl -fsSLO "https://github.com/LetsGaming/minecraft-server-api/releases/downloa
 sha256sum "mc-api-server-$v.tar.gz"   # compare with the release's .sha256 asset
 ```
 
-Put the version and checksum in `api-server-release.json` and commit:
+Put the version and checksum in `api-server-release.json` and commit. The
+checksum is the tarball's: the first word of `mc-api-server-$v.tar.gz.sha256`,
+or the digest GitHub's release page lists next to the `.tar.gz` (pasting it with
+its `sha256:` prefix is fine). The digest listed next to the `.sha256` file is
+that file's own checksum and fails the check.
 
 ```bash
 git commit -am "chore: pin API wrapper $v: <what changed for operators>"
