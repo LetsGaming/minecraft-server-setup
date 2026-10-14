@@ -49,9 +49,13 @@ a fixed order:
    workflow checks the bot's default branch against it. A tagged release
    publishes the tarball.
 2. **This repo.** Bump the pin (below). The `Wrapper contract` workflow
-   installs that release and runs the bot's `e2e:contract` against it.
+   installs that release (that part must pass) and runs the bot's
+   `e2e:contract` against it as an advisory check: a bot that has not caught
+   up yet is a warning, not a red pin bump.
 3. **Bot.** Vendors the new `openapi.json` (`npm run wire:sync`), adapts its
-   callers and raises what it expects of the wrapper.
+   callers and raises what it expects of the wrapper. Its own contract job runs
+   against the wrapper's default branch and against this pin, and is the check
+   that fails when the two disagree.
 
 The wrapper ships first and the bot last. Within a major version the wrapper
 keeps serving the old shape next to the new one for one minor release, and the
@@ -89,9 +93,13 @@ changelog gets an entry when the bump changes what an operator sees.
 
 `.github/workflows/wrapper-contract.yml` runs on every change to the pin or to
 the installer. It installs the pinned release with `install_api_server.js` the
-way a host does, builds the bot's default branch and runs the bot's
+way a host does; that install failing (a wrong checksum, a missing release)
+fails the job. It then builds the bot's default branch and runs the bot's
 `e2e:contract` against the install with `E2E_REQUIRE_SUDO=1`, so the routes that
-run suite scripts are exercised for real. To reproduce the check by hand:
+run suite scripts are exercised for real. That run is advisory: the suite does
+not depend on the bot, so a bot that disagrees with the pin shows as a warning
+and in the job summary rather than failing the pin bump. To reproduce the check
+by hand:
 
 ```bash
 # in the suite checkout
@@ -104,9 +112,10 @@ Without passwordless `sudo -n -u <your user>` the script routes are only checked
 for their failure shape and reported as unverified; drop `E2E_REQUIRE_SUDO` to
 accept that locally.
 
-A red run has two readings. If the bot's expectations moved ahead of the pin,
-bump the pin to a release that serves them. If the pinned release regressed,
-fix it in the wrapper repo, release again and bump.
+A warning has two readings. If the pin moved ahead of the bot (a new wrapper
+release the bot has not caught up with), it clears once the bot adapts; the
+bot's own contract job holds the bot back until then. If the pinned release
+regressed, fix it in the wrapper repo, release again and bump.
 
 ## Coming from the submodule
 
