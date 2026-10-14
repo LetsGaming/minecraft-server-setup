@@ -32,8 +32,11 @@ game; the result says so.
 
 Progress is one JSON object per line on stdout and in
 `scripts/common/upgrade-status.ndjson`: `{seq, ts, phase, status, msg}`, and a
-last `{type:"result", ok, ...}` line. `--expect-unavailable=a,b` refuses to start
-when the installed mods no longer match the set a person confirmed.
+last `{type:"result", ok, ...}` line. `--expect-unavailable=a,b` is the list of mods a
+person was shown as unavailable or unchecked before confirming: the job refuses
+to start (`reason: "mods_changed"`, with `unexpected`) only when its own check
+finds a mod with no build that is not on that list. A listed mod that does have
+a build is simply kept.
 
 ## Locking
 

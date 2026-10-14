@@ -160,11 +160,29 @@ test("a failed restore is reported loudly and nothing is started on top of it", 
   assert.equal(count(w, "ops", "start"), 1, "only the first start happened");
 });
 
-test("the mod set the user saw must be the one that runs", () => {
+test("a mod with no build that the user was not shown stops the job before anything changes", () => {
   const w = world({ plan: { ...PLAN, unavailable: ["sodium"] } });
   const r = runUpgrade(w, { ...OPTS, expectUnavailable: ["lithium"] });
   assert.equal(r.reason, "mods_changed");
+  assert.deepEqual(r.unexpected, ["sodium"]);
+  assert.match(w.emitted.find((e) => e.status === "error").msg, /sodium/);
   assert.equal(count(w, "ops", "stop"), 0, "nothing was touched");
+});
+
+test("a mod the user was warned about that turns out to have a build does not stop the job", () => {
+  // The dashboard lists mods whose check failed (here "sit!") next to those with no build.
+  const w = world({ plan: { ...PLAN, unavailable: [] } });
+  const r = runUpgrade(w, { ...OPTS, expectUnavailable: ["sit!"] });
+  assert.equal(r.ok, true);
+  assert.equal(r.branch, "clean");
+});
+
+test("on a crash loop only the mods this job found unavailable are disabled, not every listed one", () => {
+  const w = world({ plan: { ...PLAN, unavailable: ["sodium"] }, startResults: ["crash", "ready"] });
+  const r = runUpgrade(w, { ...OPTS, expectUnavailable: ["sit!", "sodium"] });
+  assert.equal(r.branch, "mods_disabled");
+  assert.deepEqual(r.disabled, ["sodium"]);
+  assert.deepEqual(w.calls.filter((c) => c[0] === "toggle").map((c) => c[1]), ["sodium"]);
 });
 
 const PLAN_ID = "0123456789abcdef";

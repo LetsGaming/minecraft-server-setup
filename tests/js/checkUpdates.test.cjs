@@ -77,3 +77,27 @@ test(
     assert.equal(inst.requests().length, 0);
   }),
 );
+
+test(
+  "a slug with Modrinth's other characters (sit!) is looked up as is and reported available",
+  withInstance((inst) => {
+    inst.writeManifest({ gameVersion: "1.21.1", modLoader: "fabric", mods: { "sit!": { versionId: "s1" } } });
+    inst.stub({
+      [PROJECT("sit!")]: { json: { id: "sitid" } },
+      [VERSIONS("sitid")]: {
+        json: [{
+          id: "s2",
+          name: "Sit! 26.3",
+          date_published: "2026-10-01T00:00:00Z",
+          game_versions: ["26.3"],
+          loaders: ["fabric"],
+          files: [{ primary: true, url: "https://cdn/sit.jar", hashes: { sha512: "ab" } }],
+        }],
+      },
+    });
+    const res = inst.run("check-updates.js", ["--mcVersion=26.3", "--only=sit!", "--json"]);
+    const out = JSON.parse(res.stdout);
+    assert.deepEqual(out.results.map((r) => [r.slug, r.status, r.latestVersionId]), [["sit!", "update_available", "s2"]]);
+    assert.ok(inst.requests().some((u) => u.endsWith("/project/sit!")), inst.requests().join("\n"));
+  }),
+);
