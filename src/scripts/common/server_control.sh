@@ -279,7 +279,9 @@ wait_for_save_completion() {
 
   local waited
   for ((waited = 0; waited < timeout; waited++)); do
-    if _log_has_since "$offset" 'Saved the (game|world)|Saved'; then
+    # The server's own line only (S-009): the old bare "Saved" also matched
+    # any player who typed the word in chat.
+    if _log_has_since "$offset" '\]: Saved the (game|world)'; then
       echo "Save completed."
       return 0
     fi
@@ -294,7 +296,9 @@ save_and_wait() {
   local offset
   offset=$(_log_size)
   send_message "Saving the server now to ensure no data is lost..."
-  send_command "/save-all"
+  # flush (S-009): without it, 1.17+ logs "Saved the game" while chunk
+  # writes are still queued, and a backup can copy torn region files.
+  send_command "/save-all flush"
   wait_for_save_completion 60 "$offset"
 }
 

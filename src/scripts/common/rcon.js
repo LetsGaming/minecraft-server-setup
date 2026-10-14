@@ -32,7 +32,11 @@ function decodePacket(buf) {
   // hostile packet with a negative length passes `buf.length < 4 + length`
   // (e.g. 4 + -1 = 3) and yields a silent empty/garbage body. A valid RCON
   // packet is >= 10 bytes and in practice never exceeds 4 KB.
-  if (length < 10 || length > 4096) return null;
+  // A full Minecraft reply carries 4096 body bytes, so its length is 4106;
+  // the old 4096 cap never decoded one and every long reply timed out. A
+  // length no packet can have means the stream is out of step: an error, not
+  // "wait for more".
+  if (length < 10 || length > 64 * 1024) throw new Error(`RCON framing error (length ${length})`);
   if (buf.length < 4 + length) return null;
   return {
     length,
@@ -72,7 +76,14 @@ function rconCommand(host, port, password, command, timeoutMs = 5000) {
       responseBuf = Buffer.concat([responseBuf, data]);
 
       while (true) {
-        const packet = decodePacket(responseBuf);
+        let packet;
+        try {
+          packet = decodePacket(responseBuf);
+        } catch (err) {
+          cleanup();
+          reject(err);
+          return;
+        }
         if (!packet) break;
         responseBuf = responseBuf.slice(packet.totalSize);
 
@@ -109,8 +120,13 @@ function rconCommand(host, port, password, command, timeoutMs = 5000) {
       reject(new Error(`RCON connection error: ${err.message}`));
     });
 
+    // S-010: a server that closes the connection before answering (shutting
+    // down, or RCON going away) left this promise unsettled, so Node exited 0
+    // with no output and the caller took that as success. A close before the
+    // answer is a failure; after it, rejecting a settled promise is a no-op.
     client.on("close", () => {
       if (timer) clearTimeout(timer);
+      reject(new Error("RCON connection closed before the server answered"));
     });
   });
 }

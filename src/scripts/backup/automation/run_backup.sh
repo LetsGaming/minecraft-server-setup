@@ -69,37 +69,35 @@ DAILY_FLAG="$STATE_DIR/daily_$TODAY"
 WEEKLY_FLAG="$STATE_DIR/weekly_$TODAY"
 MONTHLY_FLAG="$STATE_DIR/monthly_$TODAY"
 
+# Which backup this run makes. Exactly one per run, highest priority first.
+KIND="hourly"
+FLAG=""
 if [[ "$DO_GENERATION_BACKUPS" == "true" ]]; then
-  # Großvater: Erster Sonntag im Monat (Priority 1)
   if [ "$DAY_OF_WEEK" -eq 7 ] && [ "$DAY_OF_MONTH" -le 7 ] && [ ! -f "$MONTHLY_FLAG" ]; then
-    echo "[$(date +'%F %T')] Starting monthly backup..."
-    run_backup_script --archive monthly
-    _capture_update_snapshot
-    touch "$MONTHLY_FLAG"
-    exit 0
-  fi
-
-  # Vater: Jeden Sonntag (Priority 2)
-  if [ "$DAY_OF_WEEK" -eq 7 ] && [ ! -f "$WEEKLY_FLAG" ]; then
-    echo "[$(date +'%F %T')] Starting weekly backup..."
-    run_backup_script --archive weekly
-    _capture_update_snapshot
-    touch "$WEEKLY_FLAG"
-    exit 0
-  fi
-
-  # Enkel: Jeden Tag um 00:00 Uhr (Priority 3)
-  if [ "$HOUR" -eq 0 ] && [ ! -f "$DAILY_FLAG" ]; then
-    echo "[$(date +'%F %T')] Starting daily backup..."
-    run_backup_script --archive daily
-    touch "$DAILY_FLAG"
-    exit 0
+    KIND="monthly"; FLAG="$MONTHLY_FLAG"     # first Sunday of the month
+  elif [ "$DAY_OF_WEEK" -eq 7 ] && [ ! -f "$WEEKLY_FLAG" ]; then
+    KIND="weekly"; FLAG="$WEEKLY_FLAG"       # every Sunday
+  elif [ "$HOUR" -eq 0 ] && [ ! -f "$DAILY_FLAG" ]; then
+    KIND="daily"; FLAG="$DAILY_FLAG"         # every day at 00:00
   fi
 fi
 
-# Immer: Stündlich (Lowest priority - fallback)
-echo "[$(date +'%F %T')] Starting hourly backup..."
-run_backup_script
+echo "[$(date +'%F %T')] Starting $KIND backup..."
+rc=0
+if [[ "$KIND" == "hourly" ]]; then
+  run_backup_script || rc=$?
+else
+  run_backup_script --archive "$KIND" || rc=$?
+fi
 
-# Cleanup step
-bash "$AUTOMATION_SCRIPT_DIR/cleanup_backups.sh"
+if [[ $rc -eq 0 && -n "$FLAG" ]]; then
+  [[ "$KIND" == "monthly" || "$KIND" == "weekly" ]] && _capture_update_snapshot
+  touch "$FLAG"
+fi
+
+# Retention runs after every backup, failed ones included (S-013). It used to
+# be skipped whenever the backup failed (set -e) and after every archive run,
+# so once the disk filled up every backup failed and nothing ever freed space.
+bash "$AUTOMATION_SCRIPT_DIR/cleanup_backups.sh" || echo "[$(date +'%F %T')] [WARN] Backup cleanup failed."
+
+exit "$rc"

@@ -231,6 +231,16 @@ test_backup_umask_can_be_widened_explicitly() {
   assert_logged "zstd-umask 0027" "BACKUP_UMASK is honoured"
 }
 
+test_a_failed_backup_still_runs_cleanup() {
+  # S-013: with a full disk every backup fails; retention must still run, or
+  # the disk never recovers by itself.
+  setup
+  export RSYNC_SHIM_FAIL=1
+  run_script "$RUN_BACKUP"
+  assert_nonzero "$RC" "the failed backup is reported"
+  assert_contains "$OUT" "Backup cleanup complete." "cleanup ran anyway"
+}
+
 test_an_archive_backup_restores_to_real_jars() {
   # S-002: the archive used to swap server.jar for a link into the backups'
   # jars/ folder, which dangles once restored. Backup, restore, then look.

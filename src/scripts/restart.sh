@@ -21,7 +21,9 @@ sleep 25
 countdown "Restart"
 
 # Send save command and wait for completion
-save_and_wait
+# A save that is not confirmed must not stop the shutdown (S-012): players
+# were already warned, and systemd's stop saves the world on its way down.
+save_and_wait || echo "[WARN] The save was not confirmed; continuing, the server saves again as it stops."
 
 # Send restart message
 send_message "Server §6is restarting§r now!"

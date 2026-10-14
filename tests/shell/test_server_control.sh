@@ -70,9 +70,18 @@ test_wait_for_save_reads_a_rotated_log_from_the_start() {
   printf 'a long line that makes the old log bigger than the new one\n%.0s' 1 2 3 > "$LOG"
   local offset
   offset=$(wc -c < "$LOG" | tr -d '[:space:]')
-  echo "Saved the game" > "$LOG"
+  echo "[00:00:00] [Server thread/INFO]: Saved the game" > "$LOG"
   in_scripts wait_for_save_completion 2 "$offset" > /dev/null 2>&1
   assert_rc 0 "$?" "a log shorter than the offset is treated as rotated"
+}
+
+test_a_player_typing_saved_does_not_count_as_a_save() {
+  setup
+  server_running
+  : > "$LOG"
+  echo "[00:00:00] [Server thread/INFO]: <Mallory> Saved the game lol" >> "$LOG"
+  in_scripts wait_for_save_completion 2 0 > /dev/null 2>&1
+  assert_rc 1 "$?" "chat is not the server's save line (S-009)"
 }
 
 test_save_and_wait_catches_a_save_that_finishes_instantly() {
