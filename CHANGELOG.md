@@ -41,6 +41,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Upgrade and prune jobs report the player warning and the stop as done once they are, so progress views no longer leave them running (`update/upgrade-server.js`).
 - **Prune map terrain is drawn whole in very tall worlds.** A world more than 2048 blocks tall (a mod or datapack raising the height) stores its height maps with 12 bits per column, which takes as many longs as 11 bits; the tile reader took 11, so most columns read a wrong surface height and stayed empty, and the terrain showed as diagonal stripes. The entry width is now read from the data, and tiles drawn by the old reader are drawn again the next time they are looked at (`world/lib/tiles.js`).
 - **Backups restore to a server that starts.** Archive backups replaced `server.jar` (and other jars) with links into `backups/jars/` that dangle once restored, and hourly restores dropped every jar. Archives now keep their real jars; a restore repairs links in older archives and, for an hourly archive, keeps the current server's jars. Jar pruning counts every archive folder (`backup/backup.sh`, `common/archive_restore.sh`, `backup/automation/cleanup_backups.sh`).
 - Upgrades across a Java major version no longer always roll back: the upgrade points the server's `JAVA=` at the JDK it installed (`update/update-server.js`). JDKs are picked by version, not string order.
