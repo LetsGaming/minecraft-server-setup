@@ -164,4 +164,30 @@ test_dry_run_changes_nothing() {
   teardown
 }
 
+test_a_failed_copy_leaves_the_scripts_and_restarts_the_server() {
+  # S-019: a copy that fails (a full disk) after the server was stopped used
+  # to leave an empty scripts folder and the server down.
+  setup
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  chmod +x "$T/bin/"*   # copied shims lack the bit; without it PATH skips them
+  touch "$SHIM_STATE/screen_running"
+  cat > "$T/bin/cp" <<'SHIM'
+#!/bin/bash
+for a in "$@"; do [[ "$a" == *migrate-staging* ]] && { echo "cp: No space left on device" >&2; exit 1; }; done
+exec /bin/cp "$@"
+SHIM
+  chmod +x "$T/bin/cp"
+  migrate
+  assert_nonzero "$RC" "the migration reports the failure"
+  assert_contains "$OUT" "Undoing what it changed" "says it is undoing"
+  assert_contains "$(cat "$SCRIPTS/start.sh")" "# local edit" "the scripts are the previous ones"
+  assert_exists "$SCRIPTS/common/variables.txt" "with their variables.txt"
+  assert_logged "systemctl stop inst.service" "the migration had stopped the server"
+  assert_logged "systemctl start inst.service" "and starts it again"
+  local leftovers
+  leftovers="$(find "$ROOT/scripts" -maxdepth 1 -name 'inst.*' ! -name '*_backup_*' | head -n 3)"
+  assert_eq "" "$leftovers" "no staging, preserve or old folder is left behind"
+  teardown
+}
+
 run_tests

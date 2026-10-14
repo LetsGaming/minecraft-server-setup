@@ -221,6 +221,7 @@ snapshot_setup_state() {
   local api_config="$base/services/api-server/api-server-config.json"
   if [[ -f "$api_config" ]]; then
     _PRE_API_CONFIG_COPY=$(mktemp)
+    # shellcheck disable=SC2024  # sudo reads the file; the copy is ours on purpose
     sudo cat "$api_config" > "$_PRE_API_CONFIG_COPY" 2>/dev/null || _PRE_API_CONFIG_COPY=""
   fi
   _PRE_CRONTAB_FILE=$(mktemp)

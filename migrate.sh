@@ -691,13 +691,60 @@ echo -e "${BOLD}Step 1: Backup${NC}"
 if $USE_ZSTD; then
   BACKUP_ARCHIVE="${BACKUP_PARENT}/${BACKUP_BASE}.tar.zst"
   log "Creating archive: $(basename "$BACKUP_ARCHIVE")"
-  run_cmd tar -C "$BACKUP_PARENT" -I 'zstd -3' -cf "$BACKUP_ARCHIVE" "$(basename "$TARGET_SCRIPTS_DIR")"
+  # umask 077 (S-029): the archive holds common/variables.txt and its secrets.
+  ( umask 077; run_cmd tar -C "$BACKUP_PARENT" -I 'zstd -3' -cf "$BACKUP_ARCHIVE" "$(basename "$TARGET_SCRIPTS_DIR")" )
 else
   BACKUP_ARCHIVE="${BACKUP_PARENT}/${BACKUP_BASE}.tar.gz"
   log "Creating archive: $(basename "$BACKUP_ARCHIVE")"
-  run_cmd tar -C "$BACKUP_PARENT" -czf "$BACKUP_ARCHIVE" "$(basename "$TARGET_SCRIPTS_DIR")"
+  ( umask 077; run_cmd tar -C "$BACKUP_PARENT" -czf "$BACKUP_ARCHIVE" "$(basename "$TARGET_SCRIPTS_DIR")" )
 fi
 [[ -f "$BACKUP_ARCHIVE" ]] && info "Archive size: $(du -sk "$BACKUP_ARCHIVE" | cut -f1)KB"
+
+# ── Recovery trap (S-019) ──
+# From here on a failure must not leave the server down or its scripts half
+# replaced. On any exit before the end, the scripts folder comes back from the
+# archive above if this run touched it, and the server is started again if
+# this run stopped it.
+_MIGRATE_DONE=false
+_MIGRATE_STOPPED_SERVER=false
+_MIGRATE_SCRIPTS_TOUCHED=false
+_migrate_recover() {
+  local rc=$?
+  $_MIGRATE_DONE && return
+  $DRY_RUN && return
+  echo
+  err "Migration stopped before it finished (exit $rc). Undoing what it changed..."
+  [[ -n "${STAGING_SCRIPTS_DIR:-}" ]] && rm -rf -- "$STAGING_SCRIPTS_DIR"
+  [[ -n "${PRESERVE_DIR:-}" ]] && rm -rf -- "$PRESERVE_DIR"
+  # A swap interrupted between its two renames: the old tree is still whole.
+  if [[ ! -e "$TARGET_SCRIPTS_DIR" && -d "${TARGET_SCRIPTS_DIR%/}.old.$$" ]]; then
+    mv -- "${TARGET_SCRIPTS_DIR%/}.old.$$" "$TARGET_SCRIPTS_DIR"
+  fi
+  if $_MIGRATE_SCRIPTS_TOUCHED && [[ -f "$BACKUP_ARCHIVE" ]]; then
+    local restore_dir
+    restore_dir="${TARGET_SCRIPTS_DIR%/}.restore.$$"
+    rm -rf -- "$restore_dir"
+    mkdir -p -- "$restore_dir"
+    if tar -C "$restore_dir" -xf "$BACKUP_ARCHIVE" \
+      && [[ -d "$restore_dir/$(basename "$TARGET_SCRIPTS_DIR")" ]]; then
+      rm -rf -- "${TARGET_SCRIPTS_DIR:?}"
+      mv -- "$restore_dir/$(basename "$TARGET_SCRIPTS_DIR")" "$TARGET_SCRIPTS_DIR"
+      rm -rf -- "$restore_dir"
+      log "Scripts restored from $(basename "$BACKUP_ARCHIVE")"
+    else
+      rm -rf -- "$restore_dir"
+      err "Could not restore the scripts. Do it by hand:"
+      info "  rm -rf '$TARGET_SCRIPTS_DIR'"
+      info "  tar -C '$(dirname "$TARGET_SCRIPTS_DIR")' -xf '$BACKUP_ARCHIVE'"
+    fi
+  fi
+  if $_MIGRATE_STOPPED_SERVER; then
+    log "Starting '$INSTANCE_NAME' again..."
+    sudo systemctl start "${INSTANCE_NAME}.service" 2>/dev/null \
+      || warn "Could not start it: sudo systemctl start ${INSTANCE_NAME}.service"
+  fi
+}
+trap _migrate_recover EXIT
 
 # ── Step 2: Stop server ──
 
@@ -714,6 +761,7 @@ if $NEEDS_SERVER_STOP; then
       sleep 3
     fi
   fi
+  _MIGRATE_STOPPED_SERVER=true
   run_cmd sudo systemctl stop "${INSTANCE_NAME}.service" 2>/dev/null || true
   sleep 2; log "Server stopped"
 elif $SERVER_RUNNING && [[ "$SKIP_STOP" == true ]]; then
@@ -868,7 +916,10 @@ fi
 replace_instance_scripts() {
 echo; echo -e "${BOLD}Step 4: Replace per-instance scripts${NC}"
 
-PRESERVE_DIR=$(mktemp -d)
+# Next to the scripts, not in /tmp: it holds variables.txt (S-019).
+PRESERVE_DIR="${TARGET_SCRIPTS_DIR%/}.preserve.$$"
+rm -rf -- "$PRESERVE_DIR"
+( umask 077; mkdir -p -- "$PRESERVE_DIR" )
 
 # Save files that must survive the wipe
 for pf in "common/variables.txt" "common/downloaded_versions.json"; do
@@ -938,17 +989,18 @@ if [[ -d "$_legacy_mgr" ]]; then
   info "the pre-migration backup archive if you still need it."
 fi
 
-# Wipe and replace
-log "Removing old per-instance scripts..."
-$DRY_RUN || find "$TARGET_SCRIPTS_DIR" -mindepth 1 -delete
+# Build the new tree next to the old one and swap it in at the end (S-019):
+# deleting first and copying after left an empty or partial scripts folder
+# whenever the copy failed (a full disk), with the server already stopped.
+STAGING_SCRIPTS_DIR="${TARGET_SCRIPTS_DIR%/}.migrate-staging.$$"
 log "Copying new per-instance scripts..."
-$DRY_RUN || cp -a "$NEW_SCRIPTS_SOURCE/." "$TARGET_SCRIPTS_DIR/"
+$DRY_RUN || { rm -rf -- "$STAGING_SCRIPTS_DIR"; mkdir -p -- "$STAGING_SCRIPTS_DIR"; cp -a "$NEW_SCRIPTS_SOURCE/." "$STAGING_SCRIPTS_DIR/"; }
 
 # A checkout from the submodule days can still hold src/scripts/api-server/;
 # it was copied along above and does not belong in the instance's scripts.
-if [[ -d "$TARGET_SCRIPTS_DIR/api-server" ]]; then
-  # :? aborts if TARGET_SCRIPTS_DIR is somehow empty, preventing rm -rf /api-server
-  $DRY_RUN || rm -rf "${TARGET_SCRIPTS_DIR:?}/api-server"
+if [[ -d "$STAGING_SCRIPTS_DIR/api-server" ]]; then
+  # :? aborts if STAGING_SCRIPTS_DIR is somehow empty, preventing rm -rf /api-server
+  $DRY_RUN || rm -rf "${STAGING_SCRIPTS_DIR:?}/api-server"
 fi
 
 # Restore preserved files
@@ -956,20 +1008,20 @@ log "Restoring preserved files..."
 
 for pf in "common/variables.txt" "common/downloaded_versions.json"; do
   [[ -f "$PRESERVE_DIR/$pf" ]] && {
-    $DRY_RUN || { mkdir -p "$TARGET_SCRIPTS_DIR/$(dirname "$pf")"; cp -a "$PRESERVE_DIR/$pf" "$TARGET_SCRIPTS_DIR/$pf"; }
+    $DRY_RUN || { mkdir -p "$STAGING_SCRIPTS_DIR/$(dirname "$pf")"; cp -a "$PRESERVE_DIR/$pf" "$STAGING_SCRIPTS_DIR/$pf"; }
     info "Restored: $pf"
   }
 done
 
 for logdir in "backup/logs" "logs"; do
   [[ -d "$PRESERVE_DIR/$logdir" ]] && {
-    $DRY_RUN || { mkdir -p "$TARGET_SCRIPTS_DIR/$logdir"; cp -a "$PRESERVE_DIR/$logdir/." "$TARGET_SCRIPTS_DIR/$logdir/"; }
+    $DRY_RUN || { mkdir -p "$STAGING_SCRIPTS_DIR/$logdir"; cp -a "$PRESERVE_DIR/$logdir/." "$STAGING_SCRIPTS_DIR/$logdir/"; }
     info "Restored: $logdir/"
   }
 done
 
 if [[ -d "$PRESERVE_DIR/interface" ]]; then
-  $DRY_RUN || { mkdir -p "$TARGET_SCRIPTS_DIR/interface"; cp -a "$PRESERVE_DIR/interface/." "$TARGET_SCRIPTS_DIR/interface/"; }
+  $DRY_RUN || { mkdir -p "$STAGING_SCRIPTS_DIR/interface"; cp -a "$PRESERVE_DIR/interface/." "$STAGING_SCRIPTS_DIR/interface/"; }
   info "Restored: interface/"
 fi
 
@@ -977,7 +1029,7 @@ for entry in "${NPM_SUBDIRS[@]}"; do
   subdir="${entry%%:*}"; rest="${entry#*:}"
   has_modules="${rest%%:*}"; needs_install="${rest##*:}"
   if [[ "$has_modules" == true && "$needs_install" == false ]] && [[ -d "$PRESERVE_DIR/$subdir/node_modules" ]]; then
-    $DRY_RUN || { mkdir -p "$TARGET_SCRIPTS_DIR/$subdir"; cp -a "$PRESERVE_DIR/$subdir/node_modules" "$TARGET_SCRIPTS_DIR/$subdir/node_modules"; }
+    $DRY_RUN || { mkdir -p "$STAGING_SCRIPTS_DIR/$subdir"; cp -a "$PRESERVE_DIR/$subdir/node_modules" "$STAGING_SCRIPTS_DIR/$subdir/node_modules"; }
     info "Restored: ${subdir}/node_modules/"
   fi
 done
@@ -986,7 +1038,7 @@ for entry in "${JSON_CONFIGS[@]:-}"; do
   [[ -z "$entry" ]] && continue
   f="${entry%%:*}"; nk="${entry##*:}"
   preserved="$PRESERVE_DIR/$f"
-  deployed="$TARGET_SCRIPTS_DIR/$f"
+  deployed="$STAGING_SCRIPTS_DIR/$f"
   [[ ! -f "$preserved" ]] && continue
   if [[ "$nk" -gt 0 ]]; then
     if command -v node &>/dev/null; then
@@ -1002,7 +1054,14 @@ for entry in "${JSON_CONFIGS[@]:-}"; do
   fi
 done
 
-rm -rf "$PRESERVE_DIR"
+# The swap: two renames, and the old tree goes only once the new one is in.
+if ! $DRY_RUN; then
+  _MIGRATE_SCRIPTS_TOUCHED=true
+  mv -- "$TARGET_SCRIPTS_DIR" "${TARGET_SCRIPTS_DIR%/}.old.$$"
+  mv -- "$STAGING_SCRIPTS_DIR" "$TARGET_SCRIPTS_DIR"
+  rm -rf -- "${TARGET_SCRIPTS_DIR%/}.old.$$"
+fi
+rm -rf -- "$PRESERVE_DIR"
 log "Per-instance scripts replaced"
 }
 
@@ -1128,12 +1187,11 @@ for var in USER INSTANCE_NAME SERVER_PATH BACKUPS_PATH; do
 done
 
 if ! $verify_ok; then
-  echo; err "Verification failed. Restore with:"
-  info "  rm -rf '$TARGET_SCRIPTS_DIR'"
-  info "  tar -C '$(dirname "$TARGET_SCRIPTS_DIR")' -xf '$BACKUP_ARCHIVE'"
+  echo; err "Verification failed; the previous scripts are put back."
   exit 1
 fi
 log "Verification passed"
+_MIGRATE_DONE=true
 
 # ── Step 9: Restart the Minecraft server ──
 # Only when it was stopped by this migration.
