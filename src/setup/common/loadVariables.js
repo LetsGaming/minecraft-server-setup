@@ -26,6 +26,12 @@ function loadVariables() {
     throw new Error('INSTANCE_NAME must only contain letters, numbers, hyphens, and underscores.');
   }
 
+  // TARGET_DIR_NAME becomes $HOME/<name>, the root every instance lives
+  // under. "." or ".." would make that $HOME or its parent (S-001).
+  if (!/^[a-zA-Z0-9_-]+$/.test(data.TARGET_DIR_NAME)) {
+    throw new Error('TARGET_DIR_NAME must only contain letters, numbers, hyphens, and underscores.');
+  }
+
   // ── BACKUPS ──
   const backups = data.BACKUPS;
   if (typeof backups.COMPRESSION_LEVEL !== "number" || backups.COMPRESSION_LEVEL < 1 || backups.COMPRESSION_LEVEL > 19) {
