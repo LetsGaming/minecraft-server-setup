@@ -446,15 +446,35 @@ async function updateFabric(versionId, serverPath) {
   console.log("Fabric updated.");
 }
 
+/**
+ * Update every mod for `version`. Resolves with the mods that could not be
+ * updated (S-014): update-mods carries on past a failed download or a hash
+ * mismatch and exits 0, so its summary is the only place that says a mod is
+ * still on its old build.
+ */
 function runModUpdate(version) {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", [UPDATE_MODS_SCRIPT, version], {
-      stdio: childStdio(),
+    const stdio = childStdio();
+    const child = spawn("node", [UPDATE_MODS_SCRIPT, version, "--json"], {
+      stdio: ["ignore", "pipe", Array.isArray(stdio) ? stdio[2] : "inherit"],
     });
-    child.on("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error("update-mods.js failed")),
-    );
+    let out = "";
+    child.stdout.on("data", (d) => {
+      out += d.toString();
+    });
     child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) return reject(new Error("update-mods.js failed"));
+      const last = out.trim().split("\n").reverse().find((l) => l.startsWith("{"));
+      let summary;
+      try {
+        summary = JSON.parse(last ?? "");
+      } catch {
+        return reject(new Error("update-mods.js gave no summary"));
+      }
+      if (!summary.ok) return reject(new Error(summary.error || "update-mods.js failed"));
+      resolve((summary.failed ?? []).map((f) => ({ slug: String(f.slug), error: String(f.error ?? "") })));
+    });
   });
 }
 
@@ -546,8 +566,14 @@ async function applyMode({ serverPath, targetVersionArg, emit }) {
     serverPath,
   });
   emit({ phase: "mods", msg: "Updating mods" });
-  await runModUpdate(versionId);
-  emit({ ok: true, version: versionId });
+  const modUpdateFailed = await runModUpdate(versionId);
+  if (modUpdateFailed.length > 0) {
+    emit({
+      phase: "mods",
+      msg: `Could not update: ${modUpdateFailed.map((f) => `${f.slug} (${f.error})`).join(", ")}`,
+    });
+  }
+  emit({ ok: true, version: versionId, modUpdateFailed: modUpdateFailed.map((f) => f.slug) });
 }
 
 /** The interactive flow for a person at a terminal. */
@@ -601,7 +627,8 @@ async function interactiveMode({ vars, serverPath, args }) {
   }
 
   await swapServer({ modLoader, versionId, metadataUrl, serverPath });
-  await runModUpdate(versionId);
+  const modUpdateFailed = await runModUpdate(versionId);
+  for (const f of modUpdateFailed) console.warn(`[WARN] ${f.slug} was not updated: ${f.error}`);
 
   if (incompatible.length > 0 && disableIncompatible) {
     disableMods(incompatible);
@@ -640,6 +667,21 @@ async function main() {
   if (args.bool("plan") && args.bool("apply")) {
     emit({ ok: false, error: "Use either --plan or --apply, not both." });
     console.error("Use either --plan or --apply, not both.");
+    process.exit(2);
+  }
+
+  const requested = args.get("version");
+  // S-022: the version must look like one, and --apply must be told which:
+  // defaulting to "latest" there turned a mangled argument into an upgrade to
+  // a version nobody chose.
+  if (requested !== null && requested !== "latest" && !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,39}$/.test(requested)) {
+    emit({ ok: false, error: `Not a Minecraft version: ${JSON.stringify(requested)}` });
+    console.error(`Not a Minecraft version: ${JSON.stringify(requested)}`);
+    process.exit(2);
+  }
+  if (args.bool("apply") && (requested === null || requested === "latest")) {
+    emit({ ok: false, error: "--apply needs the exact version to install." });
+    console.error("--apply needs the exact version to install.");
     process.exit(2);
   }
 

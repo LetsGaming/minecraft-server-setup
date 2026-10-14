@@ -39,6 +39,9 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { parseArgs } = require("./lib/args");
+
+/** A Minecraft version id: 1.21.4, 24w14a, 1.21-pre1. Never something that starts like a flag. */
+const VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,39}$/;
 const { loadVariables } = require("./lib/variables");
 
 /** The prune stops itself after this long and the job rolls back, rather than being killed mid-delete. */
@@ -159,7 +162,8 @@ function runUpgrade(deps, opts) {
   let unavailable = [];
   if (opts.version) {
     say("plan", "running", `Checking ${opts.version}`);
-    const planRun = deps.run("update", [opts.version, "--plan", "--json"]);
+    // After "--" (S-022): a version can never be read as a flag of update-server.
+    const planRun = deps.run("update", ["--plan", "--json", "--", opts.version]);
     plan = parseLines(planRun.stdout).find((l) => "ok" in l);
     if (planRun.code !== 0 || !plan || !plan.ok) {
       say("plan", "error", plan?.error ?? "The plan check failed");
@@ -235,7 +239,7 @@ function runUpgrade(deps, opts) {
   // ── apply ──
   if (opts.version) {
     say("apply", "running", "Installing the new version");
-    const applied = deps.run("update", [opts.version, "--apply", "--json"]);
+    const applied = deps.run("update", ["--apply", "--json", "--", opts.version]);
     const applyLines = parseLines(applied.stdout);
     for (const line of applyLines) {
       if (line.phase) say(`apply.${line.phase}`, "running", line.msg ?? "");
@@ -244,6 +248,14 @@ function runUpgrade(deps, opts) {
     if (applied.code !== 0 || !applyEnd || !applyEnd.ok) {
       say("apply", "error", applyEnd?.error ?? "The install failed");
       return rollback("apply_failed");
+    }
+    // Mods whose update failed are still on their old build (S-014); say so
+    // and report them with the ones that had no build at all.
+    for (const slug of applyEnd.modUpdateFailed ?? []) {
+      if (!unavailable.includes(slug)) unavailable.push(slug);
+    }
+    if ((applyEnd.modUpdateFailed ?? []).length > 0) {
+      say("apply.mods", "error", `Not updated, still on the old build: ${applyEnd.modUpdateFailed.join(", ")}`);
     }
     say("apply", "done", `Installed ${plan.target}`);
   }
@@ -404,6 +416,12 @@ function main() {
   const pruneOnly = args.bool("prune-only");
   const prunePlan = args.get("prune-plan");
   const version = pruneOnly ? null : args.get("version");
+  // S-022: a version like "--version=--yes" was read as a flag downstream and
+  // upgraded to the latest release instead of the one asked for.
+  if (version !== null && !VERSION_RE.test(version)) {
+    console.error(`Not a Minecraft version: ${JSON.stringify(version)}`);
+    process.exit(2);
+  }
   if (!version && !(pruneOnly && prunePlan)) {
     console.error("Usage: node upgrade-server.js <version> [--prune-plan=id] | --prune-only --prune-plan=id");
     process.exit(64);

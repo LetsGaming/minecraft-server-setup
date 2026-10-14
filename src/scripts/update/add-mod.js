@@ -218,7 +218,7 @@ async function installMod(
       console.log(
         `${indent}Skipping "${canonicalSlug}" — already registered (${existing.versionId}).`,
       );
-      return null;
+      return { alreadyRegistered: true, versionId: existing.versionId };
     }
 
     // Registered but filename is missing — fetch the known version, download
@@ -252,7 +252,7 @@ async function installMod(
     existing.filename = filename;
     writeVersionsFile(downloadedVersions);
     console.log(`${indent}Updated filename for "${canonicalSlug}" in downloaded_versions.json.`);
-    return { filenameUpdated: true };
+    return { filenameUpdated: true, dependencies: knownVersion.dependencies ?? [] };
   }
 
   const version = versionId
@@ -345,7 +345,7 @@ async function main() {
   if (versionId) console.log(`  Version ID : ${versionId}\n`);
 
   // ── Install the requested mod ────────────────────────────────────────────────
-  const version = await installMod(
+  let version = await installMod(
     slug,
     mcVersion,
     modLoader,
@@ -355,18 +355,21 @@ async function main() {
     versionId,
   );
 
-  if (!version) {
-    // Was already registered with a filename — nothing to do.
-    console.log(
-      "Remove it from downloaded_versions.json first if you want to re-add it.",
-    );
-    process.exit(0);
-  }
-
-  if (version.filenameUpdated) {
-    // Filename was missing and has now been patched — nothing else to do.
-    console.log("\nDone.\n");
-    process.exit(0);
+  // S-023: the mod is registered before its dependencies are installed, so a
+  // run that failed on a dependency left it registered without it, and every
+  // later add stopped right here. An already registered mod still gets its
+  // required dependencies checked and installed.
+  if (version?.alreadyRegistered) {
+    console.log("Checking that its required dependencies are installed...");
+    try {
+      version = await fetchVersion(version.versionId);
+    } catch {
+      version = null;
+    }
+    if (!version) {
+      console.log("Its registered version could not be fetched; dependencies not checked.");
+      process.exit(0);
+    }
   }
 
   console.log("\nDone.\n");

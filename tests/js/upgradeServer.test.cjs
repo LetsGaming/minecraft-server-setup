@@ -80,7 +80,11 @@ test("a clean upgrade stops, backs up, installs, starts and reports success", ()
   assert.equal(r.branch, "clean");
   assert.equal(r.archive, "minecraft_backup_NEW.tar.zst");
   const order = w.calls.map((c) => `${c[0]}:${c[1] ?? ""}`).filter((c) => /^(ops:(stop|start)|backup|update)/.test(c));
-  assert.deepEqual(order.slice(0, 5), ["update:1.21.5", "ops:stop", "backup:--archive", "update:1.21.5", "ops:start"]);
+  assert.deepEqual(order.slice(0, 5), ["update:--plan", "ops:stop", "backup:--archive", "update:--apply", "ops:start"]);
+  // The version always follows "--", so it is never read as a flag (S-022).
+  for (const c of w.calls.filter((c) => c[0] === "update")) {
+    assert.deepEqual(c.slice(-2), ["--", "1.21.5"]);
+  }
   assert.equal(result(w).type, "result");
 });
 
@@ -270,4 +274,14 @@ test("startAndWatch reads a rotated log from the start", () => {
     return orig(kind, args);
   };
   assert.deepEqual(startAndWatch(w, 30), { ok: true });
+});
+
+test("mods that failed to update are reported as kept on their old build (S-014)", () => {
+  const w = world({
+    apply: { ...OK, stdout: json({ phase: "mods", msg: "m" }, { ok: true, version: "1.21.5", modUpdateFailed: ["lithium"] }) },
+  });
+  const r = runUpgrade(w, OPTS);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.keptOnOldBuild, ["lithium"]);
+  assert.ok(w.emitted.some((e) => e.phase === "apply.mods" && e.status === "error" && /lithium/.test(e.msg)));
 });
