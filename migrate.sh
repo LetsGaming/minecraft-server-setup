@@ -15,6 +15,8 @@ set -euo pipefail
 # ║    - systemd units, except the migrations below             ║
 # ║    - Your variables.txt values (only adds new fields)       ║
 # ║    - downloaded_versions.json                               ║
+# ║    - common/prune/ settings (zones) and delete journal; the ║
+# ║      plans, scan cache and terrain tiles start fresh        ║
 # ║    - interface/  (retired web interface — left untouched)   ║
 # ║    - update/node_modules/   (preserved; reinstalled only    ║
 # ║      when the dependency set changes)                       ║
@@ -140,6 +142,9 @@ Retiring the bundled web interface (automatic, where one is found):
 What is NEVER touched:
   - common/variables.txt          (only new variables are appended)
   - common/downloaded_versions.json
+  - common/prune/settings.json and prune-apply.journal (saved prune settings
+    and protected zones, and the unfinished-delete marker; prune plans, the
+    scan cache and the terrain tiles are cleared and rebuilt on demand)
   - interface/                    (retired web interface — left as found)
   - update/node_modules/          (preserved; reinstalled if deps changed)
   - services/api-server/api-server-config.json   (user config — fully preserved)
@@ -364,8 +369,20 @@ _npm_install() {
 
 echo -e "${BOLD}Changes to be applied${NC}"
 
+# Deployment-only files carried across the wipe (the case patterns in the two
+# file walks below list the same paths). Of common/prune/ only the saved
+# settings, which hold the protected zones, and the delete journal, which marks
+# an unfinished delete, are kept: plans, the scan cache and the terrain tiles
+# are rebuilt on demand, so a migration starts them fresh.
+PRESERVED_FILES=(
+  "common/variables.txt"
+  "common/downloaded_versions.json"
+  "common/prune/settings.json"
+  "common/prune/prune-apply.journal"
+)
+
 # Per-instance counters
-REPLACED=0; ADDED=0; STALE=0
+REPLACED=0; ADDED=0; STALE=0; PRUNE_CACHE_FILES=0
 JSON_CONFIGS=()      # "relpath:new_key_count" — per-instance config.json files
 JSON_CONFIG_ADDED=0
 
@@ -379,7 +396,7 @@ NEEDS_ANY_NPM_INSTALL=false
 while IFS= read -r f; do
   case "$f" in
     # Always-preserved files
-    common/variables.txt|common/downloaded_versions.json) continue ;;
+    common/variables.txt|common/downloaded_versions.json|common/prune/settings.json|common/prune/prune-apply.journal) continue ;;
     # Per-instance npm artifacts
     update/node_modules/*) continue ;;
     # Root-level components — handled in their own section below
@@ -427,7 +444,7 @@ done < <(cd "$NEW_SCRIPTS_SOURCE" && find . -type f | sed 's|^\./||' | sort)
 while IFS= read -r f; do
   case "$f" in
     # Deployment-only files that are preserved across the wipe
-    common/variables.txt|common/downloaded_versions.json) continue ;;
+    common/variables.txt|common/downloaded_versions.json|common/prune/settings.json|common/prune/prune-apply.journal) continue ;;
     interface/*) continue ;;
     update/node_modules/*) continue ;;
     logs/*|backup/logs/*) continue ;;
@@ -436,11 +453,16 @@ while IFS= read -r f; do
     # single REMOVE per component below, not per file
     api-server/*|minecraft-server-manager/*) continue ;;
     */.git|.git|.git/*) continue ;;
+    # The prune engine's plans, scan cache and terrain tiles: reported once
+    # below, and not a reason on their own to replace the scripts.
+    common/prune/*) PRUNE_CACHE_FILES=$(( PRUNE_CACHE_FILES + 1 )); continue ;;
   esac
   [[ -f "$NEW_SCRIPTS_SOURCE/$f" ]] && continue
   info "REMOVE  $f  (no longer part of the suite)"
   STALE=$(( STALE + 1 ))
 done < <(cd "$TARGET_SCRIPTS_DIR" && find . -type f | sed 's|^\./||' | sort)
+[[ $PRUNE_CACHE_FILES -gt 0 ]] && \
+  info "CLEAR   common/prune/  (${PRUNE_CACHE_FILES} plan, scan cache and terrain tile file(s) — rebuilt on demand)"
 
 # Legacy per-instance copies of the root-level components (pre-services/
 # layout). Step 4 removes them; user configs inside are rescued first.
@@ -645,7 +667,8 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   if $NEEDS_INSTANCE_UPDATE; then
     echo "  4. Replace per-instance script files"
     echo "     Preserving: variables.txt, downloaded_versions.json, interface/,"
-    echo "                 update/node_modules/, logs/"
+    echo "                 update/node_modules/, logs/, prune settings and journal"
+    echo "     Clearing:   prune plans, scan cache and terrain tiles (rebuilt on demand)"
     [[ $STALE -gt 0 ]] && \
       echo "     Removing $STALE stale per-instance file(s)/component(s)"
     if [[ ${#JSON_CONFIGS[@]} -gt 0 ]]; then
@@ -922,7 +945,7 @@ rm -rf -- "$PRESERVE_DIR"
 ( umask 077; mkdir -p -- "$PRESERVE_DIR" )
 
 # Save files that must survive the wipe
-for pf in "common/variables.txt" "common/downloaded_versions.json"; do
+for pf in "${PRESERVED_FILES[@]}"; do
   [[ -f "$TARGET_SCRIPTS_DIR/$pf" ]] && {
     run_cmd mkdir -p "$PRESERVE_DIR/$(dirname "$pf")"
     run_cmd cp -a "$TARGET_SCRIPTS_DIR/$pf" "$PRESERVE_DIR/$pf"
@@ -1006,9 +1029,13 @@ fi
 # Restore preserved files
 log "Restoring preserved files..."
 
-for pf in "common/variables.txt" "common/downloaded_versions.json"; do
+for pf in "${PRESERVED_FILES[@]}"; do
   [[ -f "$PRESERVE_DIR/$pf" ]] && {
-    $DRY_RUN || { mkdir -p "$STAGING_SCRIPTS_DIR/$(dirname "$pf")"; cp -a "$PRESERVE_DIR/$pf" "$STAGING_SCRIPTS_DIR/$pf"; }
+    $DRY_RUN || {
+      # common/prune/ holds zones and the delete journal: owner only, as the engine creates it.
+      ( umask 077; mkdir -p "$STAGING_SCRIPTS_DIR/$(dirname "$pf")" )
+      cp -a "$PRESERVE_DIR/$pf" "$STAGING_SCRIPTS_DIR/$pf"
+    }
     info "Restored: $pf"
   }
 done
