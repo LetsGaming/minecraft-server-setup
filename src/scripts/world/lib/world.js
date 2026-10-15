@@ -47,33 +47,47 @@ function worldDirOf(serverPath) {
 }
 
 /**
- * Dimensions found on disk: the overworld at the world root, the Nether and the
- * End in their own folders, and datapack dimensions under dimensions/<ns>/<name>.
- * Discovered, not assumed: a folder counts only when it holds a region folder.
+ * Dimensions found on disk. Up to 26.x the overworld sits at the world root and the Nether and
+ * the End in DIM-1 and DIM1; from 26.x on all three are under dimensions/minecraft/<name>, next
+ * to datapack dimensions (dimensions/<ns>/<name>). The three vanilla ones keep the ids
+ * "overworld", "the_nether" and "the_end" in either layout: spawn protection, player positions
+ * and saved zones are matched by those ids. Where a world has both layouts, the newer one is
+ * what the server uses. Discovered, not assumed: a folder counts only when it holds a region
+ * folder.
  *
  * @returns {Array<{id: string, dir: string}>}
  */
 function discoverDimensions(worldDir) {
   const found = [];
   const add = (id, dir) => {
+    if (found.some((d) => d.id === id)) return;
     if (isDir(path.join(dir, "region"))) found.push({ id, dir });
   };
+  const custom = path.join(worldDir, "dimensions");
+  for (const [id, name] of VANILLA_FOLDERS) add(id, path.join(custom, "minecraft", name));
   add(DIMENSION_IDS.OVERWORLD, worldDir);
   add(DIMENSION_IDS.NETHER, path.join(worldDir, "DIM-1"));
   add(DIMENSION_IDS.END, path.join(worldDir, "DIM1"));
 
-  const custom = path.join(worldDir, "dimensions");
   if (isDir(custom)) {
     for (const ns of safeReaddir(custom)) {
       const nsDir = path.join(custom, ns);
       if (!isDir(nsDir)) continue;
       for (const name of safeReaddir(nsDir)) {
+        if (ns === "minecraft" && VANILLA_FOLDERS.some(([, folder]) => folder === name)) continue;
         add(`${ns}:${name}`, path.join(nsDir, name));
       }
     }
   }
   return found;
 }
+
+/** The vanilla dimensions' folders under dimensions/minecraft/ (26.x and later). */
+const VANILLA_FOLDERS = [
+  [DIMENSION_IDS.OVERWORLD, "overworld"],
+  [DIMENSION_IDS.NETHER, "the_nether"],
+  [DIMENSION_IDS.END, "the_end"],
+];
 
 function safeReaddir(dir) {
   try {
@@ -119,25 +133,35 @@ function readSpawn(worldDir) {
 
 /**
  * Where each known player last was: `[{dimension, x, z}]` in block coordinates,
- * from playerdata/*.dat. A file that cannot be read is skipped; that player
+ * from players/data/*.dat (26.x) or playerdata/*.dat. A file that cannot be read is skipped; that player
  * simply is not protected by position.
  */
 function readPlayerPositions(worldDir) {
-  const dir = path.join(worldDir, "playerdata");
   const out = [];
-  for (const name of safeReaddir(dir)) {
-    if (!name.endsWith(".dat")) continue;
-    try {
-      const nbt = readNbtFile(path.join(dir, name));
-      const pos = nbt.Pos;
-      if (Array.isArray(pos) && pos.length >= 3) {
-        out.push({ dimension: dimensionIdOf(nbt.Dimension), x: pos[0], z: pos[2] });
-      }
-    } catch {
-      /* unreadable player file */
+  const seen = new Set();
+  // 26.x keeps player files in players/data/, older worlds in playerdata/. A world converted
+  // to 26.x can hold both; the newer file of a player is the one the server uses.
+  for (const dir of [path.join(worldDir, "players", "data"), path.join(worldDir, "playerdata")]) {
+    for (const name of safeReaddir(dir)) {
+      if (!name.endsWith(".dat") || seen.has(name)) continue;
+      seen.add(name);
+      readPlayer(path.join(dir, name), out);
     }
   }
   return out;
+}
+
+/** Add where one player file says its player was; an unreadable file adds nothing. */
+function readPlayer(file, out) {
+  try {
+    const nbt = readNbtFile(file);
+    const pos = nbt.Pos;
+    if (Array.isArray(pos) && pos.length >= 3) {
+      out.push({ dimension: dimensionIdOf(nbt.Dimension), x: pos[0], z: pos[2] });
+    }
+  } catch {
+    /* unreadable player file */
+  }
 }
 
 module.exports = {

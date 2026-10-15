@@ -22,9 +22,10 @@ const SIZE = 512;
 /**
  * Bumped when the drawing changes, so tiles drawn by an older version are drawn again instead of
  * being served from the cache until their region changes. 2: 12 bit height maps (worlds over
- * 2048 tall) were read as 11 bit and drawn in diagonal stripes.
+ * 2048 tall) were read as 11 bit and drawn in diagonal stripes. 3: the same maps were still read
+ * as 11 bit where all the terrain is low, and those chunks were left empty.
  */
-const RENDER_VERSION = 2;
+const RENDER_VERSION = 3;
 /** Tiles are kept up to this many bytes; the oldest go first. */
 const DEFAULT_MAX_BYTES = 500 * 1024 * 1024;
 
@@ -53,7 +54,7 @@ function paintChunk(terrain, cx, cz, image, heights, water) {
   if (!heightmap) return false;
   const minY = terrain.minSectionY * 16;
   // 9 bits covers 384 blocks; taller worlds (mods, datapacks) use wider entries.
-  const bits = bitsOfHeightmap(heightmap);
+  const bits = bitsOfHeightmap(heightmap, heightOf(terrain));
   let painted = false;
   for (let z = 0; z < 16; z++) {
     for (let x = 0; x < 16; x++) {
@@ -101,22 +102,43 @@ function paintChunk(terrain, cx, cz, image, heights, water) {
 }
 
 /**
- * The entry width of a packed height map (9 bits for a 384 tall world, and so on). The number
+ * The entry width of a packed height map (9 bits for a 384 tall world, and so on). The game
+ * picks it from the world's height: enough bits for every height from 0 to the top. The number
  * of longs alone is ambiguous: 11 and 12 bits both fit 5 entries in a long (52 longs), 13 to 16
- * bits fit 4 (64 longs). Of the widths that give this many longs, the right one is the
- * narrowest that leaves every long's unused top bits zero; a narrower guess would read the high
- * bits of the last entry as padding and shift every entry after the first.
+ * bits fit 4 (64 longs). So when the chunk tells the world's height (`heightBlocks`, from its
+ * sections), that decides between the widths the length allows. Without it, the narrowest width
+ * whose unused top bits are zero in every long is taken; that guess fails where all the terrain
+ * is low (a 12 bit map of a field at sea level has those bits zero too), which is why the height
+ * comes first.
  */
-function bitsOfHeightmap(raw) {
+function bitsOfHeightmap(raw, heightBlocks) {
   const longs = raw.length / 8;
-  let fallback = null;
+  const fits = [];
   for (let bits = 1; bits <= 16; bits++) {
-    const per = Math.floor(64 / bits);
-    if (Math.ceil(256 / per) !== longs) continue;
-    fallback ??= bits;
-    if (paddingIsZero(raw, longs, per * bits)) return bits;
+    if (Math.ceil(256 / Math.floor(64 / bits)) === longs) fits.push(bits);
   }
-  return fallback ?? 9;
+  if (fits.length === 0) return 9;
+  if (heightBlocks > 0) {
+    const needed = Math.ceil(Math.log2(heightBlocks + 1));
+    if (fits.includes(needed)) return needed;
+  }
+  for (const bits of fits) {
+    if (paddingIsZero(raw, longs, Math.floor(64 / bits) * bits)) return bits;
+  }
+  return fits[0];
+}
+
+/**
+ * The world's height in blocks as one chunk shows it: from its lowest section (yPos) to the top
+ * of its highest section with blocks. Sections that only carry light (one above the top, in some
+ * versions) have no block palette and are not counted.
+ */
+function heightOf(terrain) {
+  let top = null;
+  for (const [y, section] of terrain.sections) {
+    if (section.palette.length > 0 && (top === null || y > top)) top = y;
+  }
+  return top === null ? 0 : (top - terrain.minSectionY + 1) * 16;
 }
 
 /** Whether bits from \`used\` up are zero in every long of \`raw\` (big endian). */
@@ -303,4 +325,4 @@ function tileFor({ serverPath, dimension, rx, rz, tilesDir, maxBytes = DEFAULT_M
   return { file: target, relative, cached: false, chunks, bytes: png.length };
 }
 
-module.exports = { SIZE, DEFAULT_MAX_BYTES, tileFor, renderRegion, encodePng, trim, bitsOfHeightmap, bitsForPalette };
+module.exports = { SIZE, DEFAULT_MAX_BYTES, tileFor, renderRegion, encodePng, trim, bitsOfHeightmap, heightOf, bitsForPalette };

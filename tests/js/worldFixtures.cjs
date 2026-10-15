@@ -209,10 +209,12 @@ function writeLevelDat(worldDir, spawnX, spawnZ) {
   fs.writeFileSync(path.join(worldDir, "level.dat"), zlib.gzipSync(nbt));
 }
 
-function writePlayer(worldDir, uuid, { dimension = "minecraft:overworld", x, z }) {
-  fs.mkdirSync(path.join(worldDir, "playerdata"), { recursive: true });
+/** A player file; `folder` is "playerdata" (before 26.x) or "players/data" (26.x). */
+function writePlayer(worldDir, uuid, { dimension = "minecraft:overworld", x, z, folder = "playerdata" }) {
+  const dir = path.join(worldDir, ...folder.split("/"));
+  fs.mkdirSync(dir, { recursive: true });
   const nbt = root(string("Dimension", dimension), doubleList("Pos", [x, 70, z]));
-  fs.writeFileSync(path.join(worldDir, "playerdata", `${uuid}.dat`), zlib.gzipSync(nbt));
+  fs.writeFileSync(path.join(dir, `${uuid}.dat`), zlib.gzipSync(nbt));
 }
 
 module.exports = {
