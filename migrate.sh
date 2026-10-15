@@ -35,9 +35,13 @@ set -euo pipefail
 # ║  limits. Previewed first; never restarts the server.        ║
 # ║  --list-server-migrations shows them.                       ║
 # ║                                                             ║
-# ║  The Minecraft instance is stopped ONLY when the migration  ║
-# ║  actually touches it. A services-only update leaves the     ║
-# ║  server running and restarts just the affected units.       ║
+# ║  The Minecraft instance is stopped ONLY when its folder     ║
+# ║  moves to the new layout, or with --restart. Its scripts    ║
+# ║  are replaced while it runs (it has none of them open);     ║
+# ║  a running upgrade, prune, restore or mod change holds the  ║
+# ║  operation lock, and the migration waits for none of them:  ║
+# ║  it stops before changing anything. Updated services are    ║
+# ║  restarted on their own.                                    ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 MIGRATE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,6 +63,7 @@ info() { echo -e "    $*"; }
 TARGET_SCRIPTS_DIR=""
 SKIP_CONFIRM=false
 SKIP_STOP=false
+RESTART_SERVER=false
 SKIP_SERVICE_RESTART=false
 DRY_RUN=false
 SKIP_SERVER_MIGRATIONS=false
@@ -82,8 +87,12 @@ Arguments:
 
 Options:
   --y                    Skip all confirmation prompts
-  --no-stop              Never stop the Minecraft server, even when the
-                         per-instance scripts change
+  --restart              Also restart the Minecraft server when only its scripts
+                         change, so a new start.sh is used at once. Without it
+                         the server keeps running: nothing it has open is
+                         replaced, and a new start.sh applies at its next start
+  --no-stop              Never stop the Minecraft server, not even to move its
+                         instance folder to the new layout
   --no-service-restart   Don't restart the API wrapper after updating it —
                          print the command instead
   --dry-run              Show what would be done without making changes
@@ -160,6 +169,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --y)                  SKIP_CONFIRM=true; shift ;;
     --no-stop)            SKIP_STOP=true; shift ;;
+    --restart)            RESTART_SERVER=true; shift ;;
     --no-service-restart) SKIP_SERVICE_RESTART=true; shift ;;
     --dry-run)            DRY_RUN=true; shift ;;
     --no-server-migrations)    SKIP_SERVER_MIGRATIONS=true; shift ;;
@@ -390,9 +400,14 @@ PRESERVED_FILES=(
 # and the operation locks (a lock file swapped for a new one while something
 # holds the old one would let a second operation in).
 PRESERVED_DIRS=("backup/logs" "logs" "common/migration-backups" ".locks")
+# Components that once lived in the instance's scripts (as git submodules) and
+# no longer do: the API wrapper moved to services/, the web interface retired.
+LEGACY_COMPONENTS=("api-server" "minecraft-server-manager")
 
 # Per-instance counters
 REPLACED=0; ADDED=0; STALE=0; PRUNE_CACHE_FILES=0
+# The one script the running server was started with; a new one applies at its next start.
+START_SCRIPT_CHANGED=false
 JSON_CONFIGS=()      # "relpath:new_key_count" — per-instance config.json files
 JSON_CONFIG_ADDED=0
 
@@ -440,7 +455,10 @@ while IFS= read -r f; do
   fi
 
   if [[ -f "$target" ]]; then
-    diff -q "$src" "$target" &>/dev/null || { info "UPDATE  $f"; REPLACED=$(( REPLACED + 1 )); }
+    diff -q "$src" "$target" &>/dev/null || {
+      info "UPDATE  $f"; REPLACED=$(( REPLACED + 1 ))
+      [[ "$f" == "start.sh" ]] && START_SCRIPT_CHANGED=true
+    }
   else
     info "ADD     $f"; ADDED=$(( ADDED + 1 ))
   fi
@@ -479,11 +497,23 @@ done < <(cd "$TARGET_SCRIPTS_DIR" && find . -type f | sed 's|^\./||' | sort)
 
 # Legacy per-instance copies of the root-level components (pre-services/
 # layout). Step 4 removes them; user configs inside are rescued first.
-for _legacy in api-server minecraft-server-manager; do
+for _legacy in "${LEGACY_COMPONENTS[@]}"; do
   if [[ -d "$TARGET_SCRIPTS_DIR/$_legacy" ]]; then
     _legacy_files=$(find "$TARGET_SCRIPTS_DIR/$_legacy" -type f ! -path "*/node_modules/*" | wc -l)
-    info "REMOVE  ${_legacy}/  (legacy per-instance copy, ${_legacy_files} file(s) — now root-level under services/)"
+    case "$_legacy" in
+      api-server) _legacy_why="now root-level under services/" ;;
+      *)          _legacy_why="retired, replaced by the minecraft-bot dashboard" ;;
+    esac
+    info "REMOVE  ${_legacy}/  (legacy per-instance copy, ${_legacy_files} file(s) — ${_legacy_why})"
     STALE=$(( STALE + 1 ))
+  fi
+done
+# Git leaves a removed submodule's folder behind in a checkout; it is never
+# copied into the instance, but say where it is so it can go.
+for _legacy in "${LEGACY_COMPONENTS[@]}"; do
+  if [[ -d "$NEW_SCRIPTS_SOURCE/$_legacy" ]]; then
+    info "NOTE    src/scripts/$_legacy/ in this checkout is left over from the old submodule"
+    info "        and no longer used. Delete it: rm -rf '$NEW_SCRIPTS_SOURCE/$_legacy'"
   fi
 done
 
@@ -546,10 +576,6 @@ if [[ -f "$_api_check_dir/index.js" ]]; then
   else
     warn "Could not check the API wrapper: $_api_line"
   fi
-fi
-if [[ -d "$NEW_SCRIPTS_SOURCE/api-server" ]]; then
-  info "NOTE    src/scripts/api-server/ in this checkout is left over from the old submodule"
-  info "        and no longer used. Delete it: rm -rf '$NEW_SCRIPTS_SOURCE/api-server'"
 fi
 
 # ── New variables ──
@@ -635,8 +661,15 @@ if [[ $(( REPLACED + ADDED + STALE )) -gt 0 ]] \
   NEEDS_INSTANCE_UPDATE=true
 fi
 
+# The running server never reads its scripts folder: backups, updates and the
+# prune run as their own processes, and start.sh is only read when the server
+# starts. So replacing the scripts does not stop it; only moving its instance
+# folder does, or --restart. What must not overlap with the swap is an
+# operation that runs from those scripts, which the operation lock below keeps
+# out.
 NEEDS_SERVER_STOP=false
-if $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] && $NEEDS_INSTANCE_UPDATE; then
+if $SERVER_RUNNING && [[ "$SKIP_STOP" != true ]] \
+   && { $NEEDS_INSTANCE_MOVE || { $RESTART_SERVER && $NEEDS_INSTANCE_UPDATE; }; }; then
   NEEDS_SERVER_STOP=true
 fi
 
@@ -667,7 +700,8 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   if $NEEDS_SERVER_STOP; then
     echo "  2. Stop the Minecraft server"
   elif $SERVER_RUNNING; then
-    echo "  2. Leave the Minecraft server running (instance not affected)"
+    echo "  2. Leave the Minecraft server running (nothing it has open is replaced)"
+    $START_SCRIPT_CHANGED && echo "     start.sh changes: the new one applies at its next start (--restart to apply now)"
   fi
   if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
     echo "  3. Structural directory migration:"
@@ -716,6 +750,33 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   read -rp "Proceed? (y/N): " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 0; }
   echo
+fi
+
+# ── Operation lock ──
+# The scripts are swapped under a running server, so nothing may be running
+# from them meanwhile: an upgrade or prune job, a restore, a rollback, a mod
+# change. They all take this lock; take it too, and stop before changing
+# anything when one of them holds it. Taken in every place a script may look
+# for it (utils.sh: INSTANCE_LOCK_DIR, else the runtime dir, else .locks).
+acquire_migration_locks() {
+  local dirs=() dir lock fd
+  [[ -n "${INSTANCE_LOCK_DIR:-}" ]] && dirs+=("$INSTANCE_LOCK_DIR")
+  [[ -n "${XDG_RUNTIME_DIR:-}" && -d "$XDG_RUNTIME_DIR/minecraft" ]] && dirs+=("$XDG_RUNTIME_DIR/minecraft")
+  dirs+=("$TARGET_SCRIPTS_DIR/.locks")
+  command -v flock &>/dev/null || { warn "flock not found — cannot check for a running operation"; return 0; }
+  for dir in "${dirs[@]}"; do
+    ( umask 077; mkdir -p "$dir" ) || continue
+    lock="$dir/operation_${INSTANCE_NAME}.lock"
+    exec {fd}> "$lock" || continue
+    if ! flock -n "$fd"; then
+      err "Another operation ($(cat "$lock.kind" 2>/dev/null || echo unknown)) is running for '$INSTANCE_NAME'."
+      info "Run the migration again once it has finished. Nothing was changed."
+      exit 1
+    fi
+  done
+}
+if $NEEDS_INSTANCE_UPDATE && ! $DRY_RUN; then
+  acquire_migration_locks
 fi
 
 # ── Step 1: Compressed archive backup ──
@@ -806,7 +867,7 @@ elif $SERVER_RUNNING && [[ "$SKIP_STOP" == true ]]; then
   warn "Server running but --no-stop specified. Files replaced live."
 elif $SERVER_RUNNING; then
   echo; echo -e "${BOLD}Step 2: Stop server${NC}"
-  log "Instance not affected by this migration — leaving '$INSTANCE_NAME' running"
+  log "Leaving '$INSTANCE_NAME' running — nothing it has open is replaced"
 fi
 
 # ── Step 3: Structural directory migration ──
@@ -1034,12 +1095,16 @@ STAGING_SCRIPTS_DIR="${TARGET_SCRIPTS_DIR%/}.migrate-staging.$$"
 log "Copying new per-instance scripts..."
 $DRY_RUN || { rm -rf -- "$STAGING_SCRIPTS_DIR"; mkdir -p -- "$STAGING_SCRIPTS_DIR"; cp -a "$NEW_SCRIPTS_SOURCE/." "$STAGING_SCRIPTS_DIR/"; }
 
-# A checkout from the submodule days can still hold src/scripts/api-server/;
-# it was copied along above and does not belong in the instance's scripts.
-if [[ -d "$STAGING_SCRIPTS_DIR/api-server" ]]; then
-  # :? aborts if STAGING_SCRIPTS_DIR is somehow empty, preventing rm -rf /api-server
-  $DRY_RUN || rm -rf "${STAGING_SCRIPTS_DIR:?}/api-server"
-fi
+# A checkout from the submodule days can still hold src/scripts/api-server/ or
+# src/scripts/minecraft-server-manager/: git leaves a removed submodule's folder
+# behind as untracked files. They were copied along above and do not belong in
+# the instance's scripts; left in, every later run reported them again.
+for _legacy in "${LEGACY_COMPONENTS[@]}"; do
+  if [[ -d "$STAGING_SCRIPTS_DIR/$_legacy" ]]; then
+    # :? aborts if STAGING_SCRIPTS_DIR is somehow empty, preventing rm -rf /<name>
+    $DRY_RUN || rm -rf "${STAGING_SCRIPTS_DIR:?}/$_legacy"
+  fi
+done
 
 # Restore preserved files
 log "Restoring preserved files..."
@@ -1310,7 +1375,10 @@ if [[ ${#RESTART_HINTS[@]} -gt 0 ]]; then
   echo
 fi
 if $SERVER_RUNNING && ! $NEEDS_SERVER_STOP; then
-  info "Minecraft instance '$INSTANCE_NAME' was left running — nothing it uses changed."
+  info "Minecraft instance '$INSTANCE_NAME' was left running — nothing it has open changed."
+  if $START_SCRIPT_CHANGED; then
+    info "start.sh changed: it applies at the server's next start, or run again with --restart."
+  fi
   echo
 fi
 if [[ ${#NEW_VARS[@]} -gt 0 ]]; then
