@@ -47,6 +47,7 @@ const doubleList = (name, values) => tag(T.LIST, name, Buffer.concat([u8(T.DOUBL
 const compoundList = (name, items) =>
   tag(T.LIST, name, Buffer.concat([u8(T.COMPOUND), i32(items.length), ...items.map((c) => Buffer.concat([...c, u8(0)]))]));
 /** The root compound of a document. */
+const stringList = (name, values) => tag(T.LIST, name, Buffer.concat([u8(T.STRING), i32(values.length), ...values.map(str)]));
 const root = (...children) => Buffer.concat([u8(T.COMPOUND), str(""), ...children, u8(0)]);
 
 /** A 1.18+ chunk: flat root. `padding` is junk that has to be skipped to find the fields. */
@@ -101,7 +102,24 @@ function packLongs(values, bits) {
  * A 1.18+ chunk with real terrain: a height map and packed block palettes, from a function
  * `blockAt(x, y, z)` (chunk-local x and z, world y) that returns a block id or undefined for air.
  */
-function chunkTerrain({ x, z, minSectionY = -4, sectionCount = 24, blockAt, inhabited = 0, heightBits = 9 }) {
+/**
+ * The block palette of one section in the layout `style` names:
+ *   "names"   {Name: id} compounds, as up to 26.2;
+ *   "strings" plain ids, as 26.3 writes a palette without properties;
+ *   "mixed"   26.3's list when some block has properties: {id, properties} for grass blocks
+ *             (with snowy=false) and {"": id} for the rest.
+ */
+function palette(names, style) {
+  if (style === "strings") return stringList("palette", names);
+  if (style === "mixed") {
+    return compoundList("palette", names.map((n) =>
+      n === "minecraft:grass_block" ? [string("id", n), compound("properties", string("snowy", "false"))] : [string("", n)],
+    ));
+  }
+  return compoundList("palette", names.map((n) => [string("Name", n)]));
+}
+
+function chunkTerrain({ x, z, minSectionY = -4, sectionCount = 24, blockAt, inhabited = 0, heightBits = 9, paletteStyle = "names" }) {
   const minY = minSectionY * 16;
   const heights = [];
   for (let zz = 0; zz < 16; zz++) {
@@ -131,9 +149,9 @@ function chunkTerrain({ x, z, minSectionY = -4, sectionCount = 24, blockAt, inha
         }
       }
     }
-    const palette = compoundList("palette", names.map((n) => [string("Name", n)]));
+    const pal = palette(names, paletteStyle);
     const bits = Math.max(4, Math.ceil(Math.log2(Math.max(2, names.length))));
-    const states = names.length === 1 ? compound("block_states", palette) : compound("block_states", palette, longArrayBig("data", packLongs(indices, bits)));
+    const states = names.length === 1 ? compound("block_states", pal) : compound("block_states", pal, longArrayBig("data", packLongs(indices, bits)));
     sections.push([byteTag("Y", minSectionY + s), states]);
   }
   return root(

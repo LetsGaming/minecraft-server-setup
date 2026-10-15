@@ -149,6 +149,8 @@ What is NEVER touched:
   - update/node_modules/          (preserved; reinstalled if deps changed)
   - services/api-server/api-server-config.json   (user config — fully preserved)
   - backup/logs/, logs/
+  - common/server-migrations.log, common/migration-backups/, common/upgrade-status.ndjson,
+    .locks/ (migration records, replaced units, the last job's status, operation locks)
   - World data, mods, server.jar, server.properties
   - Cron jobs, and systemd units beyond the server-side migrations above
 EOF
@@ -379,7 +381,15 @@ PRESERVED_FILES=(
   "common/downloaded_versions.json"
   "common/prune/settings.json"
   "common/prune/prune-apply.journal"
+  # Which server migrations ran, and the last upgrade or prune job's progress
+  # (the wrapper reads it back after a restart).
+  "common/server-migrations.log"
+  "common/upgrade-status.ndjson"
 )
+# Folders carried across whole: logs, the units the server migrations replaced,
+# and the operation locks (a lock file swapped for a new one while something
+# holds the old one would let a second operation in).
+PRESERVED_DIRS=("backup/logs" "logs" "common/migration-backups" ".locks")
 
 # Per-instance counters
 REPLACED=0; ADDED=0; STALE=0; PRUNE_CACHE_FILES=0
@@ -397,6 +407,8 @@ while IFS= read -r f; do
   case "$f" in
     # Always-preserved files
     common/variables.txt|common/downloaded_versions.json|common/prune/settings.json|common/prune/prune-apply.journal) continue ;;
+    common/server-migrations.log|common/upgrade-status.ndjson) continue ;;
+    logs/*|backup/logs/*|common/migration-backups/*|.locks/*) continue ;;
     # Per-instance npm artifacts
     update/node_modules/*) continue ;;
     # Root-level components — handled in their own section below
@@ -445,9 +457,10 @@ while IFS= read -r f; do
   case "$f" in
     # Deployment-only files that are preserved across the wipe
     common/variables.txt|common/downloaded_versions.json|common/prune/settings.json|common/prune/prune-apply.journal) continue ;;
+    common/server-migrations.log|common/upgrade-status.ndjson) continue ;;
     interface/*) continue ;;
     update/node_modules/*) continue ;;
-    logs/*|backup/logs/*) continue ;;
+    logs/*|backup/logs/*|common/migration-backups/*|.locks/*) continue ;;
     */config/config.json) continue ;;
     # Legacy root-level components inside the instance dir — reported as a
     # single REMOVE per component below, not per file
@@ -667,7 +680,8 @@ if [[ "$SKIP_CONFIRM" != true ]]; then
   if $NEEDS_INSTANCE_UPDATE; then
     echo "  4. Replace per-instance script files"
     echo "     Preserving: variables.txt, downloaded_versions.json, interface/,"
-    echo "                 update/node_modules/, logs/, prune settings and journal"
+    echo "                 update/node_modules/, logs/, prune settings and journal,"
+    echo "                 migration records and backups, upgrade status, operation locks"
     echo "     Clearing:   prune plans, scan cache and terrain tiles (rebuilt on demand)"
     [[ $STALE -gt 0 ]] && \
       echo "     Removing $STALE stale per-instance file(s)/component(s)"
@@ -952,10 +966,11 @@ for pf in "${PRESERVED_FILES[@]}"; do
   }
 done
 
-for logdir in "backup/logs" "logs"; do
+for logdir in "${PRESERVED_DIRS[@]}"; do
   [[ -d "$TARGET_SCRIPTS_DIR/$logdir" ]] && {
-    run_cmd mkdir -p "$PRESERVE_DIR/$logdir"
-    run_cmd cp -a "$TARGET_SCRIPTS_DIR/$logdir/." "$PRESERVE_DIR/$logdir/"
+    # The folder itself, not only its contents: .locks/ and migration-backups/ are owner only.
+    run_cmd mkdir -p "$PRESERVE_DIR/$(dirname "$logdir")"
+    run_cmd cp -a "$TARGET_SCRIPTS_DIR/$logdir" "$PRESERVE_DIR/$(dirname "$logdir")/"
   }
 done
 
@@ -1040,9 +1055,13 @@ for pf in "${PRESERVED_FILES[@]}"; do
   }
 done
 
-for logdir in "backup/logs" "logs"; do
+for logdir in "${PRESERVED_DIRS[@]}"; do
   [[ -d "$PRESERVE_DIR/$logdir" ]] && {
-    $DRY_RUN || { mkdir -p "$STAGING_SCRIPTS_DIR/$logdir"; cp -a "$PRESERVE_DIR/$logdir/." "$STAGING_SCRIPTS_DIR/$logdir/"; }
+    $DRY_RUN || {
+      mkdir -p "$STAGING_SCRIPTS_DIR/$logdir"
+      cp -a "$PRESERVE_DIR/$logdir/." "$STAGING_SCRIPTS_DIR/$logdir/"
+      chmod --reference="$PRESERVE_DIR/$logdir" "$STAGING_SCRIPTS_DIR/$logdir"
+    }
     info "Restored: $logdir/"
   }
 done
