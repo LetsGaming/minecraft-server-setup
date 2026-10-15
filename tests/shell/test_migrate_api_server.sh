@@ -226,4 +226,36 @@ test_prune_cache_files_alone_are_no_reason_to_migrate() {
   teardown
 }
 
+test_a_migration_keeps_the_suites_own_state() {
+  setup
+  ( umask 077; mkdir -p "$SCRIPTS/.locks" "$SCRIPTS/common/migration-backups" )
+  : > "$SCRIPTS/.locks/operation_inst.lock"
+  echo "[Unit]" > "$SCRIPTS/common/migration-backups/inst.service.20261014-182144"
+  echo "2026-10-14 unit_start_limits applied" > "$SCRIPTS/common/server-migrations.log"
+  echo '{"seq":1,"phase":"start","status":"done"}' > "$SCRIPTS/common/upgrade-status.ndjson"
+  echo "# local edit" >> "$SCRIPTS/start.sh" # something to replace
+  migrate
+  assert_rc 0 "$RC" "migrate succeeds"
+  assert_exists "$SCRIPTS/.locks/operation_inst.lock" "the operation lock is kept"
+  assert_eq "700" "$(stat -c %a "$SCRIPTS/.locks")" "the lock folder stays owner only"
+  assert_file_content "$SCRIPTS/common/migration-backups/inst.service.20261014-182144" "[Unit]" "the replaced unit is kept"
+  assert_eq "700" "$(stat -c %a "$SCRIPTS/common/migration-backups")" "and its folder stays owner only"
+  assert_file_content "$SCRIPTS/common/server-migrations.log" "2026-10-14 unit_start_limits applied" "the migration record is kept"
+  assert_file_content "$SCRIPTS/common/upgrade-status.ndjson" '{"seq":1,"phase":"start","status":"done"}' "the last job's status is kept"
+  assert_not_contains "$OUT" "REMOVE  .locks" "none of it is reported as stale"
+  assert_not_contains "$OUT" "REMOVE  common/" "none of it is reported as stale"
+  teardown
+}
+
+test_the_suites_own_state_alone_is_no_reason_to_migrate() {
+  setup
+  mkdir -p "$SCRIPTS/.locks" "$SCRIPTS/common/migration-backups"
+  : > "$SCRIPTS/.locks/operation_inst.lock"
+  echo "x" > "$SCRIPTS/common/upgrade-status.ndjson"
+  echo "x" > "$SCRIPTS/common/server-migrations.log"
+  migrate
+  assert_contains "$OUT" "Everything is already up to date" "nothing to do"
+  teardown
+}
+
 run_tests
