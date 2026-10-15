@@ -612,6 +612,7 @@ const N = {
   Y: Buffer.from("Y"),
   blockStates: Buffer.from("block_states"),
   palette: Buffer.from("palette"),
+  id: Buffer.from("id"),
   data: Buffer.from("data"),
   name: Buffer.from("Name"),
 };
@@ -671,14 +672,26 @@ function chunkTerrain(buf) {
                 const kind = buf[bp];
                 const entries = buf.readInt32BE(bp + 1);
                 let p = bp + 5;
-                if (kind !== TAG.COMPOUND || entries < 0) return skipAt(buf, bp, btype);
+                if (entries < 0) return skipAt(buf, bp, btype);
+                // 26.3 writes a palette whose blocks have no properties as plain ids.
+                if (kind === TAG.STRING) {
+                  for (let e = 0; e < entries; e++) {
+                    const [name, next] = stringAt(buf, p);
+                    palette.push(name);
+                    p = next;
+                  }
+                  return p;
+                }
+                if (kind !== TAG.COMPOUND) return skipAt(buf, bp, btype);
+                // One compound per block: {Name, Properties} before 26.3; from 26.3 a mixed list
+                // holds {id, properties} for blocks with properties and {"": id} for the others.
                 for (let e = 0; e < entries; e++) {
                   let name = "minecraft:air";
                   p = walkCompound(buf, p, (cn, cl, ctype, cp) => {
-                    if (ctype === TAG.STRING && eq(buf, cn, cl, N.name)) {
-                      const len = buf.readUInt16BE(cp);
-                      name = buf.toString("utf8", cp + 2, cp + 2 + len);
-                      return cp + 2 + len;
+                    if (ctype === TAG.STRING && (eq(buf, cn, cl, N.name) || eq(buf, cn, cl, N.id) || cl === 0)) {
+                      const [value, next] = stringAt(buf, cp);
+                      name = value;
+                      return next;
                     }
                     return skipAt(buf, cp, ctype);
                   });
@@ -702,6 +715,14 @@ function chunkTerrain(buf) {
     }
   }
   return { minSectionY, heightmaps, sections };
+}
+
+/** The TAG_String payload at `pos` and the position after it. */
+function stringAt(buf, pos) {
+  if (pos + 2 > buf.length) throw overrun();
+  const len = buf.readUInt16BE(pos);
+  if (pos + 2 + len > buf.length) throw overrun();
+  return [buf.toString("utf8", pos + 2, pos + 2 + len), pos + 2 + len];
 }
 
 /**

@@ -230,6 +230,29 @@ test("a 2096 block tall world with low terrain is drawn whole: the height decide
   }
 }));
 
+test("26.3 block palettes are read: plain ids, and mixed {id, properties} / {\"\": id} entries", () => {
+  const ground = (bx, y) => (y < 63 ? "minecraft:stone" : y === 63 ? "minecraft:grass_block" : undefined);
+  for (const paletteStyle of ["names", "strings", "mixed"]) {
+    const t = chunkTerrain(fx.chunkTerrain({ x: 0, z: 0, blockAt: ground, paletteStyle }));
+    // Section 3 is y 48..63: stone with the grass layer on top; section 4 above it is air.
+    assert.deepEqual([...t.sections.get(3).palette].sort(), ["minecraft:grass_block", "minecraft:stone"], paletteStyle);
+    assert.deepEqual(t.sections.get(4).palette, ["minecraft:air"], paletteStyle);
+    assert.deepEqual(t.sections.get(0).palette, ["minecraft:stone"], `${paletteStyle}: a one-block section`);
+    assert.equal(tiles.heightOf(t), 384, paletteStyle);
+  }
+});
+
+test("a 26.3 chunk with the new palettes is drawn like an older one", withWorld((s, dir) => {
+  const list = ["names", "strings", "mixed"].map((paletteStyle, i) => ({
+    x: i,
+    z: 0,
+    nbt: fx.chunkTerrain({ x: i, z: 0, paletteStyle, blockAt: (bx, y) => (y < 63 ? "minecraft:stone" : y === 63 ? "minecraft:grass_block" : undefined) }),
+  }));
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, list);
+  const { rgba } = decodePng(fs.readFileSync(tiles.tileFor({ serverPath: s.dir, dimension: "overworld", rx: 0, rz: 0, tilesDir: dir }).file));
+  for (let i = 0; i < 3; i++) assert.deepEqual(px(rgba, i * 16 + 5, 5), [...grass, 255], `chunk ${i}`);
+}));
+
 test("chunks without terrain data (older layout) leave their place clear instead of failing", withWorld((s, dir) => {
   fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [
     { x: 0, z: 0, nbt: fx.chunkModern({ x: 0, z: 0, inhabited: 0 }) },

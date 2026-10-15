@@ -23,9 +23,11 @@ const SIZE = 512;
  * Bumped when the drawing changes, so tiles drawn by an older version are drawn again instead of
  * being served from the cache until their region changes. 2: 12 bit height maps (worlds over
  * 2048 tall) were read as 11 bit and drawn in diagonal stripes. 3: the same maps were still read
- * as 11 bit where all the terrain is low, and those chunks were left empty.
+ * as 11 bit where all the terrain is low, and those chunks were left empty. 4: the block palettes
+ * 26.3 writes (plain ids, or {id, properties} and {"": id}) were read as empty, so every section
+ * saved by 26.3 looked like air.
  */
-const RENDER_VERSION = 3;
+const RENDER_VERSION = 4;
 /** Tiles are kept up to this many bytes; the oldest go first. */
 const DEFAULT_MAX_BYTES = 500 * 1024 * 1024;
 
