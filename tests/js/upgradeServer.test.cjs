@@ -260,6 +260,14 @@ test("progress lines are numbered and the last one is the result", () => {
   assert.ok(phases(w).includes("backup:done"));
 });
 
+test("every step that succeeds says so, the countdown and the stop included", () => {
+  const w = world();
+  runUpgrade(w, { ...OPTS, countdown: 5 });
+  for (const step of ["plan", "countdown", "stop", "backup", "apply", "start"]) {
+    assert.ok(phases(w).includes(`${step}:done`), `${step} reports done`);
+  }
+});
+
 test("startAndWatch reads a rotated log from the start", () => {
   const w = world();
   let size = 500;

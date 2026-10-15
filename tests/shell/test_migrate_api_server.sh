@@ -190,4 +190,40 @@ SHIM
   teardown
 }
 
+# The prune engine's state under common/prune/: what a migration keeps and what it clears.
+prune_state() {
+  mkdir -p "$SCRIPTS/common/prune/cache/overworld" "$SCRIPTS/common/prune/tiles/overworld"
+  echo '{"zones":[{"name":"base"}]}' > "$SCRIPTS/common/prune/settings.json"
+  echo '{"plan":"p1","state":"applying"}' > "$SCRIPTS/common/prune/prune-apply.journal"
+  echo '{}' > "$SCRIPTS/common/prune/p1.plan.json"
+  echo 'meta' > "$SCRIPTS/common/prune/cache/overworld/r.0.0.meta"
+  echo 'png' > "$SCRIPTS/common/prune/tiles/overworld/r.0.0.0123456789abcdef.png"
+}
+
+test_a_migration_keeps_prune_settings_and_journal_and_clears_plans_cache_and_tiles() {
+  setup
+  prune_state
+  echo "# local edit" >> "$SCRIPTS/start.sh" # something to replace
+  migrate
+  assert_rc 0 "$RC" "migrate succeeds"
+  assert_file_content "$SCRIPTS/common/prune/settings.json" '{"zones":[{"name":"base"}]}' "the saved settings and zones are kept"
+  assert_file_content "$SCRIPTS/common/prune/prune-apply.journal" '{"plan":"p1","state":"applying"}' "the delete journal is kept"
+  assert_missing "$SCRIPTS/common/prune/p1.plan.json" "plans are cleared"
+  assert_missing "$SCRIPTS/common/prune/cache" "the scan cache is cleared"
+  assert_missing "$SCRIPTS/common/prune/tiles" "the terrain tiles are cleared"
+  assert_eq "700" "$(stat -c %a "$SCRIPTS/common/prune")" "the folder stays owner only"
+  assert_contains "$OUT" "CLEAR   common/prune/  (3 plan, scan cache and terrain tile file(s)" "the clearing is one line"
+  assert_not_contains "$OUT" "REMOVE  common/prune" "no line per cached file"
+  teardown
+}
+
+test_prune_cache_files_alone_are_no_reason_to_migrate() {
+  setup
+  prune_state
+  migrate
+  assert_contains "$OUT" "Everything is already up to date" "nothing else changed, so nothing to do"
+  assert_exists "$SCRIPTS/common/prune/tiles/overworld/r.0.0.0123456789abcdef.png" "and the tiles stay"
+  teardown
+}
+
 run_tests

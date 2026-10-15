@@ -122,6 +122,32 @@ test(
 );
 
 test(
+  "the 26.x layout keeps the vanilla ids, and wins over leftovers of the old one",
+  withServer((s) => {
+    const modern = (name) => path.join(s.worldDir, "dimensions", "minecraft", name, "region", "r.0.0.mca");
+    for (const name of ["overworld", "the_nether", "the_end"]) fx.writeRegion(modern(name), 0, 0, [chunk(0, 0, 1)]);
+    fx.writeRegion(path.join(s.worldDir, "dimensions", "mymod", "caves", "region", "r.0.0.mca"), 0, 0, [chunk(0, 0, 1)]);
+    fx.writeRegion(s.regionFile(s.worldDir, "region", 0, 0), 0, 0, [chunk(0, 0, 1)]); // left over from before
+    const dims = world.discoverDimensions(s.worldDir);
+    assert.deepEqual(dims.map((d) => d.id), ["overworld", "the_nether", "the_end", "mymod:caves"]);
+    assert.equal(dims[0].dir, path.join(s.worldDir, "dimensions", "minecraft", "overworld"));
+  }),
+);
+
+test(
+  "player positions are read from players/data (26.x) and playerdata, the newer file first",
+  withServer((s) => {
+    fx.writePlayer(s.worldDir, "aaaa", { x: 1, z: 1, folder: "players/data" });
+    fx.writePlayer(s.worldDir, "aaaa", { x: 999, z: 999 }); // the same player, left over
+    fx.writePlayer(s.worldDir, "bbbb", { x: 5, z: 5 });
+    fs.writeFileSync(path.join(s.worldDir, "players", "data", "cccc.dat_old"), "backup");
+    const players = world.readPlayerPositions(s.worldDir);
+    assert.deepEqual(players.map((p) => [p.x, p.z]).sort(), [[1, 1], [5, 5]]);
+    assert.ok(players.every((p) => p.dimension === "overworld"));
+  }),
+);
+
+test(
   "level-name picks the world folder and may not be a path",
   withServer((s) => {
     assert.equal(path.basename(world.worldDirOf(s.dir)), "survival");
@@ -233,6 +259,33 @@ test(
     assert.equal(at(10), plan.CELL.DELETE, "unprotected");
     assert.equal(at(20), plan.CELL.PROTECTED, "a player's chunk");
     assert.equal(at(25), plan.CELL.DELETE, "outside the player's radius");
+    assert.equal(at(28), plan.CELL.PROTECTED, "a drawn zone");
+  }),
+);
+
+test(
+  "spawn, players and zones are protected in the 26.x layout too",
+  withServer((s) => {
+    fx.writeLevelDat(s.worldDir, 0, 0);
+    fx.writePlayer(s.worldDir, "aaaa", { x: 16 * 20 + 8, z: 8, folder: "players/data" });
+    const overworld = path.join(s.worldDir, "dimensions", "minecraft", "overworld");
+    fx.writeRegion(s.regionFile(overworld, "region", 0, 0), 0, 0, [0, 1, 10, 20, 25, 28].map((x) => chunk(x, 0, 0)));
+    const r = plan.scanWorld({
+      serverPath: s.dir,
+      params: {
+        thresholdMinutes: 5,
+        bufferChunks: 0,
+        spawnRadiusChunks: 2,
+        playerRadiusChunks: 1,
+        zones: [{ dimension: "overworld", x1: 28, z1: 0, x2: 28, z2: 0, name: "base" }],
+      },
+    });
+    assert.deepEqual(r.plan.dimensions.map((d) => d.id), ["overworld"]);
+    const { cell } = cellsOf(r);
+    const at = (x) => cell[x];
+    assert.equal(at(0), plan.CELL.PROTECTED, "spawn");
+    assert.equal(at(10), plan.CELL.DELETE, "unprotected");
+    assert.equal(at(20), plan.CELL.PROTECTED, "a player's chunk");
     assert.equal(at(28), plan.CELL.PROTECTED, "a drawn zone");
   }),
 );

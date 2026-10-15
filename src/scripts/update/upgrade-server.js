@@ -223,6 +223,7 @@ function runUpgrade(deps, opts) {
         : `The server restarts in ${opts.countdown} seconds to clean up unused chunks.`,
     ]);
     deps.sleep(opts.countdown);
+    say("countdown", "done", "Players were warned");
   }
 
   // ── stop ──
@@ -233,6 +234,7 @@ function runUpgrade(deps, opts) {
     return finish({ ok: false, rolledBack: false, reason: "stop_failed" });
   }
   serverStopped = true;
+  say("stop", "done", "The server is stopped");
 
   // ── backup ──
   say("backup", "running", "Archive backup of the server");

@@ -124,6 +124,10 @@ test("the height map entry width follows from its length, and from its padding w
   assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(2100), 12)), 12);
   assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(2100), 13)), 13);
   assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(9000), 14)), 14);
+  // With the world's height the length's choices are settled by it, low terrain or not.
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(100), 12), 2096), 12);
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(100), 11), 1024), 11);
+  assert.equal(tiles.bitsOfHeightmap(packedHeights(heights(100), 9), 384), 9);
   assert.equal(tiles.bitsForPalette(2), 4);
   assert.equal(tiles.bitsForPalette(17), 5);
   assert.equal(tiles.bitsForPalette(513), 10);
@@ -203,6 +207,23 @@ test("a world taller than 2048 blocks (12 bit height map) is drawn whole, not in
   fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [
     { x: 0, z: 0, nbt: fx.chunkTerrain({ x: 0, z: 0, blockAt: flat, heightBits: 12 }) },
   ]);
+  const { rgba } = decodePng(fs.readFileSync(tiles.tileFor({ serverPath: s.dir, dimension: "overworld", rx: 0, rz: 0, tilesDir: dir }).file));
+  for (let z = 0; z < 16; z++) {
+    for (let x = 0; x < 16; x++) assert.deepEqual(px(rgba, x, z), [...grass, 255], `column ${x}, ${z}`);
+  }
+}));
+
+test("a 2096 block tall world with low terrain is drawn whole: the height decides 11 or 12 bits, not the padding", withWorld((s, dir) => {
+  // As on a real modded 26.3 server: 131 sections (Y -4..126), 12 bit height maps, ground at
+  // sea level, so the top bits of every long happen to be zero and look like 11 bit padding.
+  // Top block at y 62: a height of 127 above the bottom, as in the chunk the server reported.
+  const sea = (bx, y) => (y < 62 ? "minecraft:stone" : y === 62 ? "minecraft:grass_block" : undefined);
+  const nbt = fx.chunkTerrain({ x: 0, z: 0, sectionCount: 131, blockAt: sea, heightBits: 12 });
+  const terrain = chunkTerrain(nbt);
+  assert.equal(tiles.heightOf(terrain), 2096);
+  assert.equal(tiles.bitsOfHeightmap(terrain.heightmaps.WORLD_SURFACE), 11, "the padding alone guesses wrong here");
+  assert.equal(tiles.bitsOfHeightmap(terrain.heightmaps.WORLD_SURFACE, 2096), 12, "the height gets it right");
+  fx.writeRegion(s.regionFile(null, "region", 0, 0), 0, 0, [{ x: 0, z: 0, nbt }]);
   const { rgba } = decodePng(fs.readFileSync(tiles.tileFor({ serverPath: s.dir, dimension: "overworld", rx: 0, rz: 0, tilesDir: dir }).file));
   for (let z = 0; z < 16; z++) {
     for (let x = 0; x < 16; x++) assert.deepEqual(px(rgba, x, z), [...grass, 255], `column ${x}, ${z}`);
