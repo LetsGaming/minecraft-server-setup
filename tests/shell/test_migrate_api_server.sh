@@ -177,7 +177,7 @@ for a in "$@"; do [[ "$a" == *migrate-staging* ]] && { echo "cp: No space left o
 exec /bin/cp "$@"
 SHIM
   chmod +x "$T/bin/cp"
-  migrate
+  migrate --restart # the server is only stopped when asked to, or to move its folder
   assert_nonzero "$RC" "the migration reports the failure"
   assert_contains "$OUT" "Undoing what it changed" "says it is undoing"
   assert_contains "$(cat "$SCRIPTS/start.sh")" "# local edit" "the scripts are the previous ones"
@@ -255,6 +255,64 @@ test_the_suites_own_state_alone_is_no_reason_to_migrate() {
   echo "x" > "$SCRIPTS/common/server-migrations.log"
   migrate
   assert_contains "$OUT" "Everything is already up to date" "nothing to do"
+  teardown
+}
+
+test_a_running_server_is_left_running_when_only_its_scripts_change() {
+  setup
+  chmod +x "$T/bin/"*
+  touch "$SHIM_STATE/screen_running"
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  echo "# local edit" >> "$SCRIPTS/backup/backup.sh"
+  migrate
+  assert_rc 0 "$RC" "migrate succeeds"
+  assert_not_contains "$(cat "$SCRIPTS/backup/backup.sh")" "# local edit" "the scripts are replaced"
+  assert_not_logged "systemctl stop inst.service" "the server is not stopped"
+  assert_not_logged "systemctl start inst.service" "nor started"
+  assert_contains "$OUT" "start.sh changed: it applies at the server's next start" "a new start.sh is pointed out"
+  teardown
+}
+
+test_restart_stops_and_starts_the_server_for_script_changes() {
+  setup
+  chmod +x "$T/bin/"*
+  touch "$SHIM_STATE/screen_running"
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  migrate --restart
+  assert_rc 0 "$RC" "migrate succeeds"
+  assert_logged "systemctl stop inst.service" "the server is stopped"
+  assert_logged "systemctl start inst.service" "and started again"
+  teardown
+}
+
+test_a_running_operation_keeps_the_migration_out() {
+  setup
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  mkdir -p "$SCRIPTS/.locks"
+  echo "upgrade" > "$SCRIPTS/.locks/operation_inst.lock.kind"
+  # Hold the lock the way an upgrade job does, for as long as the migration runs.
+  ( exec 7> "$SCRIPTS/.locks/operation_inst.lock"; flock 7; sleep 30 ) &
+  local holder=$!
+  for _ in $(seq 50); do flock -n "$SCRIPTS/.locks/operation_inst.lock" true 2>/dev/null || break; command sleep 0.1; done
+  migrate
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  assert_nonzero "$RC" "the migration stops"
+  assert_contains "$OUT" "Another operation (upgrade) is running for 'inst'" "and says why"
+  assert_contains "$(cat "$SCRIPTS/start.sh")" "# local edit" "nothing was changed"
+  teardown
+}
+
+test_a_leftover_submodule_folder_in_the_checkout_is_not_copied() {
+  setup
+  mkdir -p "$SUITE/src/scripts/minecraft-server-manager/src"
+  echo "x" > "$SUITE/src/scripts/minecraft-server-manager/src/a.js"
+  echo "# local edit" >> "$SCRIPTS/start.sh" # something to replace
+  migrate
+  assert_rc 0 "$RC" "migrate succeeds"
+  assert_missing "$SCRIPTS/minecraft-server-manager" "the leftover is not copied into the instance"
+  assert_contains "$OUT" "src/scripts/minecraft-server-manager/ in this checkout is left over" "and it is pointed out"
+  migrate
+  assert_contains "$OUT" "Everything is already up to date" "so the next run has nothing to remove"
   teardown
 }
 
