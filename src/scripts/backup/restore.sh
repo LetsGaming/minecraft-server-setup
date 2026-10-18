@@ -34,7 +34,8 @@ print_help() {
     echo ""
     echo "The server must be stopped; the restore refuses to run (exit 3) while it is online."
     echo "Run without a terminal (by the API wrapper), it needs --file and --y, and only"
-    echo "restores an archive owned by the user running it."
+    echo "restores an archive owned by the user running it. --with-scripts and --install-units"
+    echo "are refused without a terminal."
 }
 
 # review_and_install_unit <unit-file> <unit-name>
@@ -121,6 +122,11 @@ if [[ ! -t 0 ]] && [[ -z "$SPECIFIC_BACKUP" || "$SKIP_CONFIRMATION" != true ]]; 
     exit 1
 fi
 
+if [[ ! -t 0 ]] && { $WITH_SCRIPTS || $INSTALL_UNITS; }; then
+    echo "$(date +'%F %T') [ERROR] --with-scripts and --install-units need a terminal." >&2
+    exit 1
+fi
+
 acquire_operation_lock restore || exit 75
 
 if $FROM_ARCHIVE; then
@@ -180,7 +186,7 @@ fi
 STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
 # Puts the original back if a signal lands mid-swap (S-031), and releases the
 # operation lock this trap would otherwise have replaced (S-030).
-trap 'swap_recover; rm -rf -- "$STAGING_DIR"; release_operation_lock' EXIT
+trap 'swap_recover; rm -rf -- "$STAGING_DIR" "${SERVER_PATH%/}/.mc-meta"; release_operation_lock' EXIT
 trap 'exit 130' INT TERM
 
 echo "[INFO] Restoring backup..."

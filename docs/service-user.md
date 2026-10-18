@@ -39,11 +39,24 @@ It is safe to run again.
 | Read | the instance folder, the scripts folder, the backups folder, the wrapper's own folder and its config | ACL, recursive, with defaults so new files inherit it |
 | Write | `config/`, `defaultconfigs/`, `world/serverconfig/`, `server.properties`, `.mcbot-config-snapshots/`, `world/stats/` | ACL, recursive (the dashboard's config editor and the stats cleanup). Not `plugins/`: a jar dropped there runs as the server user at the next start, so plugin configs are read-only to the wrapper |
 | Write on folders only | every folder under the backups folder | lets it delete an archive; archives stay read-only |
-| Run as the server user | the exact scripts the wrapper uses (start, stop, restart, rollback, backup, restore, status, upgrade, prune, the mod scripts) with the arguments it passes, and `screen -list` and `screen -S <instance> -X stuff` | sudoers file, one per instance. Restore runs only on an archive in the backups folder that the server user made, with `--file` and `--y`; it never restores the archived scripts without a terminal |
+| Run as the server user | the exact scripts the wrapper uses (start, stop, restart, rollback, backup, restore, status, upgrade, prune, the mod scripts) with the arguments it passes, and `screen -list` and `screen -S <instance> -X stuff` | sudoers file, one per instance. Restore runs only on an archive in the backups folder that the server user made, with `--file` and `--y`; it refuses `--with-scripts` and `--install-units` without a terminal |
 | Run as root | `systemctl start/stop/restart/status/reset-failed/show <instance>.service` | the same sudoers file |
 
 Ownership is never changed; everything is an ACL entry for that one user. Nothing is granted
 on the world, the mods or the jar beyond read, and nothing at all outside the install.
+
+The server user owns these folders, and so does any mod it runs, so the script treats them as
+untrusted. It refuses any target that is a symlink, or that has a symlink between the instance
+folder and itself, resolves each path and requires it to stay inside the folder it belongs to,
+runs `setfacl -P` so links met while recursing are skipped, and only grants on `world/stats`
+when `level-name` is one plain folder name. A refused path is reported and the script exits
+with status 1 once the rest is done; remove the link (find out how it got there first) and
+run the script again.
+
+The wrapper's key is therefore worth a shell as the server user: through the sudoers rules it
+can install a Modrinth mod, run an upgrade and type any console command, and each of those is
+code the server runs at its next start. Keep the key secret, and see
+[sudoers-setup.md](sudoers-setup.md).
 
 The sudoers file is `/etc/sudoers.d/mc-service-<user>-<instance>`. It is generated, checked
 with `visudo -cf` before it is installed, and replaced when it differs. It names absolute

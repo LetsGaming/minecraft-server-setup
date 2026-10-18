@@ -19,6 +19,16 @@ test_rollback_restores_latest_update_backup() {
   assert_logged "systemctl start testinst.service" "server started again"
 }
 
+test_the_metadata_folder_does_not_stay_in_the_live_server() {
+  setup
+  make_archive_with_unit "$T/backups/$UPDATE_DIR_REL/minecraft_backup_m.tar.zst" before-update testinst.service "ExecStart=/bin/true"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 0 "$RC" "rollback exits 0"
+  assert_file_content "$T/server/world/level.dat" before-update "world restored"
+  assert_missing "$T/server/.mc-meta" "the archived copy of variables and units is removed"
+}
+
 test_no_update_backups() {
   setup
   run_script "$ROLLBACK" --y

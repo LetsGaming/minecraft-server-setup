@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows
 - The example's API key placeholder is refused. Setup-time mod downloads and the vanilla jar are verified like on the upgrade path; the Fabric installer is verified against the checksum its maven publishes before it runs; the Jabba installer is fetched by commit.
 - `variables.json` and `curseforge_variables.json` are no longer tracked by git (they were, despite `.gitignore`); setup creates `variables.json` from `variables.example.json` on the first run. **Copy your `variables.json` aside before pulling this change**, git removes the tracked copy. The migration archive is created with `umask 077`.
 - CI runs the shell and node tests; the ShellCheck action is pinned by commit; workflows use read-only tokens and pass `bot_ref` through the environment.
+- **Granting the wrapper's user access no longer follows symlinks.** `service_user.sh` runs as root on folders the server user (and its mods) owns. It now refuses a target that is a symlink or sits behind one, requires each resolved path to stay inside its instance folder, uses `setfacl -P`, and grants on `world/stats` only when `level-name` is one plain folder name. A refused path is reported and the script exits 1.
+- `restore.sh` refuses `--with-scripts` and `--install-units` without a terminal, so the wrapper's sudoers rule can no longer put archived scripts or units back. `docs/sudoers-setup.md` and `docs/service-user.md` now say what the wrapper's key is worth: installing a Modrinth mod, running an upgrade and typing console commands.
+- The `.mc-meta` folder (a copy of `variables.txt` with the RCON password, webhook URL and API key) no longer survives in the live server folder after `rollback.sh` or a failed `restore.sh`, and `backup.sh` never includes one.
+- `check_updates.sh` passes the CurseForge key to curl on stdin instead of the command line.
 
 ### Added
 
@@ -75,6 +79,8 @@ All notable changes to this project are documented here. The format follows
 - A negative array length in chunk data is rejected instead of looping.
 - `prune-chunks.js --scan --params={}` uses the saved settings, as the dashboard expects.
 - `prune-chunks.js --scan --profile` and `tests/bench/bench-prune.cjs` report where scan time goes.
+- `check_updates.sh` reports a failed CurseForge request as "could not check" and exits 1, where it used to say an update was available.
+- Setup removes its rollback copies of the crontab and the wrapper's config from `/tmp` when it succeeds, and the preflight no longer claims an empty API key leaves the wrapper unauthenticated (it refuses to start).
 
 ## [5.0.0] - 2026-10-10
 

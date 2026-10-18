@@ -163,7 +163,7 @@ sleep 2
 cd "$SERVER_PATH"
 INCLUDE_PATHS=()
 for item in * .*; do
-  [[ "$item" == "." || "$item" == ".." || "$item" == "backups" ]] && continue
+  [[ "$item" == "." || "$item" == ".." || "$item" == "backups" || "$item" == ".mc-meta" ]] && continue
   INCLUDE_PATHS+=("$item")
 done
 

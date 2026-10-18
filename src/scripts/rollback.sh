@@ -105,7 +105,7 @@ notify_warning "rollback_start" "Server $INSTANCE_NAME is rolling back to backup
 # Extract next to the server directory and swap, so a failure leaves the
 # current files in place.
 STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
-trap 'swap_recover; rm -rf -- "$STAGING_DIR"; release_operation_lock' EXIT
+trap 'swap_recover; rm -rf -- "$STAGING_DIR" "${SERVER_PATH%/}/.mc-meta"; release_operation_lock' EXIT
 trap 'exit 130' INT TERM
 
 echo "[INFO] Restoring backup..."

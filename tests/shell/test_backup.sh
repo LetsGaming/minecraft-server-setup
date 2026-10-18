@@ -53,6 +53,15 @@ test_archive_finds_the_wrapper_config_in_the_old_layout() {
   assert_contains "$OUT" "✓ api-server-config.json" "the config at <root>/api-server/ is staged"
 }
 
+test_a_leftover_metadata_folder_is_not_backed_up() {
+  setup
+  mkdir -p "$T/server/.mc-meta"
+  echo 'RCON_PASSWORD="hunter2"' > "$T/server/.mc-meta/variables.txt"
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "hourly backup exits 0"
+  assert_not_contains "$("$REAL_TAR" -tzf "$(first_archive "$T/backups/hourly")")" ".mc-meta" "the folder is left out"
+}
+
 test_dry_run_writes_nothing() {
   setup
   run_script "$BACKUP" --dry-run

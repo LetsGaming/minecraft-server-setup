@@ -359,6 +359,15 @@ run_cleanup() {
   run_or_echo "sudo rm -f \"$SCRIPT_DIR/src/scripts/common/variables.txt\""
   run_or_echo "sudo rm -rf \"$SCRIPT_DIR/src/scripts/common/downloaded_versions.json\""
   run_or_echo "sudo rm -rf \"$SCRIPT_DIR/src/scripts/common/curseforge.txt\""
+
+  # The rollback snapshots (a crontab copy and a copy of the wrapper's config,
+  # which holds its API key) have no use once setup succeeded.
+  local snapshot
+  for snapshot in "$_PRE_CRONTAB_FILE" "$_PRE_API_CONFIG_COPY"; do
+    if [[ -n "$snapshot" ]]; then rm -f -- "$snapshot"; fi
+  done
+  _PRE_CRONTAB_FILE=""
+  _PRE_API_CONFIG_COPY=""
 }
 
 maybe_start_server() {
@@ -514,7 +523,7 @@ run_preflight_check() {
     api_port=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.PORT || 3000)" 2>/dev/null)
     api_key=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.API_KEY || '')" 2>/dev/null)
     if [[ -z "$api_key" ]]; then
-      echo "  ⚠ API_SERVER enabled but no API_KEY set — wrapper will be unauthenticated"
+      echo "  ⚠ API_SERVER enabled but no API_KEY set (the wrapper will refuse to start)"
       warnings=$((warnings + 1))
     elif [[ "$api_key" == "replace-with-a-long-random-secret" ]]; then
       echo "  ✗ API_KEY is still the example's placeholder — generate one: openssl rand -hex 32"

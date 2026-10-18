@@ -41,27 +41,29 @@ if [[ "$RAW" =~ \"mods\":\{([^\}]*)\} ]]; then
 fi
 
 # === Function to check for updates ===
+# Returns 0 when an update exists, 1 when the file is current, 2 when the
+# latest file could not be determined.
 check_mod_update() {
     local mod_id="$1"
     local current_version="$2"
 
     local api_url="https://api.curseforge.com/v1/mods/$mod_id"
-    
-    # Fetch the mod details using curl with the API key
-    local response
-    response=$(curl -s -H "x-api-key: $API_KEY" "$api_url")
-    
-    # Extract the mainFileId from the response
-    local latest_file_id
-    latest_file_id=$(echo "$response" | grep -oP '"mainFileId": *([0-9]+)' | sed -E 's/"mainFileId": *([0-9]+)/\1/')
 
-    # Ensure we have a valid file ID
+    # The key goes to curl as a config line on stdin so it never shows up in
+    # the process list.
+    local key_escaped=${API_KEY//\\/\\\\}
+    key_escaped=${key_escaped//\"/\\\"}
+    local response
+    response=$(printf 'header = "x-api-key: %s"\n' "$key_escaped" |
+        curl -sS -f --connect-timeout 5 --max-time 20 --config - "$api_url" 2> /dev/null) || return 2
+
+    local latest_file_id
+    latest_file_id=$(echo "$response" | grep -oP '"mainFileId": *\K[0-9]+' | head -n 1 || true)
+
     if [ -z "$latest_file_id" ]; then
-        echo "Failed to fetch the latest file ID."
-        return 
+        return 2
     fi
 
-    # Check if the latest file ID matches the current version's file ID
     if [[ "$current_version" != "$latest_file_id" ]]; then
         return 0
     else
@@ -69,27 +71,28 @@ check_mod_update() {
     fi
 }
 
+report_update() { # label id file_id
+    local rc=0
+    check_mod_update "$2" "$3" || rc=$?
+    case "$rc" in
+        0) echo "$1 update available!" ;;
+        1) echo "$1 is up to date." ;;
+        *) echo "$1: could not check for an update (the CurseForge request failed)."; FAILED=1 ;;
+    esac
+}
+
+FAILED=0
+
 # === Check modpack ===
 if [[ -n "$modpack_id" && -n "$modpack_file_id" ]]; then
-  check_mod_update "$modpack_id" "$modpack_file_id"
-  if [[ $? -eq 0 ]]; then
-    echo "Modpack update available!"
-  else
-    echo "Modpack is up to date."
-  fi
+  report_update "Modpack" "$modpack_id" "$modpack_file_id"
 else
   echo "No modpack found."
 fi
 
 # === Check all mods ===
 for i in "${!mod_ids[@]}"; do
-  mod_id="${mod_ids[$i]}"
-  mod_file_id="${mod_file_ids[$i]}"
-
-  check_mod_update "$mod_id" "$mod_file_id"
-  if [[ $? -eq 0 ]]; then
-    echo "Mod $mod_id update available!"
-  else
-    echo "Mod $mod_id is up to date."
-  fi
+  report_update "Mod ${mod_ids[$i]}" "${mod_ids[$i]}" "${mod_file_ids[$i]}"
 done
+
+exit "$FAILED"
