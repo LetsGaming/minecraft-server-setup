@@ -54,7 +54,7 @@ run_backup_script() {
   local rc=0
   bash "$BACKUP_SCRIPT" "$@" || rc=$?
   if [[ $rc -eq 75 ]]; then
-    echo "[$(date +'%F %T')] Another backup is running; skipping this run."
+    echo "[$(date +'%F %T')] [WARN] This backup was SKIPPED: another backup or operation holds the lock. The next run tries again."
     exit 0
   fi
   return $rc

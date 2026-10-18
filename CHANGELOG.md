@@ -81,6 +81,14 @@ All notable changes to this project are documented here. The format follows
 - `prune-chunks.js --scan --profile` and `tests/bench/bench-prune.cjs` report where scan time goes.
 - `check_updates.sh` reports a failed CurseForge request as "could not check" and exits 1, where it used to say an update was available.
 - Setup removes its rollback copies of the crontab and the wrapper's config from `/tmp` when it succeeds, and the preflight no longer claims an empty API key leaves the wrapper unauthenticated (it refuses to start).
+- **A backup now waits for a confirmed save.** `backup.sh` aborts with exit 1 and a `backup_failed` webhook when auto-save cannot be turned off or the `save-all flush` is not confirmed, instead of copying region files mid-flush. Over RCON the flush gets `SAVE_TIMEOUT_SECONDS` (default 120) rather than 5 seconds, a timeout counts as a failure and the command is no longer typed into the console a second time. A stopped server is still backed up as it is.
+- Auto-save is switched back on as soon as the rsync snapshot is complete, no longer after compression and validation.
+- `restore.sh --keep-old` and `rollback.sh --keep-old` keep the replaced server files as `<server>.pre-restore` (an older copy is replaced) so a wrong archive can be undone. Without the flag nothing changes.
+- Backup cleanup now covers `archives/general` and custom archive types (`MAX_CUSTOM_BACKUPS`, default no count limit, plus storage eviction), orders archives by the timestamp in their file name instead of modification time, leaves `tmp_backup/` and `jars/` out of the size it measures, never deletes the newest valid archive of a tier, and skips while a restore, rollback or upgrade holds the operation lock.
+- The operation and instance locks live in one folder per instance (`scripts/<instance>/.locks`, or `INSTANCE_LOCK_DIR`), so cron, an SSH session and the wrapper exclude each other. `$XDG_RUNTIME_DIR` no longer picks a different folder.
+- Scheduled and smart restarts no longer treat an unreadable player count as zero: the screen-mode `/list` answer is read from the log position recorded before the command and matched only as the server's own line, and an unknown count is handled as "players are online". `get_player_count` and `get_player_list` fail when the server could not be asked.
+- `maintenance.sh` no longer overwrites the saved MOTD when an earlier run did not finish, and skipped backups and restarts say so in the log.
+- `rcon.js` accepts `--timeout-ms=N`.
 
 ## [5.0.0] - 2026-10-10
 

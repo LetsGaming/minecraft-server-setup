@@ -14,6 +14,7 @@ RELATIVE_TIME=""
 FROM_ARCHIVE=false
 INSTALL_UNITS=false
 WITH_SCRIPTS=false
+KEEP_OLD=false
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 
 print_help() {
@@ -30,6 +31,8 @@ print_help() {
     echo "                        an interactive confirmation, and skipped when run non-interactively."
     echo "  --with-scripts        Also put back the management scripts stored in an archive"
     echo "                        (asked for when run interactively; skipped otherwise)"
+    echo "  --keep-old            Keep the replaced server files as <server>.pre-restore instead of"
+    echo "                        deleting them (an earlier .pre-restore copy is replaced)"
     echo "  --help                Show this help message and exit"
     echo ""
     echo "The server must be stopped; the restore refuses to run (exit 3) while it is online."
@@ -109,6 +112,7 @@ while [[ $# -gt 0 ]]; do
         --archive) FROM_ARCHIVE=true; shift ;;
         --install-units) INSTALL_UNITS=true; shift ;;
         --with-scripts) WITH_SCRIPTS=true; shift ;;
+        --keep-old) KEEP_OLD=true; shift ;;
         --help) print_help; exit 0 ;;
         *) echo "$(date +'%F %T') [ERROR] Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -196,7 +200,7 @@ extract_archive "$BACKUP_TO_RESTORE" "$STAGING_DIR" || exit 1
 complete_staged_jars "$STAGING_DIR" "$SERVER_PATH"
 # Extraction takes a while; confirm nothing started the server in the meantime.
 require_server_stopped || exit 3
-swap_server_dir "$STAGING_DIR" "$SERVER_PATH" || exit 1
+swap_server_dir "$STAGING_DIR" "$SERVER_PATH" "$($KEEP_OLD && echo keep)" || exit 1
 
 echo "[INFO] Server data restored."
 

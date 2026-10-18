@@ -269,4 +269,49 @@ test_an_archive_backup_restores_to_real_jars() {
   assert_missing "$T/server/a.jar" "no stray jar links at the top level"
 }
 
+# ── a backup needs a confirmed save ──────────────────────────────────────────
+
+test_an_unconfirmed_save_aborts_the_backup_and_turns_saving_back_on() {
+  setup
+  server_running
+  export SAVE_TIMEOUT_SECONDS=2
+  run_script "$BACKUP"
+  assert_rc 1 "$RC" "the backup fails"
+  assert_contains "$OUT" "did not confirm the save" "says why"
+  assert_eq "" "$(first_archive "$T/backups/hourly")" "no archive was written"
+  assert_logged "save-on" "auto-save is turned back on"
+}
+
+test_a_failed_save_off_over_rcon_aborts_without_a_console_fallback() {
+  setup
+  use_rcon_shim
+  server_running
+  export NODE_SHIM_RCON_RC=1
+  run_script "$BACKUP"
+  assert_rc 1 "$RC" "the backup fails"
+  assert_contains "$OUT" "Could not turn auto-save off" "says why"
+  assert_not_logged "stuff /save-off" "save-off was not typed into the console"
+  assert_eq "" "$(first_archive "$T/backups/hourly")" "no archive was written"
+}
+
+test_a_stopped_server_is_backed_up_without_save_commands() {
+  setup
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "the backup succeeds"
+  assert_contains "$OUT" "The server is not running" "says it copied the files as they are"
+  assert_not_logged "save-off" "no save-off"
+}
+
+test_auto_save_is_back_on_before_the_archive_is_compressed() {
+  setup
+  server_running
+  export SCREEN_SHIM_SAVE_LOG="$T/server/logs/latest.log"
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "the backup succeeds"
+  local on_line zstd_line
+  on_line="$(grep -n 'save-on' "$SHIM_LOG" | head -n 1 | cut -d: -f1)"
+  zstd_line="$(grep -n '^zstd .*-o ' "$SHIM_LOG" | head -n 1 | cut -d: -f1)"
+  assert_eq 1 "$([[ -n "$on_line" && -n "$zstd_line" && "$on_line" -lt "$zstd_line" ]] && echo 1 || echo 0)" "save-on comes before compression"
+}
+
 run_tests

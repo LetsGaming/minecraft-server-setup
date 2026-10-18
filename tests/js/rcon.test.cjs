@@ -63,3 +63,44 @@ test("a stream out of step fails at once instead of timing out", async () => {
     await srv.close();
   }
 });
+
+const { execFile } = require("node:child_process");
+const path = require("node:path");
+
+function runCli(args, env) {
+  return new Promise((resolve) => {
+    execFile(
+      process.execPath,
+      [path.join(__dirname, "../../src/scripts/common/rcon.js"), ...args],
+      { env: { ...process.env, ...env } },
+      (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr }),
+    );
+  });
+}
+
+test("the CLI --timeout-ms option bounds a command the server never answers", async () => {
+  const srv = await fakeServer(() => {});
+  try {
+    const started = Date.now();
+    const res = await runCli(["--timeout-ms=300", "127.0.0.1", String(srv.port), "save-all flush"], { RCON_PASSWORD: "pw" });
+    assert.equal(res.code, 1);
+    assert.match(res.stderr, /RCON timeout/);
+    assert.ok(Date.now() - started < 4000, "gave up well before the 5 s default");
+  } finally {
+    await srv.close();
+  }
+});
+
+test("the CLI still reads a long reply when given a timeout", async () => {
+  const srv = await fakeServer((sock) => {
+    sock.write(pkt(2, 0, "Saved the game"));
+    sock.write(pkt(3, 0, ""));
+  });
+  try {
+    const res = await runCli(["--timeout-ms=5000", "127.0.0.1", String(srv.port), "save-all", "flush"], { RCON_PASSWORD: "pw" });
+    assert.equal(res.code, 0);
+    assert.equal(res.stdout.trim(), "Saved the game");
+  } finally {
+    await srv.close();
+  }
+});

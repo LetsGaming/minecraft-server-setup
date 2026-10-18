@@ -46,9 +46,15 @@ if ! server_reachable; then
   exit 0
 fi
 
-PLAYER_COUNT=$(get_player_count 2>/dev/null || echo 0)
+# A count that could not be read is not a count of zero: assume players are on.
+PLAYER_COUNT_KNOWN=true
+if ! PLAYER_COUNT=$(get_player_count 2>/dev/null); then
+  PLAYER_COUNT_KNOWN=false
+  PLAYER_COUNT="unknown"
+  echo "[WARN] Could not tell how many players are online; treating the server as occupied."
+fi
 
-if [[ "$PLAYER_COUNT" -eq 0 && "$FORCE" != true && "$RESTART_SKIP_IF_EMPTY" == "true" ]]; then
+if [[ "$PLAYER_COUNT_KNOWN" == true && "$PLAYER_COUNT" -eq 0 && "$FORCE" != true && "$RESTART_SKIP_IF_EMPTY" == "true" ]]; then
   echo "[INFO] No players online. Restarting immediately (no warning needed)."
   save_and_wait 2>/dev/null || true
   systemctl_cmd restart
@@ -59,7 +65,11 @@ if [[ "$PLAYER_COUNT" -eq 0 && "$FORCE" != true && "$RESTART_SKIP_IF_EMPTY" == "
   exit 0
 fi
 
-echo "[INFO] $PLAYER_COUNT player(s) online. Warning before restart..."
+if [[ "$PLAYER_COUNT_KNOWN" == true ]]; then
+  echo "[INFO] $PLAYER_COUNT player(s) online. Warning before restart..."
+else
+  echo "[INFO] Warning before restart..."
+fi
 
 # ── Warning phase ──
 if (( WARN_TIME > 10 )); then
@@ -78,6 +88,10 @@ send_message "Server §6is restarting§r now!"
 systemctl_cmd restart
 
 echo "[INFO] Server restarted."
-notify_success "server_restart" "Server $INSTANCE_NAME restarted ($PLAYER_COUNT players were online)."
+if [[ "$PLAYER_COUNT_KNOWN" == true ]]; then
+  notify_success "server_restart" "Server $INSTANCE_NAME restarted ($PLAYER_COUNT players were online)."
+else
+  notify_success "server_restart" "Server $INSTANCE_NAME restarted (the player count could not be read)."
+fi
 wait_for_server_ready 120 || true
 wait_for_notifications

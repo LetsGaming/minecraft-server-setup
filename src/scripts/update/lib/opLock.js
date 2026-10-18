@@ -27,7 +27,6 @@ function waitSeconds() {
 
 function lockDir(scriptsDir) {
   if (process.env.INSTANCE_LOCK_DIR) return process.env.INSTANCE_LOCK_DIR;
-  if (process.env.XDG_RUNTIME_DIR) return path.join(process.env.XDG_RUNTIME_DIR, "minecraft");
   return path.join(scriptsDir, ".locks");
 }
 

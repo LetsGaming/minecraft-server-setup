@@ -18,7 +18,7 @@ if [[ "$_running_rc" -ne 0 ]]; then
     PLAYER_LIST="Server is not running, no player list available."
 else
     SERVER_RUNNING="Running"
-    PLAYER_LIST=$(get_player_list)
+    PLAYER_LIST=$(get_player_list) || PLAYER_LIST="unknown (the server did not answer /list)"
 fi
 
 # Create status message

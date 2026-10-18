@@ -21,14 +21,22 @@ _use_rcon() {
 
 # ── RCON transport ──
 
-_rcon_send() {
-  local cmd="$1"
+# _rcon_send_timeout <timeout-ms|""> <command>
+# An empty timeout keeps rcon.js's default.
+_rcon_send_timeout() {
+  local timeout_ms="$1" cmd="$2"
+  local opts=()
   # Strip leading / for RCON (RCON doesn't use /)
   cmd="${cmd#/}"
-  # Pass the password via the environment, not as an argv element — argv is
+  [[ -n "$timeout_ms" ]] && opts+=("--timeout-ms=$timeout_ms")
+  # Pass the password via the environment, not as an argv element: argv is
   # world-readable through `ps` / /proc/<pid>/cmdline.
   RCON_PASSWORD="$RCON_PASSWORD" \
-    node "$_SC_DIR/rcon.js" "${RCON_HOST:-localhost}" "${RCON_PORT:-25575}" "$cmd" 2>/dev/null
+    node "$_SC_DIR/rcon.js" "${opts[@]}" "${RCON_HOST:-localhost}" "${RCON_PORT:-25575}" "$cmd" 2>/dev/null
+}
+
+_rcon_send() {
+  _rcon_send_timeout "" "$1"
 }
 
 # ── Screen transport ──
@@ -148,6 +156,36 @@ send_command() {
   fi
 }
 
+# send_command_strict <command> [rcon-timeout-ms]
+# For commands whose success matters (the save commands): an RCON error or
+# timeout is a failure, and the command is not typed into the console a second
+# time, which would queue a second save behind a slow first one.
+send_command_strict() {
+  local command="$1" timeout_ms="${2:-}"
+
+  if [[ "$command" != /* ]]; then
+    command="/$command"
+  fi
+
+  if _use_rcon; then
+    local response
+    response=$(_rcon_send_timeout "$timeout_ms" "$command" 2>&1) || {
+      echo "[ERROR] RCON did not confirm: $command" >&2
+      return 1
+    }
+    if [[ -n "$response" ]]; then
+      echo "$response"
+    fi
+    return 0
+  fi
+
+  if ! session_running; then
+    echo "Screen session '$INSTANCE_NAME' is not running. Cannot send command."
+    return 1
+  fi
+  _screen_send "$command"
+}
+
 # ── Convenience functions ──
 
 send_message() {
@@ -156,7 +194,7 @@ send_message() {
 }
 
 disable_auto_save() {
-  send_command "/save-off"
+  send_command_strict "/save-off"
 }
 
 enable_auto_save() {
@@ -186,62 +224,64 @@ strip_log_prefix() {
 
 # ── Player info ──
 
-get_player_list() {
-  if _use_rcon; then
-    local response
-    response=$(_rcon_send "list" 2>/dev/null) || return 1
+# The server's own answer to /list in the log: its bracketed tags, then the
+# sentence at the start of the message. A chat line starts with <name> and
+# /say with [Server], so neither can pass for it.
+_LIST_REPLY_RE='^(\[[^]]*\][[:space:]]*)+: There are [0-9]+(/| of a max of )[0-9]+ players online'
 
-    # RCON returns the full response directly
-    local player_list
-    player_list=$(echo "$response" | sed -n 's/.*players online:\s*\(.*\)/\1/p')
-    if [[ -n "$player_list" ]]; then
-      echo "$player_list" | sed 's/, */, /g' | sed 's/^ *//;s/ *$//'
-    fi
-    return 0
-  fi
-
-  # Screen fallback
-  if ! session_running; then
-    echo "Screen session '$INSTANCE_NAME' is not running. Cannot get player list."
-    return 1
-  fi
-
-  if ! send_command "/list"; then
-    echo "Failed to get player list."
-    return 1
-  fi
-
-  sleep 0.5
-
-  local log_line
-  log_line=$(read_log | grep -E "There are [0-9]+(/[0-9]+| of a max of [0-9]+) players online" | tail -n 1)
-
-  if [[ -z "$log_line" ]]; then
-    return 0
-  fi
-
-  local player_list
-  player_list=$(echo "$log_line" | sed -n 's/.*players online:\s*\(.*\)/\1/p')
-
-  if [[ -z "$player_list" ]]; then
-    local next_line
-    next_line=$(read_log | grep -A1 -F "$log_line" | tail -n 1)
-    player_list=$(strip_log_prefix "$next_line")
-  fi
-
-  if [[ -n "$player_list" ]]; then
-    echo "$player_list" | sed 's/, */, /g' | sed 's/^ *//;s/ *$//'
-  fi
+# _list_reply_since <byte-offset>
+# The last /list answer written to the log after the offset, if any.
+_list_reply_since() {
+  local offset="$1" size
+  [[ -f "$LOG_FILE" ]] || return 0
+  size=$(_log_size)
+  (( size < offset )) && offset=0
+  tail -c +"$((offset + 1))" "$LOG_FILE" 2>/dev/null | grep -E "$_LIST_REPLY_RE" | tail -n 1 || true
 }
 
-get_player_count() {
-  local player_list
-  player_list=$(get_player_list 2>/dev/null)
-  if [[ -z "$player_list" ]]; then
-    echo 0
+# _query_players
+# Prints "<count><TAB><names>". Fails when the server's answer could not be
+# read: callers must treat that as "players may be online", never as zero.
+_query_players() {
+  local line="" offset i
+  local re='There are ([0-9]+)(/| of a max of )[0-9]+ players online:?[[:space:]]*(.*)$'
+
+  if _use_rcon; then
+    line=$(_rcon_send "list") || return 1
   else
-    echo "$player_list" | tr ',' '\n' | sed '/^\s*$/d' | wc -l
+    session_running || return 1
+    offset=$(_log_size)
+    send_command "/list" > /dev/null || return 1
+    # Read from the offset recorded before the command, so an older answer
+    # or a slow reply is not mistaken for this one.
+    for ((i = 0; i < 20; i++)); do
+      sleep 0.5
+      line=$(_list_reply_since "$offset")
+      [[ -n "$line" ]] && break
+    done
   fi
+
+  [[ -n "$line" && "$line" =~ $re ]] || return 1
+  local names="${BASH_REMATCH[3]}"
+  names=$(echo "$names" | sed 's/, */, /g;s/^ *//;s/ *$//')
+  printf '%s\t%s\n' "${BASH_REMATCH[1]}" "$names"
+}
+
+# Prints the names of the players online, comma separated; nothing when none.
+# Fails when the server could not be asked.
+get_player_list() {
+  local info
+  info=$(_query_players) || return 1
+  local names="${info#*$'\t'}"
+  [[ -n "$names" ]] && echo "$names"
+  return 0
+}
+
+# Prints the number of players online. Fails when the server could not be asked.
+get_player_count() {
+  local info
+  info=$(_query_players) || return 1
+  echo "${info%%$'\t'*}"
 }
 
 # ── Save handling ──
@@ -266,6 +306,8 @@ _log_has_since() {
   tail -c +"$((offset + 1))" "$LOG_FILE" 2>/dev/null | grep -Eq "$pattern"
 }
 
+SAVE_TIMEOUT_SECONDS="${SAVE_TIMEOUT_SECONDS:-120}"
+
 # wait_for_save_completion [timeout-seconds] [log-offset]
 # The offset must be taken BEFORE the save command is sent (see save_and_wait);
 # a save that finishes quickly would otherwise be written before the wait
@@ -276,8 +318,8 @@ wait_for_save_completion() {
   local offset="${2:-}"
 
   if _use_rcon; then
-    # RCON: save-all is synchronous, just wait briefly
-    sleep 2
+    # save-all flush answers over RCON only once it has finished, so the
+    # command's own confirmation (see save_and_wait) is the completion signal.
     echo "Save completed (RCON)."
     return 0
   fi
@@ -309,11 +351,16 @@ wait_for_save_completion() {
 save_and_wait() {
   local offset
   offset=$(_log_size)
-  send_message "Saving the server now to ensure no data is lost..."
+  send_message "Saving the server now to ensure no data is lost..." || true
   # flush (S-009): without it, 1.17+ logs "Saved the game" while chunk
-  # writes are still queued, and a backup can copy torn region files.
-  send_command "/save-all flush"
-  wait_for_save_completion 60 "$offset"
+  # writes are still queued, and a backup can copy torn region files. On a big
+  # or modded world the flush takes longer than rcon.js's default timeout, so
+  # it gets SAVE_TIMEOUT_SECONDS, and a timeout is a failed save.
+  if ! send_command_strict "/save-all flush" "$((SAVE_TIMEOUT_SECONDS * 1000))"; then
+    echo "[ERROR] The server did not confirm the save." >&2
+    return 1
+  fi
+  wait_for_save_completion "$SAVE_TIMEOUT_SECONDS" "$offset"
 }
 
 # ── Countdown ──

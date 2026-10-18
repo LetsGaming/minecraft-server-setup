@@ -402,4 +402,27 @@ test_dangling_jar_links_of_older_archives_are_repaired() {
   assert_file_content "$T/server/server.jar" stored "taken from the stored copy"
 }
 
+# ── --keep-old ───────────────────────────────────────────────────────────────
+
+test_the_replaced_server_files_are_deleted_by_default() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_missing "$T/server.pre-restore" "no copy of the old tree is kept"
+}
+
+test_keep_old_keeps_the_replaced_server_files_and_replaces_an_older_copy() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  mkdir -p "$T/server.pre-restore"
+  echo stale > "$T/server.pre-restore/marker"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y --keep-old
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$T/server/world/level.dat" restored "the archive is live"
+  assert_file_content "$T/server.pre-restore/world/level.dat" current "the previous world is kept"
+  assert_missing "$T/server.pre-restore/marker" "the older kept copy was replaced"
+  assert_contains "$OUT" "$T/server.pre-restore" "says where the old files are"
+}
+
 run_tests

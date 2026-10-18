@@ -48,7 +48,7 @@ VARS
   export INSTANCE_NAME=testinst
   export PATH="$T/bin:$PATH"
   unset TAR_SHIM_FAIL_CREATE TAR_SHIM_FAIL_EXTRACT TAR_SHIM_FAIL_LIST TAR_SHIM_START_SERVER ZSTD_SHIM_FAIL_TEST RSYNC_SHIM_FAIL \
-        SYSTEMCTL_STOP_RC FLOCK_SHIM_BUSY SCREEN_SHIM_SAVE_LOG SCREEN_SHIM_SESSION INSTANCE_LOCK_DIR DU_SHIM_BYTES CURL_SHIM_GATE SYSTEMD_UNIT_DIR BACKUP_UMASK INSTALL_UNITS
+        SYSTEMCTL_STOP_RC FLOCK_SHIM_BUSY SCREEN_SHIM_SAVE_LOG SCREEN_SHIM_LIST_REPLY SCREEN_SHIM_SESSION NODE_SHIM_RCON_RC NODE_SHIM_RCON_OUT SAVE_TIMEOUT_SECONDS INSTANCE_LOCK_DIR DU_SHIM_BYTES CURL_SHIM_GATE SYSTEMD_UNIT_DIR BACKUP_UMASK INSTALL_UNITS
 
   seed_world current
 }
@@ -65,6 +65,26 @@ seed_world() {
 }
 
 server_running() { touch "$SHIM_STATE/screen_running"; }
+
+# use_rcon_shim: switch the fixture to RCON and put a node wrapper on PATH that
+# answers calls to rcon.js (logged as "node <args>") and runs everything else
+# with the real node. NODE_SHIM_RCON_RC is its exit status (default 0) and
+# NODE_SHIM_RCON_OUT what it prints.
+use_rcon_shim() {
+  printf 'USE_RCON="true"\nRCON_PASSWORD="pw"\n' >> "$T/scripts/common/variables.txt"
+  REAL_NODE="$(PATH="${PATH#"$T/bin:"}" command -v node)"
+  export REAL_NODE
+  cat > "$T/bin/node" <<'SH'
+#!/bin/bash
+if [[ "$1" == */rcon.js ]]; then
+  echo "node $*" >> "$SHIM_LOG"
+  [[ -n "${NODE_SHIM_RCON_OUT:-}" ]] && echo "$NODE_SHIM_RCON_OUT"
+  exit "${NODE_SHIM_RCON_RC:-0}"
+fi
+exec "$REAL_NODE" "$@"
+SH
+  chmod +x "$T/bin/node"
+}
 
 # make_archive <dest.tar.zst> <label>: archive of a world tagged <label>, in the
 # gzip container the zstd shim reads.

@@ -223,4 +223,118 @@ test_screen_escape_round_trips_through_real_screen() {
   assert_eq $'say hi^Mop Mallory\nsay $HOME ${HOME}\ntellraw @a {"text":"a\\" b\\\\c"}' "$(cat "$out")" "each line arrives exactly as sent, as one line"
 }
 
+# ── RCON saves are strict ────────────────────────────────────────────────────
+
+test_save_and_wait_gives_the_flush_a_long_rcon_timeout() {
+  setup
+  use_rcon_shim
+  in_scripts save_and_wait > /dev/null 2>&1
+  assert_rc 0 "$?" "a confirmed flush is a successful save"
+  assert_logged "--timeout-ms=120000 localhost 25575 save-all flush" "save-all flush gets the long timeout"
+}
+
+test_an_rcon_timeout_on_save_is_a_failure_and_is_not_retried_through_screen() {
+  setup
+  use_rcon_shim
+  server_running
+  export NODE_SHIM_RCON_RC=1
+  OUT="$(in_scripts save_and_wait 2>&1)"; RC=$?
+  assert_rc 1 "$RC" "the save failed"
+  assert_contains "$OUT" "did not confirm" "says so"
+  assert_not_logged "stuff /save-all" "the command was not typed into the console as well"
+}
+
+test_disable_auto_save_does_not_fall_back_to_screen() {
+  setup
+  use_rcon_shim
+  server_running
+  export NODE_SHIM_RCON_RC=1
+  in_scripts disable_auto_save > /dev/null 2>&1
+  assert_nonzero "$?" "save-off failed"
+  assert_not_logged "save-off" "no console fallback for save-off"
+}
+
+test_enable_auto_save_still_falls_back_to_screen() {
+  setup
+  use_rcon_shim
+  server_running
+  export NODE_SHIM_RCON_RC=1
+  in_scripts enable_auto_save > /dev/null 2>&1
+  assert_logged "save-on" "save-on is retried through the console"
+}
+
+# ── player counts ────────────────────────────────────────────────────────────
+
+test_the_player_count_reads_the_servers_reply_after_the_command() {
+  setup
+  server_running
+  echo "[00:00:00] [Server thread/INFO]: There are 9 of a max of 20 players online: Old" >> "$LOG"
+  export SCREEN_SHIM_SAVE_LOG="$LOG"
+  export SCREEN_SHIM_LIST_REPLY="[00:00:05] [Server thread/INFO]: There are 2 of a max of 20 players online: Alex, Steve"
+  OUT="$(in_scripts get_player_count 2>&1)"; RC=$?
+  assert_rc 0 "$RC" "answered"
+  assert_eq "2" "$OUT" "the count comes from the new reply, not the old line"
+  OUT="$(in_scripts get_player_list 2>&1)"
+  assert_eq "Alex, Steve" "$OUT" "the names too"
+}
+
+test_an_unanswered_list_is_an_unknown_count_not_zero() {
+  setup
+  server_running
+  echo "[00:00:00] [Server thread/INFO]: There are 0 of a max of 20 players online:" >> "$LOG"
+  OUT="$(in_scripts get_player_count 2>&1)"; RC=$?
+  assert_nonzero "$RC" "no fresh reply: the count is unknown"
+  assert_eq "" "$OUT" "nothing is printed as a count"
+}
+
+test_a_chat_line_cannot_pass_for_the_list_reply() {
+  setup
+  server_running
+  export SCREEN_SHIM_SAVE_LOG="$LOG"
+  export SCREEN_SHIM_LIST_REPLY="[00:00:05] [Server thread/INFO]: <Mallory> There are 0 of a max of 20 players online:"
+  in_scripts get_player_count > /dev/null 2>&1
+  assert_nonzero "$?" "chat is not the server's answer"
+}
+
+test_the_player_count_over_rcon_is_parsed_from_the_reply() {
+  setup
+  use_rcon_shim
+  export NODE_SHIM_RCON_OUT="There are 3 of a max of 20 players online: A, B, C"
+  OUT="$(in_scripts get_player_count 2>&1)"
+  assert_eq "3" "$OUT" "count from the RCON reply"
+  export NODE_SHIM_RCON_RC=1
+  in_scripts get_player_count > /dev/null 2>&1
+  assert_nonzero "$?" "an RCON error is an unknown count"
+}
+
+test_smart_restart_warns_when_the_player_count_is_unknown() {
+  setup
+  server_running
+  run_script smart_restart.sh --warn=5
+  assert_rc 0 "$RC" "the restart goes ahead"
+  assert_contains "$OUT" "Could not tell how many players" "says the count is unknown"
+  assert_not_contains "$OUT" "No players online. Restarting immediately" "never takes the empty-server shortcut"
+  assert_logged "systemctl restart testinst.service" "restarted after the warning"
+}
+
+test_smart_restart_restarts_at_once_when_zero_players_are_confirmed() {
+  setup
+  server_running
+  export SCREEN_SHIM_SAVE_LOG="$LOG"
+  export SCREEN_SHIM_LIST_REPLY="[00:00:05] [Server thread/INFO]: There are 0 of a max of 20 players online:"
+  run_script smart_restart.sh --warn=5
+  assert_contains "$OUT" "No players online. Restarting immediately" "a confirmed zero skips the warning"
+}
+
+test_the_lock_dir_is_the_same_whatever_the_runtime_dir() {
+  setup
+  unset INSTANCE_LOCK_DIR
+  export XDG_RUNTIME_DIR="$T/xdg"
+  mkdir -p "$XDG_RUNTIME_DIR"
+  in_scripts acquire_instance_lock maintenance > /dev/null 2>&1
+  assert_exists "$T/scripts/.locks/maintenance_testinst.lock" "the per-instance lock folder is used"
+  assert_missing "$T/xdg/minecraft" "the runtime dir is not"
+  unset XDG_RUNTIME_DIR
+}
+
 run_tests

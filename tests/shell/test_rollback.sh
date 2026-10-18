@@ -116,4 +116,22 @@ test_rollback_replaces_dotfiles() {
   assert_exists "$T/server/.restored_dotfile" "archive dotfile present"
 }
 
+test_keep_old_keeps_the_replaced_server_files() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
+  server_running
+  run_script "$ROLLBACK" --y --keep-old
+  assert_rc 0 "$RC" "rollback exits 0"
+  assert_file_content "$T/server/world/level.dat" before-update "world restored"
+  assert_file_content "$T/server.pre-restore/world/level.dat" current "the previous world is kept"
+}
+
+test_rollback_deletes_the_replaced_files_without_keep_old() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_missing "$T/server.pre-restore" "nothing kept by default"
+}
+
 run_tests

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Minimal Minecraft RCON client
-// Usage: node rcon.js <host> <port> <password> <command>
+// Usage: node rcon.js [--timeout-ms=N] <host> <port> <password> <command>
 
 const net = require("net");
 
@@ -132,12 +132,18 @@ function rconCommand(host, port, password, command, timeoutMs = 5000) {
 }
 
 // CLI usage
-//   Preferred:  RCON_PASSWORD=secret node rcon.js <host> <port> <command...>
-//   Legacy:     node rcon.js <host> <port> <password> <command...>
+//   Preferred:  RCON_PASSWORD=secret node rcon.js [--timeout-ms=N] <host> <port> <command...>
+//   Legacy:     node rcon.js [--timeout-ms=N] <host> <port> <password> <command...>
 // Passing the password via the environment keeps it out of the process
 // argument list, which is world-readable via `ps` / /proc/<pid>/cmdline.
 if (require.main === module) {
-  const argv = process.argv.slice(2);
+  let timeoutMs = 5000;
+  const argv = [];
+  for (const arg of process.argv.slice(2)) {
+    const m = /^--timeout-ms=(\d+)$/.exec(arg);
+    if (m && Number(m[1]) > 0) timeoutMs = Number(m[1]);
+    else argv.push(arg);
+  }
   const envPassword = process.env.RCON_PASSWORD;
 
   let host, port, password, cmdParts;
@@ -157,7 +163,7 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  rconCommand(host, parseInt(port), password, command)
+  rconCommand(host, parseInt(port), password, command, timeoutMs)
     .then((response) => {
       if (response.trim()) console.log(response.trim());
       process.exit(0);
