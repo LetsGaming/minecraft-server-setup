@@ -1,6 +1,8 @@
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const axios = require("axios");
+const { assertHttps, httpsOnlyRedirect } = require("../../scripts/update/lib/download");
 
 const MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
@@ -25,12 +27,51 @@ function formatBytes(bytes, decimals = 2) {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
-function downloadFile(url, fileName, totalSize) {
+const DOWNLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const DOWNLOAD_START_TIMEOUT_MS = 30_000;
+const DOWNLOAD_DEADLINE_MS = 30 * 60 * 1000;
+
+/**
+ * Download `url` to `fileName` through a temporary file next to it, so a failed
+ * or rejected download never leaves a partial file at the final name.
+ *
+ * It stops a stalled connection (a timeout for the response to start and a
+ * deadline for the whole transfer), a body over `maxBytes`, a stream that ends
+ * short of `totalSize`, and a SHA-1 that differs from the one the API gave.
+ *
+ * @param {string} url
+ * @param {string} fileName
+ * @param {number} [totalSize]  bytes the API says the file has
+ * @param {{ sha1?: string, maxBytes?: number }} [opts]
+ */
+function downloadFile(url, fileName, totalSize, opts = {}) {
+  const { sha1 = null, maxBytes = DOWNLOAD_MAX_BYTES } = opts;
+  const tempPath = `${fileName}.part`;
+  const fail = (reject, err) => {
+    fs.rm(tempPath, { force: true }, () => reject(err));
+  };
   return new Promise((resolve, reject) => {
-    axios
-      .get(url, { responseType: "stream" })
+    let pending;
+    try {
+      assertHttps(url);
+      fs.rmSync(tempPath, { force: true });
+      pending = axios.get(url, {
+        responseType: "stream",
+        timeout: DOWNLOAD_START_TIMEOUT_MS,
+        maxContentLength: maxBytes,
+        maxBodyLength: maxBytes,
+        maxRedirects: 5,
+        beforeRedirect: httpsOnlyRedirect,
+        signal: AbortSignal.timeout(DOWNLOAD_DEADLINE_MS),
+      });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    pending
       .then((response) => {
-        const writer = fs.createWriteStream(fileName);
+        const writer = fs.createWriteStream(tempPath, { flags: "wx", mode: 0o644 });
+        const hash = sha1 ? crypto.createHash("sha1") : null;
         let downloaded = 0;
         let lastProgress = 0;
         const startTime = Date.now();
@@ -39,6 +80,11 @@ function downloadFile(url, fileName, totalSize) {
 
         response.data.on("data", (chunk) => {
           downloaded += chunk.length;
+          hash?.update(chunk);
+          if (downloaded > maxBytes) {
+            response.data.destroy(new Error(`Download of ${url} exceeded the ${maxBytes} byte limit.`));
+            return;
+          }
           if (totalSize) {
             const progress = ((downloaded / totalSize) * 100).toFixed(2);
 
@@ -58,14 +104,22 @@ function downloadFile(url, fileName, totalSize) {
         // a handler the partial file counted as a finished download (S-020).
         response.data.on("error", (err) => {
           writer.destroy();
-          fs.rm(fileName, { force: true }, () => {});
-          reject(err);
+          fail(reject, err);
         });
 
         writer.on("finish", () => {
           if (totalSize && downloaded < totalSize) {
-            fs.rm(fileName, { force: true }, () => {});
-            reject(new Error(`Download of ${url} ended after ${downloaded} of ${totalSize} bytes.`));
+            fail(reject, new Error(`Download of ${url} ended after ${downloaded} of ${totalSize} bytes.`));
+            return;
+          }
+          if (hash && hash.digest("hex") !== sha1.toLowerCase()) {
+            fail(reject, new Error(`Download of ${url} failed sha1 verification.`));
+            return;
+          }
+          try {
+            fs.renameSync(tempPath, fileName);
+          } catch (err) {
+            fail(reject, err);
             return;
           }
           console.log("\nDownload complete!");
@@ -74,12 +128,12 @@ function downloadFile(url, fileName, totalSize) {
 
         writer.on("error", (err) => {
           console.error("Error writing file:", err);
-          reject(err);
+          fail(reject, err);
         });
       })
       .catch((err) => {
         console.error("Download error:", err.response?.data || err.message);
-        reject(err);
+        fail(reject, err);
       });
   });
 }

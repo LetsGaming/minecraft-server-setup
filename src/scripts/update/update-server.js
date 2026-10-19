@@ -31,6 +31,7 @@ const path = require("path");
 const { readManifest, writeManifest } = require("./lib/manifest");
 const readline = require("readline");
 const { spawn, execFile, execSync, execFileSync } = require("child_process");
+const { jabbaInstallCommand } = require("./lib/jabba");
 const axios = require("axios");
 // S-015: a half-open connection must not hang this script forever, least of
 // all during an upgrade, with the server stopped and the lock held. File
@@ -371,8 +372,11 @@ async function ensureJavaVersion(mcVersion) {
       );
     const candidate = candidates[0];
     console.log(`Installing ${candidate}...`);
-    execSync(
-      `bash -c '. ~/.jabba/jabba.sh && jabba install ${candidate} && jabba use ${candidate}'`,
+    // The name is Jabba's remote data: checked, and passed as an argument.
+    const [file, fileArgs] = jabbaInstallCommand(candidate);
+    execFileSync(
+      file,
+      fileArgs,
       // S-015: a JDK install that stalls must not hold the upgrade forever.
       { stdio: childStdio(), timeout: 20 * 60_000 },
     );
@@ -590,8 +594,9 @@ async function interactiveMode({ vars, serverPath, args }) {
   console.log(`Target version: ${versionId}`);
   console.log(`Mod loader: ${modLoader}`);
 
+  // Installing the JDK changes nothing about the server; pointing the server at
+  // it waits until the update is confirmed and backed up.
   const { javaBin } = await ensureJavaVersion(versionId);
-  if (setServerJava(serverPath, javaBin)) console.log(`The server now starts with ${javaBin}`);
 
   console.log("\nChecking mod compatibility...");
   const updateInfo = await runCheckUpdatesJSON(versionId);
@@ -629,6 +634,7 @@ async function interactiveMode({ vars, serverPath, args }) {
     process.exit(1);
   }
 
+  if (setServerJava(serverPath, javaBin)) console.log(`The server now starts with ${javaBin}`);
   await swapServer({ modLoader, versionId, metadataUrl, serverPath });
   const modUpdateFailed = await runModUpdate(versionId);
   for (const f of modUpdateFailed) console.warn(`[WARN] ${f.slug} was not updated: ${f.error}`);

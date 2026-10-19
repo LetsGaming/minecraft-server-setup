@@ -56,6 +56,13 @@ su_run() {
   "$@"
 }
 
+# A level-name that is one plain folder name: no separator, no "..", no leading
+# dot or dash.
+su_valid_level() {
+  local re='^[A-Za-z0-9_][A-Za-z0-9._ -]{0,63}$'
+  [[ "$1" =~ $re && "$1" != *..* ]]
+}
+
 su_valid_name() { [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; }
 
 # A path that sudoers and a shell can both take literally: no space, quote, comma,
@@ -146,26 +153,58 @@ $svc ALL=($owner) NOPASSWD: MCS_${id}_SCRIPTS, MCS_${id}_SCREEN
 EOF
 }
 
-# setfacl calls for one path. Args: mode(r|rw) recursive(yes|no) path
+# True when <target> lies under <root>, no path component below <root> is a
+# symlink, and its resolved location is still under the resolved <root>. The
+# server user owns these trees and can swap any entry for a symlink.
+su_contained() {
+  local root="${1%/}" target="${2%/}" rel segment cur real_root real
+  [[ "$target" == "$root" || "$target" == "$root"/* ]] || return 1
+  rel="${target#"$root"}"
+  cur="$root"
+  while [[ -n "$rel" ]]; do
+    rel="${rel#/}"
+    segment="${rel%%/*}"
+    [[ -n "$segment" ]] || break
+    [[ "$segment" != . && "$segment" != .. ]] || return 1
+    cur="$cur/$segment"
+    [[ ! -L "$cur" ]] || return 1
+    if [[ "$rel" == */* ]]; then rel="/${rel#*/}"; else rel=""; fi
+  done
+  real_root="$(realpath -e -- "$root" 2> /dev/null)" || return 1
+  real="$(realpath -e -- "$target" 2> /dev/null)" || return 1
+  [[ "$real" == "$real_root" || "$real" == "$real_root"/* ]]
+}
+
+SU_REFUSED=0
+
+# setfacl calls for one path. Args: mode(r|rw) recursive(yes|no) path root
+# Never follows a symlink: the path must stay inside <root> (su_contained) and
+# setfacl runs with -P, so links met while recursing are skipped.
 su_acl() {
-  local mode="$1" recursive="$2" target="$3"
+  local mode="$1" recursive="$2" target="$3" root="$4"
   local perm="rX"
   [[ "$mode" == rw ]] && perm="rwX"
-  [[ -e "$target" ]] || return 0
+  [[ -e "$target" || -L "$target" ]] || return 0
+  if ! su_contained "$root" "$target"; then
+    su_say "Refusing $target: it is a symlink or leads outside $root."
+    SU_REFUSED=$((SU_REFUSED + 1))
+    return 0
+  fi
   if [[ "$recursive" == yes ]]; then
-    su_run setfacl -R -m "u:$SU_USER:$perm" "$target"
-    [[ -d "$target" ]] && su_run setfacl -R -d -m "u:$SU_USER:$perm" "$target"
+    su_run setfacl -R -P -m "u:$SU_USER:$perm" "$target"
+    [[ -d "$target" ]] && su_run setfacl -R -P -d -m "u:$SU_USER:$perm" "$target"
   else
-    su_run setfacl -m "u:$SU_USER:$perm" "$target"
+    su_run setfacl -P -m "u:$SU_USER:$perm" "$target"
   fi
   return 0
 }
 
 # x on every folder from the install root up, so the user can reach what it may read.
 su_traverse() {
-  local dir="$1"
+  local dir
+  dir="$(realpath -e -- "$1" 2> /dev/null)" || return 0
   while [[ "$dir" != "/" && -n "$dir" ]]; do
-    su_run setfacl -m "u:$SU_USER:x" "$dir"
+    su_run setfacl -P -m "u:$SU_USER:x" "$dir"
     dir="$(dirname "$dir")"
   done
 }
@@ -185,30 +224,32 @@ su_apply_acls() {
   su_traverse "$base"
   [[ -n "$backups_dir" && "$backups_dir" != none ]] && su_traverse "$backups_dir"
 
-  su_acl r yes "$server_dir"
-  su_acl r yes "$scripts_dir"
-  su_acl r yes "$api_dir"
+  su_acl r yes "$server_dir" "$server_dir"
+  su_acl r yes "$scripts_dir" "$scripts_dir"
+  su_acl r yes "$api_dir" "$api_dir"
 
   # What the wrapper writes itself.
   local root
   for root in "${SU_CONFIG_ROOTS[@]}"; do
-    su_acl rw yes "$server_dir/$root"
+    su_acl rw yes "$server_dir/$root" "$server_dir"
   done
-  su_acl rw no "$server_dir/server.properties"
+  su_acl rw no "$server_dir/server.properties" "$server_dir"
   if [[ ! -d "$server_dir/$SU_SNAPSHOT_DIR" ]]; then
     su_run install -d -m 0750 -o "$SU_OWNER" "$server_dir/$SU_SNAPSHOT_DIR"
   fi
-  su_acl rw yes "$server_dir/$SU_SNAPSHOT_DIR"
-  su_acl rw yes "$server_dir/$SU_LEVEL/stats"
-  # The wrapper's own config holds its API key; a later chmod 600 would zero the ACL mask.
-  if [[ -f "$api_dir/api-server-config.json" ]]; then
-    su_run setfacl -m "u:$SU_USER:r" "$api_dir/api-server-config.json"
+  su_acl rw yes "$server_dir/$SU_SNAPSHOT_DIR" "$server_dir"
+  if su_valid_level "$SU_LEVEL"; then
+    su_acl rw yes "$server_dir/$SU_LEVEL/stats" "$server_dir"
+  else
+    su_say "Not granting write on the stats folder: level-name '$SU_LEVEL' is not a plain folder name."
   fi
+  # The wrapper's own config holds its API key; a later chmod 600 would zero the ACL mask.
+  su_acl r no "$api_dir/api-server-config.json" "$api_dir"
   if [[ -n "$backups_dir" && "$backups_dir" != none ]]; then
-    su_acl r yes "$backups_dir"
+    su_acl r yes "$backups_dir" "$backups_dir"
     # Deleting an archive needs write on the folder that holds it, not on the file.
-    su_run find "$backups_dir" -type d -exec setfacl -m "u:$SU_USER:rwx" {} +
-    su_run setfacl -d -m "u:$SU_USER:rwx" "$backups_dir"
+    su_run find "$backups_dir" -type d -exec setfacl -P -m "u:$SU_USER:rwx" {} +
+    su_run setfacl -P -d -m "u:$SU_USER:rwx" "$backups_dir"
   fi
 }
 
@@ -317,13 +358,16 @@ su_main() {
   local base api_dir
   base="$(dirname "$(dirname "$SU_SCRIPTS_DIR")")"
   api_dir="$base/services/api-server"
-  SU_LEVEL="$(sed -n 's/^level-name=//p' "$server_dir/server.properties" 2> /dev/null | head -n 1)"
+  SU_LEVEL="$(sed -n 's/^level-name=//p' "$server_dir/server.properties" 2> /dev/null | head -n 1 | tr -d '\r')"
   SU_LEVEL="${SU_LEVEL:-world}"
 
   su_ensure_user
   su_apply_acls "$server_dir" "$backups_dir" "$SU_SCRIPTS_DIR" "$api_dir" "$base"
   su_patch_unit
   su_install_sudoers
+  if [[ "$SU_REFUSED" -gt 0 ]]; then
+    su_die "$SU_REFUSED path(s) were skipped because they are symlinks or leave the instance folders. Check them (a mod may have planted them), then run this again." 1
+  fi
 
   su_say "Done. Point the wrapper's unit at User=$SU_USER (create_api_server_service.js does this when API_SERVER.SERVICE_USER is set)."
 }

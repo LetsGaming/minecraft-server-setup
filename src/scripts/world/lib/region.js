@@ -24,6 +24,8 @@ const CHUNKS = 1024;
 
 const COMPRESSION = { GZIP: 1, ZLIB: 2, NONE: 3, LZ4: 4 };
 const EXTERNAL_FLAG = 128;
+/** Most bytes a chunk may inflate to, or an external (.mcc) chunk file may hold. */
+const MAX_CHUNK_BYTES = 64 * 1024 * 1024;
 
 /** r.X.Z.mca to {x, z}, or null for any other name. */
 function parseRegionName(name) {
@@ -80,16 +82,24 @@ function readChunk(buf, header, slot, dir, regionX, regionZ) {
     const cx = regionX * 32 + slotX(slot);
     const cz = regionZ * 32 + slotZ(slot);
     try {
-      payload = fs.readFileSync(path.join(dir, externalName(cx, cz)));
+      const file = path.join(dir, externalName(cx, cz));
+      if (fs.statSync(file).size > MAX_CHUNK_BYTES) return { ok: false, reason: "corrupt" };
+      payload = fs.readFileSync(file);
     } catch {
       return { ok: false, reason: "external" };
     }
   }
 
   try {
-    if (type === COMPRESSION.ZLIB) return { ok: true, data: zlib.inflateSync(payload) };
-    if (type === COMPRESSION.GZIP) return { ok: true, data: zlib.gunzipSync(payload) };
-    if (type === COMPRESSION.NONE) return { ok: true, data: Buffer.from(payload) };
+    // A chunk is a few hundred KB; a stream that inflates past the cap is a
+    // decompression bomb or damage, and either way the chunk is left alone.
+    const limit = { maxOutputLength: MAX_CHUNK_BYTES };
+    if (type === COMPRESSION.ZLIB) return { ok: true, data: zlib.inflateSync(payload, limit) };
+    if (type === COMPRESSION.GZIP) return { ok: true, data: zlib.gunzipSync(payload, limit) };
+    if (type === COMPRESSION.NONE) {
+      if (payload.length > MAX_CHUNK_BYTES) return { ok: false, reason: "corrupt" };
+      return { ok: true, data: Buffer.from(payload) };
+    }
   } catch {
     return { ok: false, reason: "corrupt" };
   }
@@ -314,4 +324,5 @@ module.exports = {
   removeStaleTemps,
   sectorOffset,
   sectorCount,
+  MAX_CHUNK_BYTES,
 };

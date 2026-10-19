@@ -156,8 +156,12 @@ swap_recover() {
 # is either the old contents or the new ones, never a half-written mix. If the
 # second rename fails the original is moved back. Both paths must live on the
 # same filesystem (the staging directory is created next to the server dir).
+#
+# With a third argument "keep", the replaced tree is not deleted but renamed to
+# <server_dir>.pre-restore (a copy from an earlier run is replaced), so a wrong
+# archive can be undone by hand. Without it the old tree is deleted.
 swap_server_dir() {
-  local staging="$1" server="${2%/}" old
+  local staging="$1" server="${2%/}" keep="${3:-}" old
   old="$server.pre-restore.$$"
 
   _SWAP_SERVER="$server"
@@ -175,6 +179,15 @@ swap_server_dir() {
     return 1
   fi
   _SWAP_OLD=""
+  if [[ "$keep" == keep && -e "$old" ]]; then
+    rm -rf -- "$server.pre-restore"
+    if mv -- "$old" "$server.pre-restore"; then
+      echo "[INFO] The previous server files were kept at: $server.pre-restore"
+    else
+      echo "[WARN] Could not rename the previous server files; they are at: $old" >&2
+    fi
+    return 0
+  fi
   rm -rf -- "$old"
 }
 

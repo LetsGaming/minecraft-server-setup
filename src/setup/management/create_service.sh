@@ -14,8 +14,22 @@ set -e
 : "${USER:?USER not set}"
 
 INSTANCE_DIR="$MAIN_DIR/$TARGET_DIR_NAME/instances/$INSTANCE_NAME"
+SCRIPTS_DIR="$MAIN_DIR/$TARGET_DIR_NAME/scripts/$INSTANCE_NAME"
 START_SCRIPT="$INSTANCE_DIR/start.sh"
-SERVICE_FILE="/etc/systemd/system/$INSTANCE_NAME.service"
+SERVICE_FILE="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/$INSTANCE_NAME.service"
+
+# The backups folder, as the deployed scripts know it.
+BACKUPS_DIR="$(sed -n 's/^BACKUPS_PATH="\(.*\)"$/\1/p' "$SCRIPTS_DIR/common/variables.txt" 2>/dev/null | head -n 1)"
+[ -n "$BACKUPS_DIR" ] || BACKUPS_DIR="$MAIN_DIR/$TARGET_DIR_NAME/backups/$INSTANCE_NAME"
+
+# systemd splits these on whitespace; a folder with one is left out of the list.
+WRITABLE_PATHS=""
+for dir in "$INSTANCE_DIR" "$BACKUPS_DIR"; do
+  case "$dir" in
+    *[[:space:]]*|none) ;;
+    *) WRITABLE_PATHS="$WRITABLE_PATHS -$dir" ;;
+  esac
+done
 
 SERVICE_CONTENT="[Unit]
 Description=$INSTANCE_NAME Server
@@ -39,6 +53,17 @@ ExecStart=/usr/bin/screen -DmS $INSTANCE_NAME /usr/bin/bash $START_SCRIPT
 Restart=always
 RestartSec=3s
 LimitNOFILE=4096
+# A big world can take longer than the 90 s default to write on the way down,
+# and a SIGKILL in the middle of that corrupts region files. The ExecStop flush
+# runs inside this window.
+TimeoutStopSec=300
+ExecStop=/usr/bin/bash $SCRIPTS_DIR/common/graceful_stop.sh
+# Hardening that cannot get in the way of screen (setgid on Debian, so
+# NoNewPrivileges stays off) or of the wrapper's sudo calls, which run outside
+# this unit. The leading - ignores a folder that does not exist yet.
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=${WRITABLE_PATHS# }
 
 [Install]
 WantedBy=multi-user.target

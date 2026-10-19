@@ -266,7 +266,7 @@ test_changed_unit_shows_a_diff_before_installing() {
   setup
   unit_archive "ExecStart=/bin/new"
   echo "ExecStart=/bin/old" > "$T/units/testinst.service"
-  run_script "$RESTORE" --archive --file minecraft_backup_u.tar.zst --y --install-units
+  run_script_tty "$RESTORE" --archive --file minecraft_backup_u.tar.zst --y --install-units
   assert_rc 0 "$RC" "restore succeeds"
   assert_contains "$OUT" "-ExecStart=/bin/old" "diff shows the installed line"
   assert_contains "$OUT" "+ExecStart=/bin/new" "diff shows the incoming line"
@@ -278,7 +278,7 @@ test_identical_unit_is_left_alone() {
   setup
   unit_archive "ExecStart=/bin/same"
   echo "ExecStart=/bin/same" > "$T/units/testinst.service"
-  run_script "$RESTORE" --archive --file minecraft_backup_u.tar.zst --y --install-units
+  run_script_tty "$RESTORE" --archive --file minecraft_backup_u.tar.zst --y --install-units
   assert_contains "$OUT" "is unchanged" "unchanged unit reported"
   assert_not_logged "sudo cp" "nothing copied"
   assert_not_logged "daemon-reload" "no reload"
@@ -330,6 +330,17 @@ test_without_a_terminal_a_file_and_y_are_required() {
   assert_contains "$OUT" "needs both --file" "says what is missing"
   run_script "$RESTORE" --file minecraft_backup_a.tar.zst
   assert_rc 1 "$RC" "no --y: refused rather than reading a y from stdin"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_scripts_and_units_flags_are_refused_without_a_terminal() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y --with-scripts
+  assert_rc 1 "$RC" "--with-scripts is refused"
+  assert_contains "$OUT" "need a terminal" "says why"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y --install-units
+  assert_rc 1 "$RC" "--install-units is refused"
   assert_file_content "$T/server/world/level.dat" current "world untouched"
 }
 
@@ -389,6 +400,29 @@ test_dangling_jar_links_of_older_archives_are_repaired() {
   assert_rc 0 "$RC" "restore exits 0"
   if [[ -f "$T/server/server.jar" && ! -L "$T/server/server.jar" ]]; then _ok "server.jar is a regular file"; else _bad "server.jar is a regular file" "$(ls -l "$T/server/server.jar" 2>&1)"; fi
   assert_file_content "$T/server/server.jar" stored "taken from the stored copy"
+}
+
+# ── --keep-old ───────────────────────────────────────────────────────────────
+
+test_the_replaced_server_files_are_deleted_by_default() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_missing "$T/server.pre-restore" "no copy of the old tree is kept"
+}
+
+test_keep_old_keeps_the_replaced_server_files_and_replaces_an_older_copy() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  mkdir -p "$T/server.pre-restore"
+  echo stale > "$T/server.pre-restore/marker"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y --keep-old
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$T/server/world/level.dat" restored "the archive is live"
+  assert_file_content "$T/server.pre-restore/world/level.dat" current "the previous world is kept"
+  assert_missing "$T/server.pre-restore/marker" "the older kept copy was replaced"
+  assert_contains "$OUT" "$T/server.pre-restore" "says where the old files are"
 }
 
 run_tests

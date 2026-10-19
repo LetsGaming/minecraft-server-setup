@@ -1,4 +1,5 @@
-const { execSync } = require("child_process");
+const { execSync, execFileSync } = require("child_process");
+const { jabbaInstallCommand } = require("../../scripts/update/lib/jabba");
 const { JAVA } = require("../../../variables.json");
 const {
   getJavaVersionFor,
@@ -47,10 +48,9 @@ function getLatestJabbaCandidate(javaVersion) {
 function installJava(candidate) {
   try {
     console.log(`Installing Java version: ${candidate}`);
-    execSync(
-      `bash -c '. ~/.jabba/jabba.sh && jabba install ${candidate} && jabba use ${candidate}'`,
-      { stdio: "inherit", timeout: 20 * 60_000 },
-    );
+    // The name is Jabba's remote data: checked, and passed as an argument.
+    const [file, fileArgs] = jabbaInstallCommand(candidate);
+    execFileSync(file, fileArgs, { stdio: "inherit", timeout: 20 * 60_000 });
     console.log(`Java ${candidate} installed and activated.`);
     setServerVariable(candidate);
   } catch (err) {

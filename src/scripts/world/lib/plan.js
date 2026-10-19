@@ -92,7 +92,7 @@ function normalizeSelection(input) {
     const c = [op.x1, op.z1, op.x2, op.z2].map((v) => Math.trunc(v));
     if (!c.every((v) => Number.isFinite(v) && Math.abs(v) <= MAX_COORD)) continue;
     out.ops.push({
-      dimension: op.dimension,
+      dimension: world.normalizeDimensionId(op.dimension),
       mode: op.mode,
       x1: Math.min(c[0], c[2]),
       z1: Math.min(c[1], c[3]),
@@ -104,8 +104,10 @@ function normalizeSelection(input) {
 }
 
 function normalizeParams(input = {}) {
+  // Whole numbers: a fractional buffer or radius would index typed arrays
+  // with fractions, which silently writes nothing.
   const num = (v, d, min, max) => {
-    const n = typeof v === "number" && Number.isFinite(v) ? v : d;
+    const n = typeof v === "number" && Number.isFinite(v) ? Math.round(v) : d;
     return Math.min(max, Math.max(min, n));
   };
   const zones = Array.isArray(input.zones)
@@ -113,7 +115,7 @@ function normalizeParams(input = {}) {
         .filter((z) => z && typeof z.dimension === "string")
         .map((z) => ({
           name: typeof z.name === "string" ? z.name.slice(0, 64) : "",
-          dimension: z.dimension,
+          dimension: world.normalizeDimensionId(z.dimension),
           x1: Math.min(Math.trunc(z.x1), Math.trunc(z.x2)),
           z1: Math.min(Math.trunc(z.z1), Math.trunc(z.z2)),
           x2: Math.max(Math.trunc(z.x1), Math.trunc(z.x2)),
@@ -127,7 +129,9 @@ function normalizeParams(input = {}) {
     playerRadiusChunks: num(input.playerRadiusChunks, DEFAULT_PARAMS.playerRadiusChunks, 0, 512),
     bufferChunks: num(input.bufferChunks, DEFAULT_PARAMS.bufferChunks, 0, 32),
     zones,
-    dimensions: Array.isArray(input.dimensions) ? input.dimensions.filter((d) => typeof d === "string") : null,
+    dimensions: Array.isArray(input.dimensions)
+      ? input.dimensions.filter((d) => typeof d === "string").map(world.normalizeDimensionId)
+      : null,
     selection: normalizeSelection(input.selection),
     buildProtection: BUILD_PROTECTION.includes(input.buildProtection) ? input.buildProtection : DEFAULT_PARAMS.buildProtection,
   };
@@ -135,8 +139,12 @@ function normalizeParams(input = {}) {
 
 const blockToChunk = (b) => Math.floor(b / 16);
 
-/** Chunk-coordinate rectangles that are protected in one dimension. */
-function protectedRects(dimId, params, spawn, players) {
+/**
+ * Chunk-coordinate rectangles that are protected in one dimension: the world
+ * spawn, where players were last seen and where they respawn, chunks kept
+ * loaded with /forceload (`forced`, in chunk coordinates), and drawn zones.
+ */
+function protectedRects(dimId, params, spawn, players, forced = []) {
   const rects = [];
   if (dimId === world.DIMENSION_IDS.OVERWORLD && params.spawnRadiusChunks > 0) {
     const cx = blockToChunk(spawn?.x ?? 0);
@@ -150,9 +158,10 @@ function protectedRects(dimId, params, spawn, players) {
       const cx = blockToChunk(p.x);
       const cz = blockToChunk(p.z);
       const r = params.playerRadiusChunks;
-      rects.push({ kind: "player", x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
+      rects.push({ kind: p.kind === "respawn" ? "respawn" : "player", x1: cx - r, z1: cz - r, x2: cx + r, z2: cz + r });
     }
   }
+  for (const f of forced) rects.push({ kind: "forced", x1: f.x, z1: f.z, x2: f.x, z2: f.z });
   for (const z of params.zones) {
     if (z.dimension === dimId) rects.push({ kind: "zone", name: z.name, x1: z.x1, z1: z.z1, x2: z.x2, z2: z.z2 });
   }
@@ -195,7 +204,7 @@ function heatLevel(minutes) {
  * Read one dimension and classify every chunk. Returns the grid of cells with
  * enough per-chunk data to build the plan and the map.
  */
-function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profile, cacheDir, fresh }) {
+function scanDimension({ dimId, dimDir, params, spawn, players, forced = [], onRegion, profile, cacheDir, fresh }) {
   const signals = params.buildProtection !== "off";
   const thresholdTicks = params.thresholdMinutes * TICKS_PER_MINUTE;
   const regions = listRegions(dimDir);
@@ -252,7 +261,7 @@ function scanDimension({ dimId, dimDir, params, spawn, players, onRegion, profil
   if (cells.size === 0) return { cells, regions: 0, manual: { soft: 0, hard: 0, blocked: 0 } };
 
   // Protected zones first: they turn a would-be deletion into a keep.
-  const rects = protectedRects(dimId, params, spawn, players);
+  const rects = protectedRects(dimId, params, spawn, players, forced);
   const tClassify = profile ? process.hrtime.bigint() : 0n;
   for (const entry of cells.values()) {
     for (const rect of rects) {
@@ -303,17 +312,20 @@ function applySelection(dimId, cells, selection, rects) {
   };
   for (const op of ops) {
     const value = op.mode === "add" ? 1 : 0;
-    // Only regions that exist matter; a rectangle over empty space chooses nothing.
-    for (let rz = Math.floor(op.z1 / 32); rz <= Math.floor(op.z2 / 32); rz++) {
-      for (let rx = Math.floor(op.x1 / 32); rx <= Math.floor(op.x2 / 32); rx++) {
-        if (!cells.has(`${rx},${rz}`)) continue;
-        const bits = bitsOf(rx, rz);
-        const xa = Math.max(op.x1, rx * 32) - rx * 32;
-        const xb = Math.min(op.x2, rx * 32 + 31) - rx * 32;
-        const za = Math.max(op.z1, rz * 32) - rz * 32;
-        const zb = Math.min(op.z2, rz * 32 + 31) - rz * 32;
-        for (let z = za; z <= zb; z++) for (let x = xa; x <= xb; x++) bits[z * 32 + x] = value;
-      }
+    // Walk the regions that exist and intersect each with the rectangle. Walking
+    // the rectangle's own region grid instead costs as many steps as it has
+    // regions, which for a rectangle across the whole coordinate range is
+    // billions, while a world has a few thousand region files.
+    for (const entry of cells.values()) {
+      const rx = entry.rx;
+      const rz = entry.rz;
+      if (op.x2 < rx * 32 || op.x1 > rx * 32 + 31 || op.z2 < rz * 32 || op.z1 > rz * 32 + 31) continue;
+      const bits = bitsOf(rx, rz);
+      const xa = Math.max(op.x1, rx * 32) - rx * 32;
+      const xb = Math.min(op.x2, rx * 32 + 31) - rx * 32;
+      const za = Math.max(op.z1, rz * 32) - rz * 32;
+      const zb = Math.min(op.z2, rz * 32 + 31) - rz * 32;
+      for (let z = za; z <= zb; z++) for (let x = xa; x <= xb; x++) bits[z * 32 + x] = value;
     }
   }
 
@@ -436,9 +448,11 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDi
   const params = normalizeParams(rawParams);
   const worldDir = world.worldDirOf(serverPath);
   const spawn = world.readSpawn(worldDir);
-  const players = world.readPlayerPositions(worldDir);
+  const issues = {};
+  const players = world.readPlayerPositions(worldDir, issues);
   const warnings = [];
   if (!spawn) warnings.push("spawn_unknown");
+  if (issues.unreadablePlayers?.length) warnings.push("player_files_unreadable");
 
   const dims = world
     .discoverDimensions(worldDir)
@@ -455,12 +469,15 @@ function scanWorld({ serverPath, params: rawParams, onProgress, profile, cacheDi
   const maps = {};
 
   for (const dim of dims) {
+    const forced = world.readForcedChunks(dim.dir, issues);
+    if (issues.forcedUnreadable && !warnings.includes("forced_chunks_unreadable")) warnings.push("forced_chunks_unreadable");
     const { cells, manual } = scanDimension({
       dimId: dim.id,
       dimDir: dim.dir,
       params,
       spawn,
       players,
+      forced,
       onRegion: onProgress,
       profile,
       cacheDir,
@@ -633,7 +650,8 @@ function inspectChunk({ serverPath, plan, dimension, cx, cz }) {
 
   const spawn = world.readSpawn(worldDir);
   const players = world.readPlayerPositions(worldDir);
-  const protectedBy = protectedRects(dimension, plan.params, spawn, players)
+  const forced = world.readForcedChunks(dimDir);
+  const protectedBy = protectedRects(dimension, plan.params, spawn, players, forced)
     .filter((r) => cx >= r.x1 && cx <= r.x2 && cz >= r.z1 && cz <= r.z2)
     .map((r) => ({ kind: r.kind, ...(r.name ? { name: r.name } : {}) }));
 
@@ -697,7 +715,16 @@ function planHash(plan) {
  *
  * @param {{serverPath: string, plan: object, tolerance?: number, onProgress?: Function}} args
  */
-function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = null, reread: rereadOverride = null, timeBudgetMs = 0 }) {
+function applyPlan({
+  serverPath,
+  plan,
+  tolerance = 0.1,
+  onProgress,
+  cacheDir = null,
+  reread: rereadOverride = null,
+  timeBudgetMs = 0,
+  allowUnknownSpawn = false,
+}) {
   if (!plan || typeof plan.hash !== "string" || planHash(plan) !== plan.hash) {
     const err = new Error("The plan does not match its own hash.");
     err.code = "plan_invalid";
@@ -708,6 +735,13 @@ function applyPlan({ serverPath, plan, tolerance = 0.1, onProgress, cacheDir = n
   const reread = touchedKeys(plan);
   const fresh = scanWorld({ serverPath, params: plan.params, cacheDir, fresh: rereadOverride ?? reread });
   const freshDims = new Map(fresh.plan.dimensions.map((d) => [d.id, d]));
+  // Without a readable level.dat the spawn is guessed at the origin, so the
+  // area that should be protected is not, and deleting cannot be undone.
+  if (!allowUnknownSpawn && (plan.warnings?.includes("spawn_unknown") || fresh.plan.warnings.includes("spawn_unknown"))) {
+    const err = new Error("The world spawn could not be read from level.dat, so its protection is a guess.");
+    err.code = "spawn_unknown";
+    throw err;
+  }
 
   // What both scans want gone.
   const todo = [];

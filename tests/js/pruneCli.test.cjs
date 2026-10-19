@@ -22,7 +22,14 @@ function setup() {
   fs.cpSync(path.join(SRC, "update", "lib"), path.join(scripts, "update", "lib"), { recursive: true });
   // The real check is a bash script; "running" answers 1 (down) here.
   fs.writeFileSync(path.join(scripts, "common", "instance_ops.sh"), '#!/bin/bash\n[ "$1" = running ] && exit 1\nexit 0\n');
-  fs.writeFileSync(path.join(scripts, "common", "variables.txt"), `USER="t"\nINSTANCE_NAME="inst"\nSERVER_PATH="${server.dir}"\n`);
+  const backups = path.join(root, "backups");
+  fs.mkdirSync(path.join(backups, "archives", "update"), { recursive: true });
+  const backup = path.join(backups, "archives", "update", "minecraft_backup_2026-01-01_00-00-00.tar.zst");
+  fs.writeFileSync(backup, "archive");
+  fs.writeFileSync(
+    path.join(scripts, "common", "variables.txt"),
+    `USER="t"\nINSTANCE_NAME="inst"\nSERVER_PATH="${server.dir}"\nBACKUPS_PATH="${backups}"\n`,
+  );
 
   fx.writeLevelDat(server.worldDir, 100_000, 100_000);
   const chunks = [0, 1, 2, 3].map((i) => ({
@@ -34,16 +41,16 @@ function setup() {
     fx.writeRegion(server.regionFile(null, folder, 0, 0), 0, 0, chunks);
   }
 
-  const run = (args) => {
+  const run = (args, env = {}) => {
     const res = spawnSync(process.execPath, [path.join(scripts, "world", "prune-chunks.js"), ...args], {
       encoding: "utf8",
       cwd: scripts,
-      env: { ...process.env, MC_OPERATION_LOCK_HELD: "1" },
+      env: { ...process.env, MC_OPERATION_LOCK_HELD: "1", ...env },
     });
     const lines = (res.stdout ?? "").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
     return { code: res.status, lines, last: lines.at(-1), stderr: res.stderr };
   };
-  return { server, scripts, run, cleanup: () => { server.cleanup(); fs.rmSync(root, { recursive: true, force: true }); } };
+  return { server, scripts, run, backup, root, cleanup: () => { server.cleanup(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 
 function withSetup(fn) {
@@ -87,7 +94,7 @@ test("--scan changes nothing in the world", withSetup((s) => {
 
 test("--apply deletes what the plan named", withSetup((s) => {
   const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
-  const r = s.run(["--apply", `--plan=${scan.id}`, "--backed-up"]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]);
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.last.ok, true);
   assert.equal(r.last.deletedChunks, 3);
@@ -115,7 +122,7 @@ test("--apply reports a plan that went stale and deletes nothing", withSetup((s)
     0,
     [0, 1, 2, 3].map((i) => ({ x: i, z: 0, nbt: fx.chunkModern({ x: i, z: 0, inhabited: 90 * MIN }) })),
   );
-  const r = s.run(["--apply", `--plan=${scan.id}`, "--backed-up"]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]);
   assert.equal(r.code, 1);
   assert.equal(r.last.code, "plan_stale");
 }));
@@ -151,7 +158,7 @@ test("invalid parameters are an error, not a silent default", withSetup((s) => {
 test("--apply refuses when the server check is missing", withSetup((s) => {
   const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
   fs.rmSync(path.join(s.scripts, "common", "instance_ops.sh"));
-  const r = s.run(["--apply", `--plan=${scan.id}`, "--backed-up"]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]);
   assert.equal(r.code, 1);
   assert.equal(r.last.code, "server_running");
 }));
@@ -197,7 +204,7 @@ test("--apply on worker threads deletes the same chunks", withSetup((s) => {
     fx.writeRegion(s.server.regionFile(null, "region", rx, rz), rx, rz, list);
   }
   const { last: scan } = s.run(["--scan", "--workers=2", `--params=${JSON.stringify(LEAN)}`]);
-  const r = s.run(["--apply", `--plan=${scan.id}`, "--workers=2", "--backed-up"]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, "--workers=2", `--backup=${s.backup}`]);
   assert.equal(r.code, 0, r.stderr);
   assert.equal(r.last.deletedChunks, scan.totals.delete);
   assert.equal(s.run(["--scan", "--workers=2", `--params=${JSON.stringify(LEAN)}`]).last.totals.delete, 0);
@@ -296,4 +303,148 @@ test("--apply refuses without a backup behind it (S-025)", withSetup((s) => {
   assert.equal(r.last.code, "no_backup");
   const after = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
   assert.equal(after.last.totals.delete, 3, "nothing was deleted");
+}));
+
+// ── the backup behind an apply is a file, not a promise ──
+
+test("--apply does not take a flag or an environment variable as proof of a backup", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const viaEnv = s.run(["--apply", `--plan=${scan.id}`], { MC_PRUNE_BACKED_UP: "1" });
+  assert.equal(viaEnv.last.code, "no_backup");
+  const viaFlag = s.run(["--apply", `--plan=${scan.id}`, "--backed-up"]);
+  assert.equal(viaFlag.last.ok, false);
+  assert.equal(s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]).last.totals.delete, 3, "nothing was deleted");
+}));
+
+test("--apply checks the named backup exists, has content, is in the backups folder and is recent", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const apply = (file) => s.run(["--apply", `--plan=${scan.id}`, `--backup=${file}`]).last;
+  assert.match(apply(path.join(s.root, "backups", "nope.tar.zst")).error, /does not exist/);
+
+  const empty = path.join(s.root, "backups", "empty.tar.zst");
+  fs.writeFileSync(empty, "");
+  assert.match(apply(empty).error, /non-empty/);
+
+  const wrongKind = path.join(s.root, "backups", "notes.txt");
+  fs.writeFileSync(wrongKind, "x");
+  assert.match(apply(wrongKind).error, /\.tar\.zst or \.tar\.gz/);
+
+  const outside = path.join(s.root, "elsewhere.tar.zst");
+  fs.writeFileSync(outside, "x");
+  assert.match(apply(outside).error, /not inside the backups folder/);
+
+  const old = path.join(s.root, "backups", "old.tar.zst");
+  fs.writeFileSync(old, "x");
+  const longAgo = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+  fs.utimesSync(old, longAgo, longAgo);
+  assert.match(apply(old).error, /more than a day old/);
+
+  assert.equal(s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]).last.totals.delete, 3, "nothing was deleted");
+}));
+
+test("MC_PRUNE_BACKUP names the backup like the flag does", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const r = s.run(["--apply", `--plan=${scan.id}`], { MC_PRUNE_BACKUP: s.backup });
+  assert.equal(r.last.ok, true, r.stderr);
+  assert.equal(r.last.deletedChunks, 3);
+}));
+
+// ── an unknown spawn ──
+
+test("--apply refuses a plan whose spawn was unknown, and --allow-unknown-spawn overrides", withSetup((s) => {
+  fs.rmSync(path.join(s.server.worldDir, "level.dat"));
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  assert.ok(scan.warnings.includes("spawn_unknown"));
+  const refused = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]);
+  assert.equal(refused.last.code, "spawn_unknown");
+  assert.equal(s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]).last.totals.delete, 3, "nothing was deleted");
+  const allowed = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`, "--allow-unknown-spawn"]);
+  assert.equal(allowed.last.ok, true, allowed.stderr);
+  assert.equal(allowed.last.deletedChunks, 3);
+}));
+
+// ── the journal of an unfinished apply ──
+
+test("a refusal before anything is deleted leaves an earlier unfinished-apply note as it was", withSetup((s) => {
+  const dir = path.join(s.scripts, "common", "prune");
+  fs.mkdirSync(dir, { recursive: true });
+  const earlier = { version: 1, state: "failed", plan: "0123456789abcdef", startedAt: "2026-01-01T00:00:00.000Z", error: "disk full" };
+  fs.writeFileSync(path.join(dir, "prune-apply.journal"), JSON.stringify(earlier));
+  fs.rmSync(path.join(s.server.worldDir, "level.dat"));
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const refused = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]);
+  assert.equal(refused.last.code, "spawn_unknown");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, "prune-apply.journal"), "utf8")), earlier);
+  assert.deepEqual(s.run(["--status"]).last.unfinishedApply, earlier);
+}));
+
+test("a refusal with no earlier note leaves no note", withSetup((s) => {
+  fs.rmSync(path.join(s.server.worldDir, "level.dat"));
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]);
+  assert.equal(fs.existsSync(path.join(s.scripts, "common", "prune", "prune-apply.journal")), false);
+}));
+
+test("an apply that finishes clears an earlier note", withSetup((s) => {
+  const dir = path.join(s.scripts, "common", "prune");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "prune-apply.journal"), JSON.stringify({ version: 1, state: "failed", plan: "x" }));
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const r = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]);
+  assert.equal(r.last.ok, true, r.stderr);
+  assert.equal(fs.existsSync(path.join(dir, "prune-apply.journal")), false);
+}));
+
+// ── arguments and the lock ──
+
+test("--tile and --inspect refuse a missing coordinate instead of reading it as 0", withSetup((s) => {
+  assert.equal(s.run(["--tile", "--dimension=overworld", "--rz=0"]).last.code, "params");
+  assert.equal(s.run(["--tile", "--dimension=overworld", "--rx=0"]).last.code, "params");
+  assert.equal(s.run(["--tile", "--dimension=overworld", "--rx=", "--rz=0"]).last.code, "params");
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  assert.equal(s.run(["--inspect", `--plan=${scan.id}`, "--dimension=overworld", "--cz=0"]).last.code, "params");
+  assert.equal(s.run(["--inspect", `--plan=${scan.id}`, "--dimension=overworld", "--cx=0"]).last.code, "params");
+}));
+
+test("--apply without bash answers in JSON rather than dying silently", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const nowhere = path.join(s.root, "no-bash-here");
+  fs.mkdirSync(nowhere);
+  const r = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`], { MC_OPERATION_LOCK_HELD: "", PATH: nowhere, Path: nowhere });
+  assert.equal(r.last.ok, false);
+  assert.equal(r.last.code, "lock_failed");
+}));
+
+// ── the server check ──
+
+/** Make the server check answer with this exit status (0 up, 1 down, 2 unknown). */
+const answerRunning = (s, status) =>
+  fs.writeFileSync(path.join(s.scripts, "common", "instance_ops.sh"), ["#!/bin/bash", `[ "$1" = running ] && exit ${status}`, "exit 0", ""].join("\n"));
+
+test("--apply refuses while the server is up (exit 0) and when its state is unknown (exit 2)", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const apply = () => s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]).last;
+  answerRunning(s, 0);
+  assert.equal(apply().code, "server_running");
+  answerRunning(s, 2);
+  assert.equal(apply().code, "server_running");
+  answerRunning(s, 1);
+  assert.equal(apply().ok, true, "down: it goes ahead");
+}));
+
+// ── the time budget ──
+
+test("an apply that runs out of time stops, says so and leaves a failed-apply note", withSetup((s) => {
+  // A second region file, so there is a second step to be refused.
+  const second = [32, 33].map((x) => ({ x, z: 0, nbt: fx.chunkModern({ x, z: 0, inhabited: 0 }) }));
+  for (const folder of ["region", "entities", "poi"]) fx.writeRegion(s.server.regionFile(null, folder, 1, 0), 1, 0, second);
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  assert.equal(scan.totals.delete, 5);
+  const r = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`, "--time-budget=0.0001"]);
+  assert.equal(r.last.ok, false);
+  assert.equal(r.last.code, "time_budget");
+  const journal = JSON.parse(fs.readFileSync(path.join(s.scripts, "common", "prune", "prune-apply.journal"), "utf8"));
+  assert.equal(journal.state, "failed");
+  assert.equal(journal.code, "time_budget");
+  assert.deepEqual(s.run(["--status"]).last.unfinishedApply.code, "time_budget");
 }));

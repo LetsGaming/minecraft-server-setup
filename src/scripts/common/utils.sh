@@ -13,6 +13,17 @@ _UTILS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 _have_flock() { command -v flock > /dev/null 2>&1; }
 
+# The directory holding this instance's lock files. Fixed per instance: an
+# environment-dependent choice (such as the user's runtime dir) made a manual
+# run and a cron run take different locks.
+_lock_dir() {
+  if [[ -n "${INSTANCE_LOCK_DIR:-}" ]]; then
+    echo "$INSTANCE_LOCK_DIR"
+  else
+    echo "$_UTILS_DIR/../.locks"
+  fi
+}
+
 # _lock_dir_stale <held-dir>
 # True when a mkdir lock's holder is gone. An empty pid file is a holder that
 # made the directory and has not written its pid yet, not an abandoned lock:
@@ -32,25 +43,20 @@ _lock_dir_stale() {
 # Takes an exclusive lock for <name> on this instance and keeps it until the
 # process exits. Returns 1 when another run already holds it.
 #
-# The lock lives in a private directory (INSTANCE_LOCK_DIR, else the runtime
-# dir, else scripts/.locks), never directly in the world-writable /tmp where
-# another local user could squat the path. With flock the lock dies with the
-# process, so no cleanup trap is needed and an overridden EXIT trap cannot
-# strand it. Without flock a mkdir lock is used; such a lock is only released
+# The lock lives in one private directory per instance (INSTANCE_LOCK_DIR,
+# else scripts/<instance>/.locks), the same for cron, a shell and the wrapper's
+# sudo runs, so they exclude each other. It is never placed directly in the
+# world-writable /tmp where another local user could squat the path. With
+# flock the lock dies with the process, so no cleanup trap is needed and an
+# overridden EXIT trap cannot strand it. Without flock a mkdir lock is used; such a lock is only released
 # by release_instance_lock, so a script that installs its own EXIT trap must
 # call that from it.
 _INSTANCE_LOCK_DIR_HELD=""
 
 acquire_instance_lock() {
   local name="$1"
-  local dir="${INSTANCE_LOCK_DIR:-}"
-  if [[ -z "$dir" ]]; then
-    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-      dir="$XDG_RUNTIME_DIR/minecraft"
-    else
-      dir="$_UTILS_DIR/../.locks"
-    fi
-  fi
+  local dir
+  dir="$(_lock_dir)"
   mkdir -p "$dir"
   chmod 700 "$dir" 2> /dev/null || true
 
@@ -91,14 +97,8 @@ acquire_operation_lock() {
   local kind="${1:-operation}"
   [[ "${MC_OPERATION_LOCK_HELD:-}" == "1" ]] && return 0
 
-  local dir="${INSTANCE_LOCK_DIR:-}"
-  if [[ -z "$dir" ]]; then
-    if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-      dir="$XDG_RUNTIME_DIR/minecraft"
-    else
-      dir="$_UTILS_DIR/../.locks"
-    fi
-  fi
+  local dir
+  dir="$(_lock_dir)"
   mkdir -p "$dir"
   chmod 700 "$dir" 2> /dev/null || true
 

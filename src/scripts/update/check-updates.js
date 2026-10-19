@@ -6,6 +6,7 @@ const axios = require("axios");
 // downloads set their own deadlines (lib/download.js).
 axios.defaults.timeout = axios.defaults.timeout || 30_000;
 const { parseArgs } = require("./lib/args");
+const { pickVersion, newestFirst } = require("./lib/versions");
 
 // Usage:
 //   node check-updates.js [mcVersion] [--mcVersion=<ver>] [--only=<slug>] [--json]
@@ -68,13 +69,13 @@ function extractVersionId(entry) {
 async function checkModUpdate(slug, currentVersionId) {
   try {
     const projectRes = await axios.get(
-      `https://api.modrinth.com/v2/project/${slug}`,
+      `https://api.modrinth.com/v2/project/${encodeURIComponent(slug)}`,
     );
     const project = projectRes.data;
     const projectId = project.project_id || project.id;
 
     const versionRes = await axios.get(
-      `https://api.modrinth.com/v2/project/${projectId}/version`,
+      `https://api.modrinth.com/v2/project/${encodeURIComponent(projectId)}/version`,
       {
         params: {
           game_versions: [mcVersion],
@@ -98,14 +99,8 @@ async function checkModUpdate(slug, currentVersionId) {
       };
     }
 
-    versions.sort(
-      (a, b) => new Date(b.date_published) - new Date(a.date_published),
-    );
-
-    const latestVersion = versions.find(
-      (v) =>
-        v.game_versions.includes(mcVersion) && v.loaders.includes(modLoader),
-    );
+    // The newest release; a beta or alpha only for a mod that has no release.
+    const latestVersion = pickVersion(versions, mcVersion, modLoader);
 
     if (!latestVersion) {
       if (!useJsonOutput) {
@@ -124,7 +119,10 @@ async function checkModUpdate(slug, currentVersionId) {
     const latestFile =
       latestVersion.files.find((f) => f.primary) ?? latestVersion.files[0];
 
-    if (currentVersionId === latestVersionId) {
+    // An installed build that is newer than the preferred one (a beta of a mod
+    // whose last release is older) is not something to "update" away from.
+    const installed = versions.find((v) => v.id === currentVersionId);
+    if (currentVersionId === latestVersionId || (installed && newestFirst(installed, latestVersion) <= 0)) {
       if (!useJsonOutput) {
         console.log(
           `Mod '${slug}' is up to date (version ID: ${currentVersionId})`,
@@ -134,6 +132,7 @@ async function checkModUpdate(slug, currentVersionId) {
         slug,
         status: "up_to_date",
         currentVersionId,
+        projectId,
       };
     }
 
@@ -155,9 +154,15 @@ async function checkModUpdate(slug, currentVersionId) {
       datePublished: latestVersion.date_published,
       downloadUrl: latestFile?.url || null,
       downloadSha512: latestFile?.hashes?.sha512 || null,
+      projectId,
+      // What the new build needs that this server may not have yet.
+      requiredDependencies: (latestVersion.dependencies ?? [])
+        .filter((d) => d.dependency_type === "required" && d.project_id)
+        .map((d) => ({ projectId: d.project_id, versionId: d.version_id ?? null })),
     };
   } catch (err) {
-    const errMsg = err.response?.data || err.message;
+    const raw = err.response?.data || err.message;
+    const errMsg = typeof raw === "string" ? raw : JSON.stringify(raw).slice(0, 300);
     if (!useJsonOutput) {
       console.error(`Failed to check update for mod '${slug}':`, errMsg);
     }

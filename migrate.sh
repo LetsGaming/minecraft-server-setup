@@ -109,6 +109,10 @@ What gets replaced (per-instance scripts):
     preview as REMOVE; a copy stays in the pre-migration backup archive)
   - Skipped entirely when nothing per-instance changed, so a services-only
     migration never touches the running instance
+  - The folder is swapped as a whole, so ACLs set by service_user.sh are lost:
+    the summary prints the command that grants them again
+  - Each run leaves a <scripts>_backup_<stamp> archive; after a successful run
+    only the newest 5 are kept (MIGRATE_KEEP_ARCHIVES=N changes that, 0 keeps all)
 
 Server-side migrations (src/migrations/server.sh):
   Changes to files the suite wrote for the server itself, which a scripts
@@ -274,10 +278,18 @@ for f in "${REQUIRED_NEW_FILES[@]}"; do
 done
 $check_ok && log "New scripts source is complete" || { err "Aborting."; exit 1; }
 
+# True when a screen session is named exactly <name>: a bare substring match
+# would take a running "mc2" for "mc".
+screen_session_exists() {
+  local name_re
+  name_re=$(printf '%s' "$1" | sed 's/[][\.*^$(){}+?|]/\\&/g')
+  screen -list 2>/dev/null | grep -Eq "^[[:space:]]*[0-9]+\.${name_re}[[:space:]]"
+}
+
 # Server status
 SERVER_RUNNING=false
 if [[ -n "${INSTANCE_NAME:-}" ]]; then
-  if screen -list 2>/dev/null | grep -q "$INSTANCE_NAME"; then
+  if screen_session_exists "$INSTANCE_NAME"; then
     SERVER_RUNNING=true; warn "Server '$INSTANCE_NAME' is currently running"
   elif systemctl is-active "${INSTANCE_NAME}.service" &>/dev/null; then
     SERVER_RUNNING=true; warn "Server '$INSTANCE_NAME' is currently running (systemd)"
@@ -756,8 +768,9 @@ fi
 # The scripts are swapped under a running server, so nothing may be running
 # from them meanwhile: an upgrade or prune job, a restore, a rollback, a mod
 # change. They all take this lock; take it too, and stop before changing
-# anything when one of them holds it. Taken in every place a script may look
-# for it (utils.sh: INSTANCE_LOCK_DIR, else the runtime dir, else .locks).
+# anything when one of them holds it. The scripts take it in INSTANCE_LOCK_DIR,
+# else .locks; scripts from before that folder was fixed may hold theirs under
+# $XDG_RUNTIME_DIR/minecraft, so that is checked as well.
 acquire_migration_locks() {
   local dirs=() dir lock fd
   [[ -n "${INSTANCE_LOCK_DIR:-}" ]] && dirs+=("$INSTANCE_LOCK_DIR")
@@ -806,6 +819,51 @@ fi
 _MIGRATE_DONE=false
 _MIGRATE_STOPPED_SERVER=false
 _MIGRATE_SCRIPTS_TOUCHED=false
+# What Step 3 changed, so a failure puts the old layout back.
+_S3_INSTANCE_MOVED=false
+_S3_VARS_PATCHED=false
+_S3_UNIT_FILE=""
+_S3_API_CFG_PATCHED=false
+_S3_API_MOVED=false
+_S3_API_UNIT_FILE=""
+
+_undo_structural_migration() {
+  local cfg dir
+  if [[ -n "$_S3_API_UNIT_FILE" ]]; then
+    sudo sed -i "s|${_new_api_dir}|${_old_api_dir}|g" "$_S3_API_UNIT_FILE" \
+      && sudo systemctl daemon-reload || warn "Could not restore the paths in $_S3_API_UNIT_FILE"
+  fi
+  if $_S3_API_MOVED && [[ -d "$_new_api_dir" && ! -e "$_old_api_dir" ]]; then
+    mv -- "$_new_api_dir" "$_old_api_dir" && log "Moved the API wrapper folder back to $_old_api_dir"
+  fi
+  if $_S3_API_CFG_PATCHED; then
+    for dir in "$_old_api_dir" "$_new_api_dir"; do
+      cfg="$dir/api-server-config.json"
+      [[ -f "$cfg" ]] || continue
+      node -e "
+        const fs = require('fs');
+        const cfg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+        for (const inst of Object.values(cfg.instances || {})) {
+          if (inst.serverPath === process.argv[2]) inst.serverPath = process.argv[3];
+        }
+        fs.writeFileSync(process.argv[1], JSON.stringify(cfg, null, 2) + '\n');
+      " "$cfg" "$_new_instance_dir" "$_old_instance_dir" 2>/dev/null \
+        || warn "Could not restore serverPath in $cfg"
+      break
+    done
+  fi
+  if [[ -n "$_S3_UNIT_FILE" ]]; then
+    sudo sed -i "s|${_new_instance_dir}|${_old_instance_dir}|g" "$_S3_UNIT_FILE" \
+      && sudo systemctl daemon-reload || warn "Could not restore the paths in $_S3_UNIT_FILE"
+  fi
+  if $_S3_VARS_PATCHED; then
+    sed -i "s|SERVER_PATH=\"${_new_instance_dir}\"|SERVER_PATH=\"${_old_instance_dir}\"|" "$VARS_FILE"
+  fi
+  if $_S3_INSTANCE_MOVED && [[ -d "$_new_instance_dir" && ! -e "$_old_instance_dir" ]]; then
+    mv -- "$_new_instance_dir" "$_old_instance_dir" && log "Moved the instance folder back to $_old_instance_dir"
+  fi
+}
+
 _migrate_recover() {
   local rc=$?
   $_MIGRATE_DONE && return
@@ -836,6 +894,7 @@ _migrate_recover() {
       info "  tar -C '$(dirname "$TARGET_SCRIPTS_DIR")' -xf '$BACKUP_ARCHIVE'"
     fi
   fi
+  _undo_structural_migration
   if $_MIGRATE_STOPPED_SERVER; then
     log "Starting '$INSTANCE_NAME' again..."
     sudo systemctl start "${INSTANCE_NAME}.service" 2>/dev/null \
@@ -850,7 +909,7 @@ if $NEEDS_SERVER_STOP; then
   echo; echo -e "${BOLD}Step 2: Stop server${NC}"
   log "Stopping '$INSTANCE_NAME'..."
   if ! $DRY_RUN; then
-    if screen -list 2>/dev/null | grep -q "$INSTANCE_NAME"; then
+    if screen_session_exists "$INSTANCE_NAME"; then
       if [ "$(id -u)" -eq 0 ]; then
         sudo -u "$USER" screen -S "$INSTANCE_NAME" -p 0 -X stuff "/say Server updating scripts. Restarting shortly.$(printf \\r)" 2>/dev/null || true
       else
@@ -861,6 +920,20 @@ if $NEEDS_SERVER_STOP; then
   fi
   _MIGRATE_STOPPED_SERVER=true
   run_cmd sudo systemctl stop "${INSTANCE_NAME}.service" 2>/dev/null || true
+  if ! $DRY_RUN; then
+    _server_down=false
+    for _ in $(seq 1 30); do
+      if ! systemctl is-active "${INSTANCE_NAME}.service" &>/dev/null && ! screen_session_exists "$INSTANCE_NAME"; then
+        _server_down=true
+        break
+      fi
+      sleep 1
+    done
+    if ! $_server_down; then
+      err "'$INSTANCE_NAME' is still running after the stop. Nothing was moved or replaced."
+      exit 1
+    fi
+  fi
   sleep 2; log "Server stopped"
 elif $SERVER_RUNNING && [[ "$SKIP_STOP" == true ]]; then
   echo; echo -e "${BOLD}Step 2: Stop server${NC}"
@@ -882,11 +955,13 @@ if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
     log "Moving instance dir to instances/$INSTANCE_NAME/"
     run_cmd mkdir -p "$BASE_DIR/instances"
     run_cmd mv "$_old_instance_dir" "$_new_instance_dir"
+    _S3_INSTANCE_MOVED=true
     info "Moved: $_old_instance_dir → $_new_instance_dir"
 
     # Update SERVER_PATH in variables.txt
     if ! $DRY_RUN; then
       sed -i "s|SERVER_PATH=\"${_old_instance_dir}\"|SERVER_PATH=\"${_new_instance_dir}\"|" "$VARS_FILE"
+      _S3_VARS_PATCHED=true
     else
       echo "[DRY-RUN] sed -i SERVER_PATH in $VARS_FILE"
     fi
@@ -897,6 +972,7 @@ if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
     if [[ -f "$_svc_file" ]]; then
       if ! $DRY_RUN; then
         sudo sed -i "s|${_old_instance_dir}|${_new_instance_dir}|g" "$_svc_file"
+        _S3_UNIT_FILE="$_svc_file"
         sudo systemctl daemon-reload
       else
         echo "[DRY-RUN] sudo sed -i paths in $_svc_file + daemon-reload"
@@ -919,7 +995,7 @@ if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
               if (inst.serverPath === oldP) inst.serverPath = newP;
             }
             fs.writeFileSync(process.argv[1], JSON.stringify(cfg, null, 2) + '\n');
-          " "$_api_cfg" "$_old_instance_dir" "$_new_instance_dir" 2>/dev/null || \
+          " "$_api_cfg" "$_old_instance_dir" "$_new_instance_dir" 2>/dev/null && _S3_API_CFG_PATCHED=true || \
             warn "Could not auto-update serverPath in $_api_cfg — update manually"
         else
           echo "[DRY-RUN] node: update serverPath in $_api_cfg"
@@ -935,6 +1011,7 @@ if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
     log "Moving api-server to services/api-server/"
     run_cmd mkdir -p "$BASE_DIR/services"
     run_cmd mv "$_old_api_dir" "$_new_api_dir"
+    _S3_API_MOVED=true
     info "Moved: $_old_api_dir → $_new_api_dir"
 
     # Patch api-server systemd service file
@@ -943,6 +1020,7 @@ if [[ "$NEEDS_STRUCT_MIGRATION" == true ]]; then
     if [[ -f "$_api_svc_file" ]]; then
       if ! $DRY_RUN; then
         sudo sed -i "s|${_old_api_dir}|${_new_api_dir}|g" "$_api_svc_file"
+        _S3_API_UNIT_FILE="$_api_svc_file"
         sudo systemctl daemon-reload
       else
         echo "[DRY-RUN] sudo sed -i paths in $_api_svc_file + daemon-reload"
@@ -1168,6 +1246,14 @@ done
 # The swap: two renames, and the old tree goes only once the new one is in.
 if ! $DRY_RUN; then
   _MIGRATE_SCRIPTS_TOUCHED=true
+  # The operation locks are held on the files in the old .locks/. Move that
+  # folder into the new tree (a rename keeps the files the held locks are on)
+  # instead of leaving a copy there, or everything after the swap would run
+  # unlocked.
+  if [[ -d "$TARGET_SCRIPTS_DIR/.locks" ]]; then
+    rm -rf -- "${STAGING_SCRIPTS_DIR:?}/.locks"
+    mv -- "$TARGET_SCRIPTS_DIR/.locks" "$STAGING_SCRIPTS_DIR/.locks"
+  fi
   mv -- "$TARGET_SCRIPTS_DIR" "${TARGET_SCRIPTS_DIR%/}.old.$$"
   mv -- "$STAGING_SCRIPTS_DIR" "$TARGET_SCRIPTS_DIR"
   rm -rf -- "${TARGET_SCRIPTS_DIR%/}.old.$$"
@@ -1304,6 +1390,27 @@ fi
 log "Verification passed"
 _MIGRATE_DONE=true
 
+# Every run leaves a <scripts>_backup_<stamp> archive next to the scripts
+# folder. Keep the newest few (MIGRATE_KEEP_ARCHIVES, default 5; 0 keeps all),
+# this run's included.
+prune_old_migration_archives() {
+  local keep="${MIGRATE_KEEP_ARCHIVES:-5}" name file base count=0
+  [[ "$keep" =~ ^[0-9]+$ ]] && (( keep > 0 )) || return 0
+  $DRY_RUN && return 0
+  name="$(basename "$TARGET_SCRIPTS_DIR")"
+  while IFS= read -r file; do
+    base="${file##*/}"
+    # Exactly <name>_backup_YYYYMMDD_HHMMSS: another instance whose name starts
+    # with this one's is not matched.
+    [[ "$base" == "${name}_backup_"???????????????.tar.* ]] || continue
+    count=$((count + 1))
+    if (( count > keep )) && [[ "$file" != "$BACKUP_ARCHIVE" ]]; then
+      rm -f -- "$file" && info "Removed old archive: $base"
+    fi
+  done < <(ls -1 "$BACKUP_PARENT/${name}"_backup_*.tar.* 2>/dev/null | sort -r)
+}
+prune_old_migration_archives
+
 # ── Step 9: Restart the Minecraft server ──
 # Only when it was stopped by this migration.
 
@@ -1314,7 +1421,7 @@ if $NEEDS_SERVER_STOP; then
   if ! $DRY_RUN; then
     sleep 5
     if systemctl is-active "${INSTANCE_NAME}.service" &>/dev/null; then log "Server is running"
-    elif screen -list 2>/dev/null | grep -q "$INSTANCE_NAME"; then log "Server is running (screen)"
+    elif screen_session_exists "$INSTANCE_NAME"; then log "Server is running (screen)"
     else warn "Server may still be starting. Check: systemctl status ${INSTANCE_NAME}.service"; fi
   fi
 fi
@@ -1380,6 +1487,17 @@ if $SERVER_RUNNING && ! $NEEDS_SERVER_STOP; then
     info "start.sh changed: it applies at the server's next start, or run again with --restart."
   fi
   echo
+fi
+if $NEEDS_INSTANCE_UPDATE && ! $DRY_RUN; then
+  for _sudoers in /etc/sudoers.d/mc-service-*-"${INSTANCE_NAME}"; do
+    [[ -f "$_sudoers" ]] || continue
+    _svc_user="${_sudoers##*/mc-service-}"
+    _svc_user="${_svc_user%-"${INSTANCE_NAME}"}"
+    warn "The scripts folder was replaced, so the ACLs the wrapper's user '$_svc_user' had on it are gone."
+    info "Grant them again:"
+    info "  sudo bash '$(dirname "$NEW_SCRIPTS_SOURCE")/setup/management/service_user.sh' --scripts-dir '$TARGET_SCRIPTS_DIR' --user '$_svc_user'"
+    echo
+  done
 fi
 if [[ ${#NEW_VARS[@]} -gt 0 ]]; then
   info "New features available — edit variables.txt to enable:"

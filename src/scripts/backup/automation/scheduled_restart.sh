@@ -16,4 +16,9 @@ if [[ ! -f "$SMART_RESTART" ]]; then
 fi
 
 echo "[$(date +'%F %T')] Running scheduled restart..."
-bash "$SMART_RESTART" --warn="$RESTART_WARN_SECONDS"
+rc=0
+bash "$SMART_RESTART" --warn="$RESTART_WARN_SECONDS" || rc=$?
+if [[ $rc -eq 75 ]]; then
+  echo "[$(date +'%F %T')] [WARN] This restart was SKIPPED: a backup, restore, rollback or upgrade is running. The server was not restarted."
+fi
+exit "$rc"

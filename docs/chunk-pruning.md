@@ -11,7 +11,13 @@ near it) is below a threshold (default 5 minutes). These are never deleted, what
 the threshold:
 
 - chunks around the world spawn (default 16 chunks) and around where each player was
-  last seen (default 8), read from `level.dat` and `playerdata/`;
+  last seen or respawns (default 8), read from `level.dat` and `playerdata/` (`players/data/`
+  from 26.x), including the respawn fields of both the older and the 1.21.5 layout;
+- chunks kept loaded with `/forceload`, read per dimension from `<dimension>/data/chunks.dat`
+  (the packed `Forced` list, or ticket entries with a `chunk_pos`). Where that file exists but
+  cannot be read, the plan carries `forced_chunks_unreadable`; a player file that cannot be read
+  adds `player_files_unreadable`. The layout of forced chunks in 26.x worlds could not be checked
+  against a real world, so only these two spellings are recognised;
 - zones you draw, per dimension, in chunk coordinates;
 - chunks that cannot be read, or have no `InhabitedTime` (corrupt, LZ4-compressed,
   or from a layout this does not know);
@@ -83,7 +89,7 @@ from directory listings, without reading a chunk.
 ```
 node prune-chunks.js --dimensions                 names and region counts, reads no chunk
 node prune-chunks.js --scan [--params=<json> | --params-file=<path> | --params-stdin]
-node prune-chunks.js --apply --plan=<id> [--time-budget=<seconds>]
+node prune-chunks.js --apply --plan=<id> --backup=<archive> [--allow-unknown-spawn] [--time-budget=<seconds>]
 node prune-chunks.js --settings=get | set --params=<json>
 node prune-chunks.js --status                     engine version, an unfinished delete
 ```
@@ -100,6 +106,15 @@ needs no file I/O at all. `--no-cache` forces a full read. Progress is printed a
 lines (`phase: "scan"`, `done`, `total`, `chunks`, `etaSeconds`); a scan can be cancelled by
 stopping the process, because it only reads and every cache write is atomic. The buffer is
 decided per region with a halo from its neighbours, so a far-away region cannot fail the scan.
+
+`--apply` needs a backup behind it and names it: `--backup=<archive>` (or `MC_PRUNE_BACKUP`), a
+non-empty `.tar.zst` or `.tar.gz` inside the backups folder that is at most a day old. The script
+checks the file; a flag alone proves nothing. The upgrade job takes its own archive backup first
+and passes that. A plan made while `level.dat` was unreadable carries `spawn_unknown` (the spawn
+protection was a guess at the origin) and is refused with that code unless `--allow-unknown-spawn`
+is given. An unfinished apply is remembered in `common/prune/prune-apply.journal` until a later
+apply finishes; a new apply keeps the earlier note inside its own, and one refused before it
+deletes anything puts the earlier note back as it was.
 
 `--apply` refuses to run while the server is up. It scans again and deletes only what
 both scans agree on, so a preview made while players were online can remove less than

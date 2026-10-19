@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 
-source "$(dirname "${BASH_SOURCE[0]}")/../../common/load_variables.sh"
+CLEANUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$CLEANUP_DIR/../../common/load_variables.sh"
+source "$CLEANUP_DIR/../../common/utils.sh"
 
 log() {
   echo "[$(date +'%F %T')] $*"
@@ -20,21 +22,22 @@ nice_run() {
   fi
 }
 
+# Deleting archives while a restore, rollback or upgrade reads them would pull
+# the file out from under it. Retention simply runs again after the next backup.
+if ! acquire_operation_lock cleanup; then
+  log "Another operation is running; skipping backup cleanup."
+  exit 0
+fi
+
 log "Starting backup cleanup..."
 BACKUP_BASE="$BACKUPS_PATH"
 MAX_UPDATE_BACKUPS="${MAX_UPDATE_BACKUPS:-5}"
+# Archives of any type other than daily, weekly, monthly and update (the
+# default "general" one and custom ones made with backup.sh --archive <type>).
+# 0 keeps every one of them; the storage limit still applies.
+MAX_CUSTOM_BACKUPS="${MAX_CUSTOM_BACKUPS:-0}"
 
-# Eviction order when the storage limit is exceeded: the cheapest-to-lose tier
-# first, oldest archive first within a tier. Monthly archives are the long-term
-# history and go last, so they are never evicted while any hourly, daily,
-# weekly or update archive remains.
-STORAGE_EVICTION_DIRS=(
-  "$BACKUP_BASE/hourly"
-  "$BACKUP_BASE/archives/daily"
-  "$BACKUP_BASE/archives/weekly"
-  "$BACKUP_BASE/archives/update"
-  "$BACKUP_BASE/archives/monthly"
-)
+KNOWN_ARCHIVE_TYPES=(daily weekly monthly update)
 
 # remove_file <path>: delete one archive or jar. A file that cannot be removed
 # is reported and skipped; one bad file must not abort the whole run (set -e)
@@ -48,12 +51,75 @@ remove_file() {
 }
 
 # list_archives <dir> [oldest-first]: archive paths in a tier directory,
-# newest first unless "oldest-first" is given.
+# newest first unless "oldest-first" is given. The order comes from the
+# timestamp in the file name (minecraft_backup_YYYY-MM-DD_HH-MM-SS), which a
+# copy, a restore from another disk or a touch cannot change; a name without
+# one is placed by its modification time.
 list_archives() {
-  local dir="$1" order="${2:-newest-first}" flags="-1t"
-  [[ "$order" == "oldest-first" ]] && flags="-1tr"
-  # shellcheck disable=SC2086  # $flags is one of two fixed literals
-  ls $flags "$dir"/minecraft_backup_*.tar.{gz,zst} 2>/dev/null || true
+  local dir="$1" order="${2:-newest-first}" file base stamp
+  local -a rows=()
+  local re='([0-9]{4})-([0-9]{2})-([0-9]{2})_([0-9]{2})-([0-9]{2})-([0-9]{2})'
+  for file in "$dir"/minecraft_backup_*.tar.gz "$dir"/minecraft_backup_*.tar.zst; do
+    [[ -f "$file" ]] || continue
+    base="${file##*/}"
+    if [[ "$base" =~ $re ]]; then
+      stamp="${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}${BASH_REMATCH[4]}${BASH_REMATCH[5]}${BASH_REMATCH[6]}"
+    else
+      stamp="$(date -r "$file" +%Y%m%d%H%M%S)"
+    fi
+    rows+=("$stamp $file")
+  done
+  (( ${#rows[@]} > 0 )) || return 0
+  if [[ "$order" == "oldest-first" ]]; then
+    printf '%s\n' "${rows[@]}" | sort | cut -d' ' -f2-
+  else
+    printf '%s\n' "${rows[@]}" | sort -r | cut -d' ' -f2-
+  fi
+}
+
+# archive_is_valid <file>: not empty and the compressed stream is intact.
+archive_is_valid() {
+  local file="$1"
+  [[ -s "$file" ]] || return 1
+  case "$file" in
+    *.tar.zst) zstd -t "$file" > /dev/null 2>&1 ;;
+    *.tar.gz) gzip -t "$file" > /dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+# protected_archive <dir>: the newest valid archive of a tier, which is never
+# deleted, so retention can thin a tier out but not empty it of anything usable.
+protected_archive() {
+  local file
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    if archive_is_valid "$file"; then
+      echo "$file"
+      return 0
+    fi
+  done < <(list_archives "$1")
+  return 0
+}
+
+# delete_surplus <dir> <keep-count> <label>
+delete_surplus() {
+  local dir="$1" max_value="$2" label="$3" file keep
+  local -a backups=()
+  mapfile -t backups < <(list_archives "$dir")
+  if (( ${#backups[@]} <= max_value )); then
+    log "No $label backups to delete."
+    return 0
+  fi
+  keep="$(protected_archive "$dir")"
+  for file in "${backups[@]:$max_value}"; do
+    if [[ "$file" == "$keep" ]]; then
+      log "Keeping $file: it is the newest valid $label backup."
+      continue
+    fi
+    log "Deleting: $file"
+    remove_file "$file" || true
+  done
 }
 
 delete_old_archives() {
@@ -73,15 +139,39 @@ delete_old_archives() {
   fi
 
   log "Checking $type backups in: $dir"
-  mapfile -t backups < <(list_archives "$dir")
-  if (( ${#backups[@]} > max_value )); then
-    for file in "${backups[@]:$max_value}"; do
-      log "Deleting: $file"
-      remove_file "$file" || true
+  delete_surplus "$dir" "$max_value" "$type"
+}
+
+# The archive folders that are not one of the named tiers.
+custom_archive_dirs() {
+  local dir name known
+  [[ -d "$BACKUP_BASE/archives" ]] || return 0
+  for dir in "$BACKUP_BASE"/archives/*/; do
+    [[ -d "$dir" ]] || continue
+    dir="${dir%/}"
+    name="${dir##*/}"
+    for known in "${KNOWN_ARCHIVE_TYPES[@]}"; do
+      [[ "$name" == "$known" ]] && continue 2
     done
-  else
-    log "No $type backups to delete."
+    echo "$dir"
+  done
+}
+
+delete_old_custom_archives() {
+  local dir
+  if [[ ! "$MAX_CUSTOM_BACKUPS" =~ ^[0-9]+$ ]]; then
+    log "ERROR: MAX_CUSTOM_BACKUPS is invalid (value: '$MAX_CUSTOM_BACKUPS')" >&2
+    exit 1
   fi
+  if (( MAX_CUSTOM_BACKUPS == 0 )); then
+    log "MAX_CUSTOM_BACKUPS is 0: keeping every general and custom archive (the storage limit still applies)."
+    return
+  fi
+  while IFS= read -r dir; do
+    [[ -n "$dir" ]] || continue
+    log "Checking ${dir##*/} backups in: $dir"
+    delete_surplus "$dir" "$MAX_CUSTOM_BACKUPS" "${dir##*/}"
+  done < <(custom_archive_dirs)
 }
 
 delete_old_hourly_backups() {
@@ -96,15 +186,7 @@ delete_old_hourly_backups() {
   fi
 
   log "Checking hourly backups in: $dir"
-  mapfile -t snapshots < <(list_archives "$dir")
-  if (( ${#snapshots[@]} > max )); then
-    for file in "${snapshots[@]:$max}"; do
-      log "Deleting old hourly backup: $file"
-      remove_file "$file" || true
-    done
-  else
-    log "No hourly backups to delete."
-  fi
+  delete_surplus "$dir" "$max" "hourly"
 }
 
 # Archives made before backup.sh kept real jars symlink into jars/, so a jar
@@ -147,25 +229,47 @@ prune_orphan_jars() {
   log "Removed $removed orphaned jar(s)."
 }
 
+# Eviction order when the storage limit is exceeded: the cheapest-to-lose tier
+# first, oldest archive first within a tier. General and custom archives come
+# after the named tiers. Monthly archives are the long-term history and go
+# last, so they are never evicted while any other archive remains.
+storage_eviction_dirs() {
+  echo "$BACKUP_BASE/hourly"
+  echo "$BACKUP_BASE/archives/daily"
+  echo "$BACKUP_BASE/archives/weekly"
+  echo "$BACKUP_BASE/archives/update"
+  custom_archive_dirs
+  echo "$BACKUP_BASE/archives/monthly"
+}
+
 enforce_storage_limit() {
   [[ -z "$MAX_STORAGE_GB" || "$MAX_STORAGE_GB" -lt 1 ]] && {
-    log "MAX_STORAGE_GB not set or invalid — skipping storage check."
+    log "MAX_STORAGE_GB not set or invalid, skipping the storage check."
     return
   }
 
   local max_bytes=$((MAX_STORAGE_GB * 1024 * 1024 * 1024))
   local current_bytes
-  current_bytes=$(nice_run du -sb "$BACKUP_BASE" | cut -f1)
+  # A backup being written (tmp_backup) and the legacy jars/ folder are not
+  # archives that eviction could free, and counting them would make a healthy
+  # run in flight look like an overflow.
+  current_bytes=$(nice_run du -sb --exclude=tmp_backup --exclude=jars "$BACKUP_BASE" | cut -f1)
 
   log "Current backup usage: $((current_bytes / 1024 / 1024)) MB (limit: ${MAX_STORAGE_GB} GB)"
   log "Used space: $((current_bytes * 100 / (MAX_STORAGE_GB * 1024 * 1024 * 1024)))%"
 
   (( current_bytes <= max_bytes )) && return
 
-  local dir file file_bytes
-  for dir in "${STORAGE_EVICTION_DIRS[@]}"; do
+  local dir file file_bytes keep
+  while IFS= read -r dir; do
+    [[ -n "$dir" && -d "$dir" ]] || continue
+    keep="$(protected_archive "$dir")"
     while IFS= read -r file; do
       [[ -n "$file" ]] || continue
+      if [[ "$file" == "$keep" ]]; then
+        log "Keeping $file: it is the newest valid backup of its kind."
+        continue
+      fi
       # A file's own size, subtracted from the running total, tells us the
       # same thing a fresh `du -sb "$BACKUP_BASE"` would, without a full
       # recursive walk of the whole backups tree after every single deletion.
@@ -175,9 +279,9 @@ enforce_storage_limit() {
       current_bytes=$((current_bytes - file_bytes))
       (( current_bytes <= max_bytes )) && return
     done < <(list_archives "$dir" oldest-first)
-  done
+  done < <(storage_eviction_dirs)
 
-  log "WARN: still above the ${MAX_STORAGE_GB} GB limit after evicting every archive."
+  log "WARN: still above the ${MAX_STORAGE_GB} GB limit after evicting every archive that may be evicted."
 }
 
 # Apply policies
@@ -186,6 +290,7 @@ delete_old_archives "daily"   "MAX_DAILY_BACKUPS"
 delete_old_archives "weekly"  "MAX_WEEKLY_BACKUPS"
 delete_old_archives "monthly" "MAX_MONTHLY_BACKUPS"
 delete_old_archives "update"  "MAX_UPDATE_BACKUPS"
+delete_old_custom_archives
 prune_orphan_jars
 enforce_storage_limit
 

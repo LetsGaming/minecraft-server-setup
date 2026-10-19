@@ -20,12 +20,16 @@ LOG_FILE="$SERVER_PATH/logs/latest.log"
 declare -A ONLINE_PLAYERS
 
 # Check if any players are already online
-initial_player_count=$(get_player_count)
-if [[ "$initial_player_count" -gt 0 ]]; then
-    echo "[INFO] Detected $initial_player_count player(s) online at startup. Chunk loading will be paused."
-    INITIAL_PAUSE=true
+if initial_player_count=$(get_player_count); then
+    if [[ "$initial_player_count" -gt 0 ]]; then
+        echo "[INFO] Detected $initial_player_count player(s) online at startup. Chunk loading will be paused."
+        INITIAL_PAUSE=true
+    else
+        INITIAL_PAUSE=false
+    fi
 else
-    INITIAL_PAUSE=false
+    echo "[WARN] Could not tell whether players are online. Chunk loading will be paused."
+    INITIAL_PAUSE=true
 fi
 
 # Check if Chunky mod is installed

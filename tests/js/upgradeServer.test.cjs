@@ -226,7 +226,14 @@ test("the prune runs after the install and before the first start, and is report
   const prune = order.indexOf("prune:apply");
   const start = order.indexOf("ops:start");
   assert.ok(apply >= 0 && prune > apply && start > prune, order.join(" "));
-  assert.deepEqual(w.calls.find((c) => c[0] === "prune"), ["prune", "--apply", "--plan=" + PLAN_ID, "--time-budget=2700", "--json"]);
+  assert.deepEqual(w.calls.find((c) => c[0] === "prune"), [
+    "prune",
+    "--apply",
+    "--plan=" + PLAN_ID,
+    "--backup=/b/archives/update/minecraft_backup_NEW.tar.zst",
+    "--time-budget=2700",
+    "--json",
+  ]);
 });
 
 test("a prune-only job has no install and no version, and still has the backup and the fallback", () => {

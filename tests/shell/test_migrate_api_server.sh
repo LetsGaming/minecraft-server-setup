@@ -316,4 +316,104 @@ test_a_leftover_submodule_folder_in_the_checkout_is_not_copied() {
   teardown
 }
 
+# A shim that reports the unit inactive and records its calls.
+inactive_systemctl() {
+  cat > "$T/bin/systemctl" <<'SHIM'
+#!/bin/bash
+echo "systemctl $*" >> "$SHIM_LOG"
+[[ "$1" == is-active ]] && exit 3
+exit 0
+SHIM
+  chmod +x "$T/bin/systemctl"
+}
+
+test_another_instance_whose_name_starts_with_this_ones_is_not_this_server() {
+  setup
+  chmod +x "$T/bin/"*
+  inactive_systemctl
+  touch "$SHIM_STATE/screen_running"
+  export SCREEN_SHIM_SESSION=inst2
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  migrate
+  assert_rc 0 "$RC" "migrate succeeds"
+  assert_contains "$OUT" "Server is not running" "a session named inst2 is not inst"
+  assert_not_contains "$OUT" "currently running" "so it is not reported as running"
+  unset SCREEN_SHIM_SESSION
+  teardown
+}
+
+test_a_server_that_does_not_stop_aborts_before_anything_is_replaced() {
+  setup
+  chmod +x "$T/bin/"*
+  cp shims/sleep "$T/bin/sleep"; chmod +x "$T/bin/sleep"
+  # stop reports success but the unit stays active
+  cat > "$T/bin/systemctl" <<'SHIM'
+#!/bin/bash
+echo "systemctl $*" >> "$SHIM_LOG"
+[[ "$1" == is-active ]] && { echo active; exit 0; }
+exit 0
+SHIM
+  chmod +x "$T/bin/systemctl"
+  touch "$SHIM_STATE/screen_running"
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  migrate --restart
+  assert_nonzero "$RC" "the migration stops"
+  assert_contains "$OUT" "is still running after the stop" "says why"
+  assert_contains "$(cat "$SCRIPTS/start.sh")" "# local edit" "the scripts were not replaced"
+  teardown
+}
+
+test_the_lock_files_keep_their_identity_across_the_swap() {
+  setup
+  mkdir -p "$SCRIPTS/.locks"
+  : > "$SCRIPTS/.locks/operation_inst.lock"
+  local before after
+  before="$(stat -c %i "$SCRIPTS/.locks/operation_inst.lock")"
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  migrate
+  assert_rc 0 "$RC" "migrate succeeds"
+  after="$(stat -c %i "$SCRIPTS/.locks/operation_inst.lock")"
+  assert_eq "$before" "$after" "the held lock is on the same file in the new tree"
+  teardown
+}
+
+test_only_the_newest_migration_archives_of_this_instance_are_kept() {
+  setup
+  local stamp
+  for stamp in 20250101_000000 20250102_000000 20250103_000000 20250104_000000 20250105_000000 20250106_000000 20250107_000000; do
+    : > "$ROOT/scripts/inst_backup_$stamp.tar.gz"
+    : > "$ROOT/scripts/inst2_backup_$stamp.tar.gz"
+  done
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  migrate
+  assert_rc 0 "$RC" "migrate succeeds"
+  assert_missing "$ROOT/scripts/inst_backup_20250101_000000.tar.gz" "the oldest archive is pruned"
+  assert_missing "$ROOT/scripts/inst_backup_20250103_000000.tar.gz" "so is the third oldest"
+  assert_exists "$ROOT/scripts/inst_backup_20250104_000000.tar.gz" "the newest few stay"
+  assert_exists "$ROOT/scripts/inst_backup_20250107_000000.tar.gz" "including the last"
+  assert_exists "$ROOT/scripts/inst2_backup_20250101_000000.tar.gz" "another instance's archives are not touched"
+  teardown
+}
+
+test_a_failure_after_the_instance_folder_moved_puts_it_back() {
+  setup
+  chmod +x "$T/bin/"*
+  mv "$ROOT/instances/inst" "$ROOT/inst"
+  rmdir "$ROOT/instances"
+  sed -i "s|^SERVER_PATH=.*|SERVER_PATH=\"$ROOT/inst\"|" "$SCRIPTS/common/variables.txt"
+  echo "# local edit" >> "$SCRIPTS/start.sh"
+  cat > "$T/bin/cp" <<'SHIM'
+#!/bin/bash
+for a in "$@"; do [[ "$a" == *migrate-staging* ]] && { echo "cp: No space left on device" >&2; exit 1; }; done
+exec /bin/cp "$@"
+SHIM
+  chmod +x "$T/bin/cp"
+  migrate
+  assert_nonzero "$RC" "the migration reports the failure"
+  assert_exists "$ROOT/inst" "the instance folder is back where it was"
+  assert_missing "$ROOT/instances/inst" "and not left in the new layout"
+  assert_contains "$(cat "$SCRIPTS/common/variables.txt")" "SERVER_PATH=\"$ROOT/inst\"" "SERVER_PATH is the old one again"
+  teardown
+}
+
 run_tests

@@ -46,8 +46,14 @@ change_motd() {
         exit 1
     fi
 
-    current_motd=$(grep '^motd=' "$SERVER_PROPERTIES_FILE" || echo "motd=")
-    echo "$current_motd" > "$MOTD_BACKUP_FILE"
+    # A backup left by a run that did not finish holds the real MOTD; the
+    # server.properties line is the maintenance text by now.
+    if [[ -f "$MOTD_BACKUP_FILE" ]]; then
+        log "WARN" "$MOTD_BACKUP_FILE already exists; keeping it as the MOTD to restore."
+    else
+        current_motd=$(grep '^motd=' "$SERVER_PROPERTIES_FILE" || echo "motd=")
+        echo "$current_motd" > "$MOTD_BACKUP_FILE"
+    fi
 
     local escaped_motd
     escaped_motd=$(printf '%s' "$new_motd" | sed -e 's/[&|\\]/\\&/g')

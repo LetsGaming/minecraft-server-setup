@@ -12,6 +12,7 @@ const fs = require("fs");
 const path = require("path");
 const { loadVariables } = require("./variables");
 const { detectInstalledJars } = require("./jars");
+const { assertPlainFilename } = require("./download");
 
 const variablesPath = path.resolve(__dirname, "..", "..", "common", "variables.txt");
 const downloadedVersionsPath = path.resolve(
@@ -91,6 +92,13 @@ function locateJar(modsDir, disabledDir, key, recordedFilename) {
       );
 
   for (const filename of candidates) {
+    // The manifest is data a script reads back; a name that is not one plain
+    // file name could reach outside the mods folders.
+    try {
+      assertPlainFilename(filename);
+    } catch (err) {
+      throw Object.assign(new Error(`downloaded_versions.json names an unsafe file: ${err.message}`), { code: "manifest" });
+    }
     const enabledPath = path.join(modsDir, filename);
     if (fs.existsSync(enabledPath)) return { filename, enabled: true, currentPath: enabledPath };
     const disabledPath = path.join(disabledDir, filename);

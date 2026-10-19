@@ -19,6 +19,14 @@ const DIMENSION_IDS = {
   END: "the_end",
 };
 
+/**
+ * A dimension id in one spelling, whichever file it came from: player data
+ * writes "minecraft:the_nether" where the folder scan finds "the_nether".
+ */
+function normalizeDimensionId(id) {
+  return typeof id === "string" ? id.replace(/^minecraft:/, "") : id;
+}
+
 function isDir(p) {
   try {
     return fs.statSync(p).isDirectory();
@@ -75,7 +83,7 @@ function discoverDimensions(worldDir) {
       if (!isDir(nsDir)) continue;
       for (const name of safeReaddir(nsDir)) {
         if (ns === "minecraft" && VANILLA_FOLDERS.some(([, folder]) => folder === name)) continue;
-        add(`${ns}:${name}`, path.join(nsDir, name));
+        add(normalizeDimensionId(`${ns}:${name}`), path.join(nsDir, name));
       }
     }
   }
@@ -109,7 +117,7 @@ function dimensionIdOf(value) {
   if (value === 0 || value === "minecraft:overworld") return DIMENSION_IDS.OVERWORLD;
   if (value === -1 || value === "minecraft:the_nether") return DIMENSION_IDS.NETHER;
   if (value === 1 || value === "minecraft:the_end") return DIMENSION_IDS.END;
-  if (typeof value === "string") return value.replace(/^minecraft:/, "");
+  if (typeof value === "string") return normalizeDimensionId(value);
   return DIMENSION_IDS.OVERWORLD;
 }
 
@@ -132,11 +140,13 @@ function readSpawn(worldDir) {
 }
 
 /**
- * Where each known player last was: `[{dimension, x, z}]` in block coordinates,
- * from players/data/*.dat (26.x) or playerdata/*.dat. A file that cannot be read is skipped; that player
- * simply is not protected by position.
+ * Where each known player last was and where they respawn:
+ * `[{dimension, x, z, kind: "player" | "respawn"}]` in block coordinates, from
+ * players/data/*.dat (26.x) or playerdata/*.dat. A file that cannot be read adds
+ * nothing, so that player is not protected by position; its name goes to
+ * `issues.unreadablePlayers` when the caller passes an `issues` object.
  */
-function readPlayerPositions(worldDir) {
+function readPlayerPositions(worldDir, issues = null) {
   const out = [];
   const seen = new Set();
   // 26.x keeps player files in players/data/, older worlds in playerdata/. A world converted
@@ -145,23 +155,82 @@ function readPlayerPositions(worldDir) {
     for (const name of safeReaddir(dir)) {
       if (!name.endsWith(".dat") || seen.has(name)) continue;
       seen.add(name);
-      readPlayer(path.join(dir, name), out);
+      if (!readPlayer(path.join(dir, name), out) && issues) {
+        (issues.unreadablePlayers ??= []).push(name);
+      }
     }
   }
   return out;
 }
 
-/** Add where one player file says its player was; an unreadable file adds nothing. */
+/** Add where one player file says its player was and respawns. False when the file cannot be read. */
 function readPlayer(file, out) {
+  let nbt;
   try {
-    const nbt = readNbtFile(file);
-    const pos = nbt.Pos;
-    if (Array.isArray(pos) && pos.length >= 3) {
-      out.push({ dimension: dimensionIdOf(nbt.Dimension), x: pos[0], z: pos[2] });
-    }
+    nbt = readNbtFile(file);
   } catch {
-    /* unreadable player file */
+    return false;
   }
+  const pos = nbt.Pos;
+  if (Array.isArray(pos) && pos.length >= 3) {
+    out.push({ dimension: dimensionIdOf(nbt.Dimension), x: pos[0], z: pos[2], kind: "player" });
+  }
+  // Before 1.21.5 the respawn point is SpawnX/SpawnZ/SpawnDimension; since then a "respawn" compound.
+  if (typeof nbt.SpawnX === "number" && typeof nbt.SpawnZ === "number") {
+    out.push({ dimension: dimensionIdOf(nbt.SpawnDimension), x: nbt.SpawnX, z: nbt.SpawnZ, kind: "respawn" });
+  }
+  const respawn = nbt.respawn;
+  if (respawn && typeof respawn === "object" && Array.isArray(respawn.pos) && respawn.pos.length >= 3) {
+    out.push({ dimension: dimensionIdOf(respawn.dimension), x: respawn.pos[0], z: respawn.pos[2], kind: "respawn" });
+  }
+  return true;
+}
+
+/** The most force-loaded chunks read from one dimension; a world has a handful. */
+const MAX_FORCED = 100_000;
+
+/** Chunk coordinates in an unpacked ChunkPos long: x in the low 32 bits, z in the high 32. */
+function unpackChunkPos(packed) {
+  const v = BigInt(packed);
+  return { x: Number(BigInt.asIntN(32, v)), z: Number(BigInt.asIntN(32, v >> 32n)) };
+}
+
+/**
+ * The chunks a dimension keeps loaded with /forceload, as `[{x, z}]` in chunk
+ * coordinates, from <dimension>/data/chunks.dat. Recognised spellings: a packed
+ * long array under `Forced` (up to 1.21.x) and ticket entries that carry a
+ * `chunk_pos` int pair. A missing file means none; one that cannot be read is
+ * reported in `issues.forcedUnreadable`, because those chunks then go
+ * unprotected.
+ */
+function readForcedChunks(dimDir, issues = null) {
+  const file = path.join(dimDir, "data", "chunks.dat");
+  let doc;
+  try {
+    if (!fs.existsSync(file)) return [];
+    const raw = fs.readFileSync(file);
+    doc = parseNbt(raw[0] === 0x1f && raw[1] === 0x8b ? zlib.gunzipSync(raw) : raw, { bigLongs: true });
+  } catch {
+    if (issues) issues.forcedUnreadable = true;
+    return [];
+  }
+  const out = [];
+  const visit = (node, depth) => {
+    if (!node || typeof node !== "object" || depth > 6 || out.length >= MAX_FORCED) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item, depth + 1);
+      return;
+    }
+    if (Array.isArray(node.Forced)) {
+      for (const packed of node.Forced) if (typeof packed === "bigint" && out.length < MAX_FORCED) out.push(unpackChunkPos(packed));
+    }
+    if (Array.isArray(node.chunk_pos) && node.chunk_pos.length === 2 && node.chunk_pos.every((n) => typeof n === "number")) {
+      out.push({ x: node.chunk_pos[0], z: node.chunk_pos[1] });
+    }
+    for (const value of Object.values(node)) visit(value, depth + 1);
+  };
+  visit(doc, 0);
+  return out;
 }
 
 module.exports = {
@@ -171,5 +240,7 @@ module.exports = {
   discoverDimensions,
   readSpawn,
   readPlayerPositions,
+  readForcedChunks,
   dimensionIdOf,
+  normalizeDimensionId,
 };

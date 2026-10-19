@@ -68,12 +68,24 @@ function fetchModPackInfo() {
       // matching known loader names and pick the MC version by pattern
       // (legacy "1.x.y" or the new "YY.D[.H]" form).
       const KNOWN_LOADERS = ["forge", "fabric", "quilt", "neoforge"];
+      // Not found stays null: "none" written as a loader or version would be
+      // read back later as if it were one.
       const modLoader =
         gameVersions.find((v) =>
           KNOWN_LOADERS.includes(String(v).toLowerCase()),
-        ) || "none";
+        ) || null;
       const gameVersion =
-        gameVersions.find((v) => /^\d+(\.\d+){1,3}$/.test(String(v))) || "none";
+        gameVersions.find((v) => /^\d+(\.\d+){1,3}$/.test(String(v))) || null;
+      if (!modLoader || !gameVersion) {
+        console.warn(
+          `Warning: could not tell the ${!modLoader ? "mod loader" : "Minecraft version"} from this server pack's game versions (${gameVersions.join(", ") || "none listed"}); it is not recorded.`,
+        );
+      }
+      // CurseForge lists hashes as {value, algo}: algo 1 is SHA-1, 2 is MD5.
+      const sha1 = (fileData.hashes || []).find((h) => h.algo === 1)?.value || null;
+      if (!sha1) {
+        console.warn("Warning: CurseForge published no SHA-1 for this server pack; it cannot be verified.");
+      }
 
       console.log(
         `Downloading server pack (${formatBytes(fileData.fileLength)})...`
@@ -83,7 +95,8 @@ function fetchModPackInfo() {
       return downloadFile(
         fileData.downloadUrl,
         outputPath,
-        fileData.fileLength
+        fileData.fileLength,
+        { sha1 }
       ).then(() => {
         // Save downloaded version info
         saveDownloadedVersion("modpack", packID, fileData.id, modLoader, gameVersion);

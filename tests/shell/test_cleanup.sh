@@ -164,4 +164,102 @@ test_a_count_cap_of_zero_keeps_everything() {
   assert_exists "$T/backups/archives/daily/minecraft_backup_d1.tar.zst" "and the daily one"
 }
 
+# ── retention covers every archive type ──────────────────────────────────────
+
+test_general_and_custom_archives_are_evicted_before_monthly_when_space_runs_out() {
+  setup
+  set_var MAX_STORAGE_GB 1
+  mk_backup archives/monthly minecraft_backup_m1.tar.zst 1
+  mk_backup archives/monthly minecraft_backup_m2.tar.zst 2
+  mk_backup archives/general minecraft_backup_g1.tar.zst 3
+  mk_backup archives/general minecraft_backup_g2.tar.zst 4
+  mk_backup archives/before-event minecraft_backup_c1.tar.zst 5
+  export DU_SHIM_BYTES=$((1073741824 + 250))
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_missing "$T/backups/archives/general/minecraft_backup_g1.tar.zst" "the oldest general archive goes first"
+  assert_missing "$T/backups/archives/general/minecraft_backup_g2.tar.zst" "then the next one"
+  assert_missing "$T/backups/archives/before-event/minecraft_backup_c1.tar.zst" "then the custom type"
+  assert_exists "$T/backups/archives/monthly/minecraft_backup_m1.tar.zst" "monthly is untouched while others remain"
+  assert_exists "$T/backups/archives/monthly/minecraft_backup_m2.tar.zst" "both monthlies"
+}
+
+test_custom_archives_follow_the_custom_count_cap() {
+  setup
+  set_var MAX_CUSTOM_BACKUPS 1
+  mk_backup archives/general minecraft_backup_g1.tar.zst 1
+  mk_backup archives/general minecraft_backup_g2.tar.zst 2
+  mk_backup archives/pre-event minecraft_backup_c1.tar.zst 3
+  mk_backup archives/pre-event minecraft_backup_c2.tar.zst 4
+  run_script "$CLEANUP"
+  assert_missing "$T/backups/archives/general/minecraft_backup_g1.tar.zst" "the older general archive is pruned"
+  assert_exists "$T/backups/archives/general/minecraft_backup_g2.tar.zst" "the newest is kept"
+  assert_missing "$T/backups/archives/pre-event/minecraft_backup_c1.tar.zst" "the older custom archive is pruned"
+  assert_exists "$T/backups/archives/pre-event/minecraft_backup_c2.tar.zst" "the newest is kept"
+}
+
+test_custom_archives_are_kept_by_default() {
+  setup
+  mk_backup archives/general minecraft_backup_g1.tar.zst 1
+  mk_backup archives/general minecraft_backup_g2.tar.zst 2
+  run_script "$CLEANUP"
+  assert_exists "$T/backups/archives/general/minecraft_backup_g1.tar.zst" "no count limit unless MAX_CUSTOM_BACKUPS is set"
+  assert_exists "$T/backups/archives/general/minecraft_backup_g2.tar.zst" "both kept"
+}
+
+# ── the file name decides the order, and the last valid archive stays ────────
+
+test_the_timestamp_in_the_name_decides_which_archive_is_newest() {
+  setup
+  set_var MAX_HOURLY_BACKUPS 1
+  local old="minecraft_backup_2026-01-01_00-00-00.tar.zst" new="minecraft_backup_2026-02-01_00-00-00.tar.zst"
+  mk_backup hourly "$old" 20
+  mk_backup hourly "$new" 2
+  run_script "$CLEANUP"
+  assert_exists "$T/backups/hourly/$new" "the later name is kept although its mtime is older"
+  assert_missing "$T/backups/hourly/$old" "the earlier name is pruned although its mtime is newer"
+}
+
+test_the_newest_valid_archive_of_a_tier_is_never_evicted() {
+  setup
+  set_var MAX_STORAGE_GB 1
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" only-good
+  export DU_SHIM_BYTES=$((1073741824 + 5000))
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_exists "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" "the only valid archive stays"
+  assert_contains "$OUT" "still above" "the overflow is reported instead"
+}
+
+test_a_corrupt_newest_archive_does_not_shield_older_ones_from_being_the_kept_one() {
+  setup
+  set_var MAX_HOURLY_BACKUPS 1
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" good
+  mkdir -p "$T/backups/hourly"
+  echo "broken" > "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst"
+  run_script "$CLEANUP"
+  assert_exists "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" "the older but valid archive survives the count cap"
+}
+
+# ── the size measure and the operation lock ──────────────────────────────────
+
+test_the_size_measure_leaves_out_a_running_backup_and_the_jars_folder() {
+  setup
+  set_var MAX_STORAGE_GB 1
+  run_script "$CLEANUP"
+  assert_logged "du -sb --exclude=tmp_backup --exclude=jars $T/backups" "du skips tmp_backup and jars"
+}
+
+test_cleanup_waits_for_a_running_operation() {
+  setup
+  set_var MAX_HOURLY_BACKUPS 1
+  mk_backup hourly minecraft_backup_h1.tar.zst 1
+  mk_backup hourly minecraft_backup_h2.tar.zst 2
+  export FLOCK_SHIM_BUSY=1 INSTANCE_LOCK_DIR="$T/locks"
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "a busy lock is a skip, not a failure"
+  assert_contains "$OUT" "skipping backup cleanup" "says it skipped"
+  assert_exists "$T/backups/hourly/minecraft_backup_h1.tar.zst" "nothing was deleted"
+}
+
 run_tests

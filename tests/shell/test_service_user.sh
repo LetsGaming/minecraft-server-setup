@@ -47,10 +47,10 @@ test_a_dry_run_plans_the_user_and_the_grants_and_changes_nothing() {
   local out
   out="$(bash "$SU" --scripts-dir "$T/scripts" --user mcapi-test-zz "${TOOLS[@]}" --dry-run 2>&1)"
   assert_contains "$out" "useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin mcapi-test-zz" "an unprivileged system user"
-  assert_contains "$out" "setfacl -R -m u:mcapi-test-zz:rX $T/server" "read on the server folder"
-  assert_contains "$out" "setfacl -R -m u:mcapi-test-zz:rwX $T/server/config" "write on a config folder"
-  assert_contains "$out" "setfacl -m u:mcapi-test-zz:rwX $T/server/server.properties" "write on server.properties only as a file"
-  assert_contains "$out" "setfacl -R -m u:mcapi-test-zz:rwX $T/server/world/stats" "write on the stats folder"
+  assert_contains "$out" "setfacl -R -P -m u:mcapi-test-zz:rX $T/server" "read on the server folder"
+  assert_contains "$out" "setfacl -R -P -m u:mcapi-test-zz:rwX $T/server/config" "write on a config folder"
+  assert_contains "$out" "setfacl -P -m u:mcapi-test-zz:rwX $T/server/server.properties" "write on server.properties only as a file"
+  assert_contains "$out" "setfacl -R -P -m u:mcapi-test-zz:rwX $T/server/world/stats" "write on the stats folder"
   assert_not_contains "$out" "rwX $T/server/plugins" "never write on plugins/, where jars run as the owner (S-004)"
   assert_contains "$out" "$T/backups -type d -exec setfacl" "write on the backups folders, not their archives"
   assert_not_contains "$out" "rwX $T/server " "never write on the whole server folder"
@@ -78,6 +78,40 @@ test_a_path_sudoers_cannot_take_literally_is_refused() {
   local rc=0
   bash "$SU" --scripts-dir "$T/with space" --user mcapi-test "${TOOLS[@]}" --dry-run > /dev/null 2>&1 || rc=$?
   assert_rc 2 "$rc" "a space in the scripts path is refused"
+}
+
+test_a_symlink_planted_in_the_instance_is_never_followed() {
+  setup
+  mkdir -p "$T/outside"
+  rm -rf "$T/server/config"
+  ln -s "$T/outside" "$T/server/config"
+  local out rc=0
+  out="$(bash "$SU" --scripts-dir "$T/scripts" --user mcapi-test-zz "${TOOLS[@]}" --dry-run 2>&1)" || rc=$?
+  assert_rc 1 "$rc" "the run reports the refused path"
+  assert_contains "$out" "Refusing $T/server/config" "the symlinked folder is named"
+  assert_eq 0 "$(grep -c "would run: setfacl.* $T/server/config$" <<< "$out" || true)" "no setfacl call is made for it"
+}
+
+test_a_symlinked_parent_of_a_target_is_refused() {
+  setup
+  mkdir -p "$T/outside/stats"
+  rm -rf "$T/server/world"
+  ln -s "$T/outside" "$T/server/world"
+  local out rc=0
+  out="$(bash "$SU" --scripts-dir "$T/scripts" --user mcapi-test-zz "${TOOLS[@]}" --dry-run 2>&1)" || rc=$?
+  assert_rc 1 "$rc" "the run reports the refused path"
+  assert_contains "$out" "Refusing $T/server/world/stats" "the stats folder behind the link is refused"
+  assert_not_contains "$out" "rwX $T/server/world/stats" "no write grant behind the link"
+}
+
+test_a_level_name_with_a_path_in_it_gets_no_stats_grant() {
+  setup
+  mkdir -p "$T/server/../etc-target/stats"
+  echo "level-name=../etc-target" > "$T/server/server.properties"
+  local out
+  out="$(bash "$SU" --scripts-dir "$T/scripts" --user mcapi-test-zz "${TOOLS[@]}" --dry-run 2>&1)"
+  assert_contains "$out" "is not a plain folder name" "the level name is rejected"
+  assert_eq 0 "$(grep -c "would run:.*etc-target" <<< "$out" || true)" "no call reaches the folder it points at"
 }
 
 test_the_unit_gets_umask_once_and_the_old_unit_is_kept() {

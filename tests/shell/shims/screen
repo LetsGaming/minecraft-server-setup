@@ -5,6 +5,11 @@ echo "screen $*" >> "$SHIM_LOG"
 if [[ -n "${SCREEN_SHIM_SAVE_LOG:-}" && "$*" == *save-all* ]]; then
   echo "[00:00:00] [Server thread/INFO]: Saved the game" >> "$SCREEN_SHIM_SAVE_LOG"
 fi
+# SCREEN_SHIM_LIST_REPLY=<line>: a stuffed /list is answered with that line,
+# written to the SCREEN_SHIM_SAVE_LOG file.
+if [[ -n "${SCREEN_SHIM_LIST_REPLY:-}" && -n "${SCREEN_SHIM_SAVE_LOG:-}" && "$*" == */list* ]]; then
+  echo "$SCREEN_SHIM_LIST_REPLY" >> "$SCREEN_SHIM_SAVE_LOG"
+fi
 if [[ "$1" == "-list" ]]; then
   if [[ -e "$SHIM_STATE/screen_running" ]]; then
     printf 'There is a screen on:\n\t1234.%s\t(Detached)\n1 Socket in /run/screen.\n' "${SCREEN_SHIM_SESSION:-$INSTANCE_NAME}"

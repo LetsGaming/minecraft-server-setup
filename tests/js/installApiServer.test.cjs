@@ -8,7 +8,7 @@ const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 
 const INSTALLER = path.resolve(__dirname, "..", "..", "src", "setup", "management", "install_api_server.js");
-const { install, inspect, releaseUrl, readPin, MARKER } = require(INSTALLER);
+const { install, inspect, releaseUrl, readPin, replaceContents, MARKER } = require(INSTALLER);
 
 const REPO = "LetsGaming/minecraft-server-api";
 const quiet = () => {};
@@ -188,4 +188,47 @@ test("--check prints one line and changes nothing", scratch(async (root, dir) =>
   assert.equal(res.status, 0, res.stderr);
   assert.equal(res.stdout.trim(), `state=missing installed=- pinned=${readPin().version}`);
   assert.equal(fs.existsSync(dir), false);
+}));
+
+test("replacing the install swaps whole folders: preserved files carry over and no .old is left", scratch(async (root, dir) => {
+  fs.mkdirSync(path.join(dir, "logs"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "index.js"), "old");
+  fs.writeFileSync(path.join(dir, "stale.js"), "stale");
+  fs.writeFileSync(path.join(dir, ".env"), "KEEP=1");
+  fs.writeFileSync(path.join(dir, "logs", "a.log"), "log");
+  const fresh = path.join(root, "services", ".api-server-staging-x");
+  fs.mkdirSync(fresh, { recursive: true });
+  fs.writeFileSync(path.join(fresh, "index.js"), "new");
+  fs.writeFileSync(path.join(fresh, ".env"), "KEEP=0");
+
+  replaceContents(dir, fresh);
+
+  assert.equal(fs.readFileSync(path.join(dir, "index.js"), "utf8"), "new");
+  assert.equal(fs.existsSync(path.join(dir, "stale.js")), false);
+  assert.equal(fs.readFileSync(path.join(dir, ".env"), "utf8"), "KEEP=1");
+  assert.equal(fs.readFileSync(path.join(dir, "logs", "a.log"), "utf8"), "log");
+  assert.deepEqual(fs.readdirSync(path.dirname(dir)), ["api-server"]);
+}));
+
+test("a failure while preparing the swap leaves the old install exactly as it was", scratch(async (root, dir) => {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "index.js"), "old");
+  fs.writeFileSync(path.join(dir, ".env"), "KEEP=1");
+  const notAFolder = path.join(root, "services", "staging-is-a-file");
+  fs.writeFileSync(notAFolder, "x");
+
+  assert.throws(() => replaceContents(dir, notAFolder));
+
+  assert.equal(fs.readFileSync(path.join(dir, "index.js"), "utf8"), "old");
+  assert.equal(fs.readFileSync(path.join(dir, ".env"), "utf8"), "KEEP=1");
+  assert.equal(fs.existsSync(`${dir}.old`), false);
+}));
+
+test("a first install into a missing folder just moves the staging folder into place", scratch(async (root, dir) => {
+  const fresh = path.join(root, "services", ".api-server-staging-y");
+  fs.mkdirSync(fresh, { recursive: true });
+  fs.writeFileSync(path.join(fresh, "index.js"), "new");
+  replaceContents(dir, fresh);
+  assert.equal(fs.readFileSync(path.join(dir, "index.js"), "utf8"), "new");
+  assert.equal(fs.existsSync(fresh), false);
 }));

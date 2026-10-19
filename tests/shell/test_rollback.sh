@@ -19,6 +19,16 @@ test_rollback_restores_latest_update_backup() {
   assert_logged "systemctl start testinst.service" "server started again"
 }
 
+test_the_metadata_folder_does_not_stay_in_the_live_server() {
+  setup
+  make_archive_with_unit "$T/backups/$UPDATE_DIR_REL/minecraft_backup_m.tar.zst" before-update testinst.service "ExecStart=/bin/true"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 0 "$RC" "rollback exits 0"
+  assert_file_content "$T/server/world/level.dat" before-update "world restored"
+  assert_missing "$T/server/.mc-meta" "the archived copy of variables and units is removed"
+}
+
 test_no_update_backups() {
   setup
   run_script "$ROLLBACK" --y
@@ -104,6 +114,24 @@ test_rollback_replaces_dotfiles() {
   assert_rc 0 "$RC" "rollback exits 0"
   assert_missing "$T/server/.live_dotfile" "stale dotfile gone"
   assert_exists "$T/server/.restored_dotfile" "archive dotfile present"
+}
+
+test_keep_old_keeps_the_replaced_server_files() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
+  server_running
+  run_script "$ROLLBACK" --y --keep-old
+  assert_rc 0 "$RC" "rollback exits 0"
+  assert_file_content "$T/server/world/level.dat" before-update "world restored"
+  assert_file_content "$T/server.pre-restore/world/level.dat" current "the previous world is kept"
+}
+
+test_rollback_deletes_the_replaced_files_without_keep_old() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_missing "$T/server.pre-restore" "nothing kept by default"
 }
 
 run_tests

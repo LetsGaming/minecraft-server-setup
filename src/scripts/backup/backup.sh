@@ -4,6 +4,7 @@ set -e
 # ——— basics ———
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../common/server_control.sh"
+source "$SCRIPT_DIR/../common/archive_restore.sh"
 source "$SCRIPT_DIR/../common/utils.sh"
 
 # Track auto-save state so we can always re-enable on exit
@@ -146,24 +147,44 @@ fi
 log INFO "Backup directory: $BACKUP_DIR"
 
 # ——— disable auto‑save ———
-log INFO "Disabling auto-save..."
+abort_backup() {
+  log ERROR "$1. Aborting, so that no half-written world is archived."
+  send_message "Backup failed: $1" || true
+  notify_error "backup_failed" "$1. No backup was made." || true
+  wait_for_notifications
+  exit 1
+}
+
+# A stopped server has nothing to flush. One that is up, or whose state cannot
+# be told, must confirm both commands, or the copy below could catch region
+# files mid-write.
+SERVER_UP=false
 if ! $DRY_RUN; then
+  server_state=0
+  server_is_running || server_state=$?
+  [[ "$server_state" -ne 1 ]] && SERVER_UP=true
+fi
+
+if $SERVER_UP; then
+  log INFO "Disabling auto-save..."
   # Marked before the call (S-011): save-off can take effect even when its
   # reply is lost, and then only the trap's save-on turns saving back on.
   _AUTO_SAVE_DISABLED=true
-  disable_auto_save || log WARN "disable_auto_save failed"
-fi
+  disable_auto_save || abort_backup "Could not turn auto-save off"
 
-# ——— force a save ———
-log INFO "Saving world to disk..."
-$DRY_RUN || save_and_wait || log WARN "save_and_wait failed"
-sleep 2
+  # Force a save.
+  log INFO "Saving world to disk..."
+  save_and_wait || abort_backup "The server did not confirm the save"
+  sleep 2
+elif ! $DRY_RUN; then
+  log INFO "The server is not running; copying its files as they are."
+fi
 
 # ——— build include list ———
 cd "$SERVER_PATH"
 INCLUDE_PATHS=()
 for item in * .*; do
-  [[ "$item" == "." || "$item" == ".." || "$item" == "backups" ]] && continue
+  [[ "$item" == "." || "$item" == ".." || "$item" == "backups" || "$item" == ".mc-meta" ]] && continue
   INCLUDE_PATHS+=("$item")
 done
 
@@ -201,7 +222,14 @@ $DRY_RUN || nice_run rsync -a --inplace --numeric-ids "${EXCLUDES[@]}" "${INCLUD
     exit 1
 }
 
-# ——— jars in archive mode ———
+# The snapshot is on disk; compressing and validating it can take minutes, and
+# the server must not run without auto-save for that long.
+if $_AUTO_SAVE_DISABLED && ! $DRY_RUN; then
+  log INFO "Re-enabling auto-save..."
+  enable_auto_save && _AUTO_SAVE_DISABLED=false || log WARN "enable_auto_save failed, run /save-on manually"
+fi
+
+# Jars in archive mode.
 # An archive keeps the real jars rsync copied above (S-002). It used to swap
 # them for links into a shared jars/ folder: the links only resolved inside the
 # backups tree, so every restored archive had a dangling server.jar, and the
@@ -307,12 +335,6 @@ fi
 
 # ——— cleanup ———
 $DRY_RUN || { rm -rf -- "$TMP_DIR"; TMP_DIR=""; }
-
-# ——— re‑enable auto‑save (explicit + trap handles edge cases) ———
-if $_AUTO_SAVE_DISABLED && ! $DRY_RUN; then
-  log INFO "Re-enabling auto-save..."
-  enable_auto_save && _AUTO_SAVE_DISABLED=false || log WARN "enable_auto_save failed — run /save-on manually"
-fi
 
 # ——— success message ———
 TIME_TAKEN=$(( $(date +%s) - START_TIME ))

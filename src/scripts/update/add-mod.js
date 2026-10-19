@@ -45,7 +45,8 @@ const { readManifest, writeManifest } = require("./lib/manifest");
 const { parseArgs } = require("./lib/args");
 const { loadVariables } = require("./lib/variables");
 const { createJsonMode } = require("./lib/json-mode");
-const { safeFilenameFromUrl, downloadVerified } = require("./lib/download");
+const { safeFilenameFromUrl, downloadVerified, fileMatchesHash } = require("./lib/download");
+const { pickVersion } = require("./lib/versions");
 
 const cliArgs = parseArgs({
   flags: { slug: null, mcVersion: null, modLoader: null, versionId: null },
@@ -124,7 +125,7 @@ async function downloadFile(file, targetPath) {
 async function resolveProject(slugOrId) {
   try {
     const res = await axios.get(
-      `https://api.modrinth.com/v2/project/${slugOrId}`,
+      `https://api.modrinth.com/v2/project/${encodeURIComponent(slugOrId)}`,
     );
     return res.data;
   } catch (err) {
@@ -141,29 +142,18 @@ async function resolveProject(slugOrId) {
 
 async function fetchCompatibleVersion(projectId, mcVersion, modLoader) {
   const res = await axios.get(
-    `https://api.modrinth.com/v2/project/${projectId}/version`,
+    `https://api.modrinth.com/v2/project/${encodeURIComponent(projectId)}/version`,
     { params: { game_versions: [mcVersion], loaders: [modLoader] } },
   );
 
-  const versions = res.data;
-  if (!versions.length) return null;
-
-  // Most recently published compatible version
-  versions.sort(
-    (a, b) => new Date(b.date_published) - new Date(a.date_published),
-  );
-  return (
-    versions.find(
-      (v) =>
-        v.game_versions.includes(mcVersion) && v.loaders.includes(modLoader),
-    ) ?? null
-  );
+  // The newest release; a beta or alpha only when the mod has no release.
+  return pickVersion(res.data, mcVersion, modLoader);
 }
 
 async function fetchVersion(versionId) {
   try {
     const res = await axios.get(
-      `https://api.modrinth.com/v2/version/${versionId}`,
+      `https://api.modrinth.com/v2/version/${encodeURIComponent(versionId)}`,
     );
     return res.data;
   } catch (err) {
@@ -245,8 +235,8 @@ async function installMod(
 
     console.log(`${indent}File      : ${filename}`);
 
-    if (fs.existsSync(targetPath)) {
-      console.log(`${indent}File already present in mods dir.`);
+    if (fs.existsSync(targetPath) && fileMatchesHash(targetPath, primaryFile.hashes)) {
+      console.log(`${indent}File already present in mods dir and matches its published checksum.`);
     } else {
       process.stdout.write(indent);
       await downloadFile(primaryFile, targetPath);
@@ -286,7 +276,9 @@ async function installMod(
   console.log(`${indent}File      : ${filename}`);
   console.log(`${indent}Published : ${version.date_published}`);
 
-  if (fs.existsSync(targetPath)) {
+  // A file with that name may be anything; it is registered only when it is the
+  // build Modrinth lists, otherwise it is replaced by a verified download.
+  if (fs.existsSync(targetPath) && fileMatchesHash(targetPath, primaryFile.hashes)) {
     console.log(`${indent}File already present in mods dir — skipping download.`);
   } else {
     process.stdout.write(indent); // align the progress line with the rest

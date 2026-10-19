@@ -53,6 +53,15 @@ test_archive_finds_the_wrapper_config_in_the_old_layout() {
   assert_contains "$OUT" "✓ api-server-config.json" "the config at <root>/api-server/ is staged"
 }
 
+test_a_leftover_metadata_folder_is_not_backed_up() {
+  setup
+  mkdir -p "$T/server/.mc-meta"
+  echo 'RCON_PASSWORD="hunter2"' > "$T/server/.mc-meta/variables.txt"
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "hourly backup exits 0"
+  assert_not_contains "$("$REAL_TAR" -tzf "$(first_archive "$T/backups/hourly")")" ".mc-meta" "the folder is left out"
+}
+
 test_dry_run_writes_nothing() {
   setup
   run_script "$BACKUP" --dry-run
@@ -197,7 +206,7 @@ test_run_backup_skips_quietly_when_locked() {
   export FLOCK_SHIM_BUSY=1 MC_OPERATION_LOCK_HELD=1
   run_script "$RUN_BACKUP"
   assert_rc 0 "$RC" "cron run exits 0 when another backup is active"
-  assert_contains "$OUT" "Another backup is running" "logs the skip"
+  assert_contains "$OUT" "This backup was SKIPPED" "logs the skip"
 }
 
 test_backup_yields_to_a_running_operation() {
@@ -258,6 +267,51 @@ test_an_archive_backup_restores_to_real_jars() {
   assert_file_content "$T/server/server.jar" server-jar "with the archived contents"
   assert_file_content "$T/server/mods/a.jar" mod-jar "and so are the mods"
   assert_missing "$T/server/a.jar" "no stray jar links at the top level"
+}
+
+# ── a backup needs a confirmed save ──────────────────────────────────────────
+
+test_an_unconfirmed_save_aborts_the_backup_and_turns_saving_back_on() {
+  setup
+  server_running
+  export SAVE_TIMEOUT_SECONDS=2
+  run_script "$BACKUP"
+  assert_rc 1 "$RC" "the backup fails"
+  assert_contains "$OUT" "did not confirm the save" "says why"
+  assert_eq "" "$(first_archive "$T/backups/hourly")" "no archive was written"
+  assert_logged "save-on" "auto-save is turned back on"
+}
+
+test_a_failed_save_off_over_rcon_aborts_without_a_console_fallback() {
+  setup
+  use_rcon_shim
+  server_running
+  export NODE_SHIM_RCON_RC=1
+  run_script "$BACKUP"
+  assert_rc 1 "$RC" "the backup fails"
+  assert_contains "$OUT" "Could not turn auto-save off" "says why"
+  assert_not_logged "stuff /save-off" "save-off was not typed into the console"
+  assert_eq "" "$(first_archive "$T/backups/hourly")" "no archive was written"
+}
+
+test_a_stopped_server_is_backed_up_without_save_commands() {
+  setup
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "the backup succeeds"
+  assert_contains "$OUT" "The server is not running" "says it copied the files as they are"
+  assert_not_logged "save-off" "no save-off"
+}
+
+test_auto_save_is_back_on_before_the_archive_is_compressed() {
+  setup
+  server_running
+  export SCREEN_SHIM_SAVE_LOG="$T/server/logs/latest.log"
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "the backup succeeds"
+  local on_line zstd_line
+  on_line="$(grep -n 'save-on' "$SHIM_LOG" | head -n 1 | cut -d: -f1)"
+  zstd_line="$(grep -n '^zstd .*-o ' "$SHIM_LOG" | head -n 1 | cut -d: -f1)"
+  assert_eq 1 "$([[ -n "$on_line" && -n "$zstd_line" && "$on_line" -lt "$zstd_line" ]] && echo 1 || echo 0)" "save-on comes before compression"
 }
 
 run_tests

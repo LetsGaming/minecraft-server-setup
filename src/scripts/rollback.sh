@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/common/utils.sh"
 
 BACKUP_DIR="$BACKUPS_PATH/archives/update"
 SKIP_CONFIRMATION=false
+KEEP_OLD=false
 
 print_help() {
   cat <<EOF
@@ -16,15 +17,18 @@ Usage: $0 [options]
 Rolls back the server to the most recent pre-update backup.
 
 Options:
-  --y       Skip confirmation prompt
-  --list    List available update backups and exit
-  --help    Show this help message
+  --y         Skip confirmation prompt
+  --keep-old  Keep the replaced server files as <server>.pre-restore instead of
+              deleting them (an earlier .pre-restore copy is replaced)
+  --list      List available update backups and exit
+  --help      Show this help message
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --y) SKIP_CONFIRMATION=true; shift ;;
+    --keep-old) KEEP_OLD=true; shift ;;
     --list)
       echo "Available update backups in $BACKUP_DIR:"
       if [[ -d "$BACKUP_DIR" ]]; then
@@ -105,7 +109,7 @@ notify_warning "rollback_start" "Server $INSTANCE_NAME is rolling back to backup
 # Extract next to the server directory and swap, so a failure leaves the
 # current files in place.
 STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
-trap 'swap_recover; rm -rf -- "$STAGING_DIR"; release_operation_lock' EXIT
+trap 'swap_recover; rm -rf -- "$STAGING_DIR" "${SERVER_PATH%/}/.mc-meta"; release_operation_lock' EXIT
 trap 'exit 130' INT TERM
 
 echo "[INFO] Restoring backup..."
@@ -119,7 +123,7 @@ if ! require_server_stopped; then
   echo "[ERROR] Aborting. Server files were not changed." >&2
   exit 1
 fi
-if ! swap_server_dir "$STAGING_DIR" "$SERVER_PATH"; then
+if ! swap_server_dir "$STAGING_DIR" "$SERVER_PATH" "$($KEEP_OLD && echo keep)"; then
   restart_after_failure
   exit 1
 fi

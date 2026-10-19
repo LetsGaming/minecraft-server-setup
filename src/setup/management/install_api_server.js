@@ -23,8 +23,9 @@
  *
  * A failed download, check, unpack or `npm ci` leaves the existing install
  * untouched: everything happens in a staging folder next to <dir> first. Only
- * then are <dir>'s files replaced in place, keeping the folder itself (and so
- * any default ACL service_user.sh put on it) and the files listed in PRESERVE.
+ * then is <dir> swapped for it by rename, so it is the old install or the new
+ * one, never a mix. The files listed in PRESERVE are carried over and the new
+ * folder takes the old one's owner, mode and ACL.
  */
 
 const fs = require("fs");
@@ -101,18 +102,51 @@ function npmInstall(dir, log) {
   execFileSync(npm, [...args, "--no-audit", "--no-fund"], { cwd: dir, stdio: ["ignore", "inherit", "inherit"] });
 }
 
-/** Replace <dir>'s contents with <staging>'s, keeping PRESERVE and the folder itself. */
-function replaceContents(dir, staging) {
-  fs.mkdirSync(dir, { recursive: true });
-  for (const name of fs.readdirSync(dir)) {
-    if (PRESERVE.has(name)) continue;
-    fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+/** Give <fresh> the owner, mode and ACL of <dir>, as far as this host and user allow. */
+function copyDirAttributes(dir, fresh) {
+  const st = fs.statSync(dir);
+  fs.chmodSync(fresh, st.mode & 0o7777);
+  try {
+    fs.chownSync(fresh, st.uid, st.gid);
+  } catch {
+    /* not root: the new folder stays with this user */
   }
-  for (const name of fs.readdirSync(staging)) {
-    if (PRESERVE.has(name) && fs.existsSync(path.join(dir, name))) continue;
-    // Copied, not renamed: new files are created inside <dir> and inherit its default ACL.
-    fs.cpSync(path.join(staging, name), path.join(dir, name), { recursive: true, verbatimSymlinks: true });
+  try {
+    const acl = execFileSync("getfacl", ["--absolute-names", "--omit-header", dir], { stdio: ["ignore", "pipe", "ignore"] });
+    execFileSync("setfacl", ["--set-file=-", fresh], { input: acl, stdio: ["pipe", "ignore", "ignore"] });
+  } catch {
+    /* no ACL tools, or the filesystem has none */
   }
+}
+
+/**
+ * Replace <dir> with the finished tree in <fresh> (a sibling of <dir>, so the
+ * swap is a rename on one filesystem): the PRESERVE entries are copied into
+ * it, then <dir> is renamed aside, <fresh> takes its place, and the old tree is
+ * deleted. A failure before the second rename leaves <dir> as it was; one in
+ * it puts <dir> back.
+ */
+function replaceContents(dir, fresh) {
+  const old = `${path.resolve(dir)}.old`;
+  const existing = fs.existsSync(dir);
+  fs.rmSync(old, { recursive: true, force: true });
+  if (existing) {
+    for (const name of PRESERVE) {
+      const from = path.join(dir, name);
+      if (fs.existsSync(from)) fs.cpSync(from, path.join(fresh, name), { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
+    }
+    copyDirAttributes(dir, fresh);
+    fs.renameSync(dir, old);
+  } else {
+    fs.chmodSync(fresh, 0o755);
+  }
+  try {
+    fs.renameSync(fresh, dir);
+  } catch (err) {
+    if (existing) fs.renameSync(old, dir);
+    throw err;
+  }
+  fs.rmSync(old, { recursive: true, force: true });
 }
 
 /**
@@ -213,4 +247,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { readPin, releaseUrl, assetName, inspect, install, PRESERVE, MARKER };
+module.exports = { readPin, releaseUrl, assetName, inspect, install, replaceContents, PRESERVE, MARKER };

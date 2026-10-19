@@ -227,12 +227,53 @@ function writeLevelDat(worldDir, spawnX, spawnZ) {
   fs.writeFileSync(path.join(worldDir, "level.dat"), zlib.gzipSync(nbt));
 }
 
-/** A player file; `folder` is "playerdata" (before 26.x) or "players/data" (26.x). */
-function writePlayer(worldDir, uuid, { dimension = "minecraft:overworld", x, z, folder = "playerdata" }) {
+const intArray = (name, values) => tag(T.INT_ARRAY, name, Buffer.concat([i32(values.length), ...values.map(i32)]));
+
+/**
+ * A player file; `folder` is "playerdata" (before 26.x) or "players/data" (26.x).
+ * `spawn` adds the pre-1.21.5 respawn fields, `respawn` the compound since then,
+ * and `corrupt` writes bytes that are not NBT.
+ */
+function writePlayer(worldDir, uuid, { dimension = "minecraft:overworld", x, z, folder = "playerdata", spawn = null, respawn = null, corrupt = false }) {
   const dir = path.join(worldDir, ...folder.split("/"));
   fs.mkdirSync(dir, { recursive: true });
-  const nbt = root(string("Dimension", dimension), doubleList("Pos", [x, 70, z]));
+  if (corrupt) {
+    fs.writeFileSync(path.join(dir, `${uuid}.dat`), Buffer.from("not nbt at all"));
+    return;
+  }
+  const extra = [];
+  if (spawn) {
+    extra.push(int("SpawnX", spawn.x), int("SpawnY", 64), int("SpawnZ", spawn.z));
+    if (spawn.dimension) extra.push(string("SpawnDimension", spawn.dimension));
+  }
+  if (respawn) {
+    extra.push(compound("respawn", intArray("pos", [respawn.x, 64, respawn.z]), string("dimension", respawn.dimension ?? "minecraft:overworld")));
+  }
+  const nbt = root(string("Dimension", dimension), doubleList("Pos", [x, 70, z]), ...extra);
   fs.writeFileSync(path.join(dir, `${uuid}.dat`), zlib.gzipSync(nbt));
+}
+
+/**
+ * <dimDir>/data/chunks.dat with the given [x, z] chunk positions force-loaded:
+ * `format` "forced" is the packed long array (`data.Forced`), "tickets" a list of
+ * entries with a `chunk_pos` int pair. "corrupt" writes bytes that are not NBT.
+ */
+function writeForcedChunks(dimDir, positions, { format = "forced" } = {}) {
+  const dir = path.join(dimDir, "data");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "chunks.dat");
+  if (format === "corrupt") {
+    fs.writeFileSync(file, Buffer.from("not nbt at all"));
+    return;
+  }
+  let nbt;
+  if (format === "tickets") {
+    nbt = root(compound("data", compoundList("tickets", positions.map(([x, z]) => [intArray("chunk_pos", [x, z]), string("type", "minecraft:forced")]))));
+  } else {
+    const packed = positions.map(([x, z]) => BigInt.asIntN(64, BigInt.asUintN(32, BigInt(x)) | (BigInt.asUintN(32, BigInt(z)) << 32n)));
+    nbt = root(compound("data", longArray("Forced", packed)));
+  }
+  fs.writeFileSync(file, zlib.gzipSync(nbt));
 }
 
 module.exports = {
@@ -245,4 +286,5 @@ module.exports = {
   makeServer,
   writeLevelDat,
   writePlayer,
+  writeForcedChunks,
 };
