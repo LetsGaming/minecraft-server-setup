@@ -270,27 +270,6 @@ function loadVariables() {
     });
   }
 
-  // ── WEB_INTERFACE (retired) ─────────────────────────────────────────────
-  // The bundled web interface (minecraft-server-manager) was retired; the
-  // minecraft-bot dashboard does the same job and reaches this host through
-  // the API wrapper. The key is warned about rather than rejected: an existing
-  // variables.json still carries it, and failing setup over a leftover block
-  // would break upgrades for no benefit.
-  if (data.WEB_INTERFACE !== undefined) {
-    process.stderr.write(
-      "[WARN] WEB_INTERFACE is no longer used and is ignored. The bundled web\n" +
-      "       interface was retired — use the minecraft-bot dashboard, which\n" +
-      "       talks to this host via API_SERVER. You can delete the block.\n"
-    );
-    if (Array.isArray(data.WEB_INTERFACE.BLOCKED_COMMANDS) &&
-        data.WEB_INTERFACE.BLOCKED_COMMANDS.length > 0) {
-      process.stderr.write(
-        "       Its BLOCKED_COMMANDS moved to the bot's config.json, under\n" +
-        "       webui.console.blockedCommands.\n"
-      );
-    }
-  }
-
   return data;
 }
 

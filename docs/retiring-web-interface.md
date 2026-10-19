@@ -57,8 +57,8 @@ on disk is a login waiting to be switched back on by someone who is not you.
 
 ## Cleaning up the rest by hand
 
-**`variables.json`** — the `WEB_INTERFACE` block is ignored now. Setup warns
-about it once and carries on; delete the block when convenient. If it had a
+**`variables.json`** — the `WEB_INTERFACE` block is ignored now. Delete it
+when convenient. If it had a
 non-empty `BLOCKED_COMMANDS`, move those entries to the bot's
 `webui.console.blockedCommands`.
 

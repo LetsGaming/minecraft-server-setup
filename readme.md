@@ -21,7 +21,7 @@ Automated Minecraft server setup and management with backup rotation, mod update
 
 ## Prerequisites
 
-- **OS:** Linux (Ubuntu/Debian recommended), macOS, or WSL
+- **OS:** Linux with systemd and cron (Ubuntu/Debian recommended)
 - **Bash:** 4.0+
 - **Node.js:** 18+
 - **Tools:** `screen`, `rsync`, `zstd`, `curl` (installed automatically via `download_packages.sh`)
@@ -205,11 +205,10 @@ rather than deleting it, because that directory holds the only copy of its
 credentials. The rest is a short manual checklist:
 [docs/retiring-web-interface.md](docs/retiring-web-interface.md).
 
-The `WEB_INTERFACE` block in `variables.json` is now ignored. Setup warns about
-it once and carries on, so an upgrade does not fail over a leftover key — delete
-the block when convenient. If it had a non-empty `BLOCKED_COMMANDS`, those
-entries move to the bot's `config.json` under `webui.console.blockedCommands`.
-`--interface` is still accepted and does nothing but point you here.
+The `WEB_INTERFACE` block in `variables.json` is ignored, so an upgrade does not
+fail over a leftover key; delete the block when convenient. If it had a
+non-empty `BLOCKED_COMMANDS`, those entries move to the bot's `config.json`
+under `webui.console.blockedCommands`. The `--interface` flag was removed.
 
 The dashboard's backup panel needs the wrapper's `backup-files` and
 `backup-restore` features, and its rollback button needs the `rollback` script

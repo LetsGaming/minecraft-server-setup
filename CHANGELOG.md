@@ -27,6 +27,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **`manage.sh doctor [instance]`** checks an installed instance without changing anything: the unit is enabled and running with crash-loop limits, the backup (and restart) cron jobs exist, backup usage and free disk space are within bounds, the wrapper's sudoers file parses, and the wrapper answers and accepts the configured API key. `--test-webhook` also sends one test notification and reports whether the endpoint accepted it. Run it as an admin with sudo.
+- **The `storage_warning` and `server_stop` webhook events now fire.** `storage_warning` is sent when backups are still over `MAX_STORAGE_GB` after cleanup has evicted everything it may; `server_stop` when `shutdown.sh` (and so `manage.sh stop` or the wrapper's stop action) has stopped the server. The README lists every event and when it is sent.
+- Setup warns about names in `NOTIFICATIONS.WEBHOOK_EVENTS` that no script sends.
+
 - **A dedicated user for the API wrapper.** `API_SERVER.SERVICE_USER` (or `src/setup/management/service_user.sh` by hand) creates an unprivileged system user for the wrapper, grants it with ACLs read on the instance, scripts, backups and wrapper folders and write only on the config folders, `server.properties`, the config snapshot folder, `world/stats` and the backup folders, and writes a validated sudoers file that names the exact scripts, `systemctl` actions and `screen` commands it may run. Adds `UMask=0002` to the instance's unit. See `docs/service-user.md`.
 
 - `update/upgrade.sh <version>` and `upgrade-server.js`: the whole version upgrade as one job (plan check, countdown, stop, archive backup, install, start and watch). If the first start fails the mods without a build for the target are disabled and it starts again; if that fails too, this job's own backup is restored. Progress is NDJSON. See `docs/upgrade.md`.
@@ -51,6 +55,8 @@ All notable changes to this project are documented here. The format follows
 - The shell test runner now fails a test that stops before its last statement (an `exit`, or an `errexit` leaked from a sourced script, used to end it silently with assertions unrun) and a test that makes no assertion at all; `tests/shell/test_assert_harness.sh` tests the runner itself. New tests cover the prune protections, spoofed chunk tags, decompression bombs, unknown spawn, mod update error statuses, `$` in `server.properties` values, setup download failures, and the interactive update's Java ordering.
 
 ### Fixed
+
+- Version-update webhooks (`update_complete`, `update_failed`) were not sent when `NOTIFICATIONS.WEBHOOK_EVENTS` was empty, although an empty list means every event.
 
 - **A migration no longer stops the Minecraft server just to replace its scripts.** The running server has none of them open (backups, updates and the prune run as their own processes, and `start.sh` is only read at start), so it is now stopped only to move its instance folder to the new layout, or with the new `--restart`. Instead the migration takes the operation lock, so it never swaps the scripts under a running upgrade, prune, restore or mod change; when one holds the lock it stops before changing anything. A changed `start.sh` is pointed out as applying at the next start (`migrate.sh`).
 - **`minecraft-server-manager/` is no longer reported on every migration.** Git leaves a removed submodule's folder in the checkout as untracked files, so `src/scripts/minecraft-server-manager/` was copied into the instance each time and reported for removal the next. Like `api-server/`, it is now left out of the copy, and the checkout's leftover is named with the command to delete it (`migrate.sh`).
@@ -113,6 +119,10 @@ All notable changes to this project are documented here. The format follows
 - Setup mod downloads exit non-zero when a mod or a required dependency is missing, has no published checksum or fails verification; the CurseForge server pack records no loader or version rather than the word "none" when it lists none.
 - The mod scripts take the operation lock even where `flock` is missing, using the same `mkdir` lock as the shell scripts, and refuse to run when no lock can be taken (they used to run unlocked).
 - An interactive `update-server.js` points the server at the new JDK only after the update is confirmed and the backup is done; an aborted update leaves `JAVA=` as it was.
+
+### Removed
+
+- The retired `--interface` flag and the setup warnings about a leftover `WEB_INTERFACE` block; the block is now ignored silently. The README no longer lists macOS as supported, since the suite needs systemd and cron.
 
 ## [5.0.0] - 2026-10-10
 

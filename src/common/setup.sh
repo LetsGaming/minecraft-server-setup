@@ -171,14 +171,6 @@ run_optional_setup() {
     warn "Skipping API wrapper setup (use --api-server or set API_SERVER.ENABLED=true)."
   fi
 
-  # The bundled web interface (minecraft-server-manager) was retired: everything
-  # it did now lives in the minecraft-bot dashboard, which reaches this host
-  # through the API wrapper above. Enable API_SERVER and point the bot at it.
-  if [ -n "${SETUP_INTERFACE:-}" ] && [ "$SETUP_INTERFACE" = true ]; then
-    warn "The bundled web interface was removed — use the minecraft-bot dashboard instead."
-    warn "It talks to this host through the API wrapper (API_SERVER.ENABLED=true)."
-  fi
-
   # Setup restart cron if enabled
   local restart_enabled
   restart_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.RESTART_SCHEDULE?.ENABLED || false)" 2>/dev/null)
@@ -546,19 +538,8 @@ run_preflight_check() {
     echo "  ✓ API server disabled (set API_SERVER.ENABLED=true to enable)"
   fi
 
-  # 10. Retired web interface — warn if a stale config or service is left over
+  # 10. Retired web interface — warn if its service is left over
   echo "[CHECK] Retired web interface..."
-  local wi_enabled
-  wi_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.WEB_INTERFACE?.ENABLED || false)" 2>/dev/null)
-  if [ "$wi_enabled" = "true" ]; then
-    # Not an error: the setup simply ignores the block now. Saying so beats
-    # letting someone wait for an interface that is never going to appear.
-    echo "  ! WEB_INTERFACE.ENABLED is still true in variables.json"
-    echo "    The bundled interface was retired — the block is ignored and can be deleted."
-    echo "    Use the minecraft-bot dashboard; it reaches this host via API_SERVER."
-  else
-    echo "  ✓ No stale WEB_INTERFACE config"
-  fi
   if systemctl list-unit-files "${TARGET_DIR_NAME}-manager.service" &>/dev/null; then
     echo "  ! ${TARGET_DIR_NAME}-manager.service still exists"
     echo "    Run migrate.sh, or remove it by hand — see docs/retiring-web-interface.md"
