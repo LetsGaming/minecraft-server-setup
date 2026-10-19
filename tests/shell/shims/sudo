@@ -5,7 +5,7 @@ echo "sudo $*" >> "$SHIM_LOG"
 while [[ "$1" == -* ]]; do
   if [[ "$1" == -u ]]; then shift 2; else shift; fi
 done
-if [[ "$1" == systemctl ]]; then exec "$@"; fi
+if [[ "$1" == systemctl || "$1" == crontab || "$1" == visudo ]]; then exec "$@"; fi
 # screen too: as uid 0 the scripts reach their session through sudo -u, and the
 # screen shim only records and fakes state.
 if [[ "$1" == screen ]]; then exec "$@"; fi

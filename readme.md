@@ -124,6 +124,7 @@ After setup, management scripts are in `<target>/scripts/<instance>/`:
 | `update/update-server.js` | Update server version (auto Java install) |
 | `update/check-updates.js` | Check for mod updates |
 | `misc/status.sh` | Show server status and players |
+| `misc/doctor.sh` | Read-only health check of an installed instance (see [Health check](#health-check)) |
 | `api-server/index.js` | minecraft-bot HTTP API wrapper (managed by systemd) |
 
 ### Multi-Instance Management
@@ -134,6 +135,23 @@ bash manage.sh status               # Status of all instances
 bash manage.sh restart survival     # Smart-restart a specific instance
 bash manage.sh backup creative      # Backup a specific instance
 ```
+
+### Health check
+
+```bash
+sudo bash manage.sh doctor              # every instance
+sudo bash manage.sh doctor survival --test-webhook
+```
+
+Run it as an admin with sudo. It prints one `OK`, `WARN`, `FAIL` or `SKIP` line per check and exits 1 when any check fails:
+
+- the systemd unit is enabled and running, and has crash-loop limits in `[Unit]` (`migrate.sh` adds them to older units)
+- the hourly backup cron job (and the restart job when `RESTART_SCHEDULE.ENABLED`) is in the server user's crontab
+- backup usage against `MAX_STORAGE_GB` (warns from 90%, fails above 100%) and free disk space where the backups live (warns under 5 GB)
+- the wrapper's sudoers file passes `visudo -c` (skipped without an `API_SERVER.SERVICE_USER`)
+- the wrapper answers on its port and accepts the configured API key (skipped unless `API_SERVER.ENABLED`)
+
+`--test-webhook` also sends one `webhook_test` notification regardless of `WEBHOOK_EVENTS` and reports whether the endpoint accepted it. Without the flag nothing is sent.
 
 ### RCON vs Screen
 

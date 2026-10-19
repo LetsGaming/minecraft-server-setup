@@ -11,6 +11,7 @@ set -e
 #   restart <instance>  Restart a specific instance
 #   backup <instance>   Run backup for a specific instance
 #   list                List all configured instances
+#   doctor [instance]   Health check (cron, service, storage, sudoers, wrapper); run with sudo
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -50,12 +51,15 @@ Commands:
   restart <instance>  Restart a specific instance (player-aware)
   backup <instance>   Run backup for a specific instance
   update <instance>   Check for updates for a specific instance
+  doctor [instance]   Check cron jobs, service, storage, sudoers and the wrapper
+                      (read-only; run as an admin with sudo; --test-webhook sends a test)
 
 Examples:
   $0 list
   $0 status
   $0 restart survival
   $0 backup creative
+  sudo $0 doctor survival --test-webhook
 EOF
 }
 
@@ -172,6 +176,26 @@ case "$COMMAND" in
   update)
     require_instance "$INSTANCE"
     node "$(get_instance_scripts_dir "$INSTANCE")/update/check-updates.js" "$@"
+    ;;
+  doctor)
+    test_flag=""
+    for arg in "$INSTANCE" "$@"; do
+      [[ "$arg" == "--test-webhook" ]] && test_flag="--test-webhook"
+    done
+    target=""
+    [[ "$INSTANCE" != --* ]] && target="$INSTANCE"
+    if [[ -n "$target" ]]; then
+      require_instance "$target"
+      doctor_instances="$target"
+    else
+      doctor_instances=$(find_instances)
+      [[ -n "$doctor_instances" ]] || { echo "No instances found."; exit 1; }
+    fi
+    doctor_rc=0
+    for doctor_instance in $doctor_instances; do
+      bash "$(get_instance_scripts_dir "$doctor_instance")/misc/doctor.sh" $test_flag || doctor_rc=1
+    done
+    exit "$doctor_rc"
     ;;
   help|--help|-h)
     print_help

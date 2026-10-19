@@ -112,12 +112,16 @@ notify() {
 _WEBHOOK_PIDS=()
 
 # Wait for in-flight notifications (each is bounded by curl's --max-time).
+# Always returns 0 so a dead endpoint never fails a caller; with --status it
+# returns 1 when any request failed (used by doctor.sh --test-webhook).
 wait_for_notifications() {
-  local pid
+  local pid rc=0
   for pid in "${_WEBHOOK_PIDS[@]}"; do
-    wait "$pid" 2> /dev/null || true
+    wait "$pid" 2> /dev/null || rc=1
   done
   _WEBHOOK_PIDS=()
+  [[ "${1:-}" == "--status" ]] && return "$rc"
+  return 0
 }
 
 # Convenience wrappers

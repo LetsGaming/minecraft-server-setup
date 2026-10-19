@@ -1,5 +1,6 @@
 #!/bin/bash
 # Records calls and flips the fake screen session state.
+#   SYSTEMCTL_SHIM_UNIT   text printed by `systemctl cat`
 #   SYSTEMCTL_STOP_RC=N  exit status of `stop` (session stays up when non-zero)
 echo "systemctl $*" >> "$SHIM_LOG"
 case "$1" in
@@ -8,6 +9,8 @@ case "$1" in
     [[ "$rc" == 0 ]] && rm -f "$SHIM_STATE/screen_running"
     exit "$rc"
     ;;
+  cat) printf '%s\n' "${SYSTEMCTL_SHIM_UNIT:-}" ;;
+  is-enabled) echo enabled; exit 0 ;;
   start|restart) touch "$SHIM_STATE/screen_running" ;;
   is-active)
     if [[ -e "$SHIM_STATE/screen_running" ]]; then echo active; exit 0; fi
