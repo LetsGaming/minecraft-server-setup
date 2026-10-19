@@ -41,6 +41,7 @@ setup() {
   SUITE="$T/suite"; ROOT="$T/root"; SCRIPTS="$ROOT/scripts/inst"; API="$ROOT/services/api-server"
   mkdir -p "$SUITE" "$SCRIPTS" "$ROOT/instances/inst" "$T/bin" "$T/state" "$T/releases"
   cp "$REPO_ROOT/migrate.sh" "$SUITE/"
+  cp -r "$REPO_ROOT/migrate-lib" "$SUITE/"
   "$REAL_TAR" -C "$REPO_ROOT" --exclude=node_modules --exclude=src/scripts/api-server -cf - src | "$REAL_TAR" -C "$SUITE" -xf -
   cp -r "$SUITE/src/scripts/." "$SCRIPTS/"
   cat > "$SCRIPTS/common/variables.txt" <<VARS
