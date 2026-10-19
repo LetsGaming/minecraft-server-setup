@@ -414,3 +414,37 @@ test("--apply without bash answers in JSON rather than dying silently", withSetu
   assert.equal(r.last.ok, false);
   assert.equal(r.last.code, "lock_failed");
 }));
+
+// ── the server check ──
+
+/** Make the server check answer with this exit status (0 up, 1 down, 2 unknown). */
+const answerRunning = (s, status) =>
+  fs.writeFileSync(path.join(s.scripts, "common", "instance_ops.sh"), ["#!/bin/bash", `[ "$1" = running ] && exit ${status}`, "exit 0", ""].join("\n"));
+
+test("--apply refuses while the server is up (exit 0) and when its state is unknown (exit 2)", withSetup((s) => {
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  const apply = () => s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`]).last;
+  answerRunning(s, 0);
+  assert.equal(apply().code, "server_running");
+  answerRunning(s, 2);
+  assert.equal(apply().code, "server_running");
+  answerRunning(s, 1);
+  assert.equal(apply().ok, true, "down: it goes ahead");
+}));
+
+// ── the time budget ──
+
+test("an apply that runs out of time stops, says so and leaves a failed-apply note", withSetup((s) => {
+  // A second region file, so there is a second step to be refused.
+  const second = [32, 33].map((x) => ({ x, z: 0, nbt: fx.chunkModern({ x, z: 0, inhabited: 0 }) }));
+  for (const folder of ["region", "entities", "poi"]) fx.writeRegion(s.server.regionFile(null, folder, 1, 0), 1, 0, second);
+  const { last: scan } = s.run(["--scan", `--params=${JSON.stringify(LEAN)}`]);
+  assert.equal(scan.totals.delete, 5);
+  const r = s.run(["--apply", `--plan=${scan.id}`, `--backup=${s.backup}`, "--time-budget=0.0001"]);
+  assert.equal(r.last.ok, false);
+  assert.equal(r.last.code, "time_budget");
+  const journal = JSON.parse(fs.readFileSync(path.join(s.scripts, "common", "prune", "prune-apply.journal"), "utf8"));
+  assert.equal(journal.state, "failed");
+  assert.equal(journal.code, "time_budget");
+  assert.deepEqual(s.run(["--status"]).last.unfinishedApply.code, "time_budget");
+}));

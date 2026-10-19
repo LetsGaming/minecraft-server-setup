@@ -28,7 +28,7 @@ jobs:
           cache: npm
 
       - name: Tools the tests drive for real
-        run: sudo apt-get update -q && sudo apt-get install -y -q rsync zstd acl jq screen util-linux
+        run: sudo apt-get update -q && sudo apt-get install -y -q rsync zstd acl jq screen util-linux unzip
 
       - run: npm ci
 

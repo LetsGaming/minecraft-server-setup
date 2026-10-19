@@ -337,4 +337,41 @@ test_the_lock_dir_is_the_same_whatever_the_runtime_dir() {
   unset XDG_RUNTIME_DIR
 }
 
+# ── server_is_running answers 0 up, 1 down, 2 unknown ────────────────────────
+
+# Runs server_is_running with screen and systemctl hidden from `command -v`, the
+# way a host that has neither looks to the script.
+no_signal_state() {
+  ( cd "$T/scripts" && source common/server_control.sh && source common/archive_restore.sh
+    command() {
+      if [[ "$1" == -v && ( "$2" == screen || "$2" == systemctl ) ]]; then return 1; fi
+      builtin command "$@"
+    }
+    server_is_running )
+}
+
+test_server_is_running_cannot_tell_without_any_signal() {
+  setup
+  no_signal_state
+  assert_rc 2 "$?" "no RCON, no screen, no systemctl: unknown"
+}
+
+test_require_server_stopped_refuses_when_the_state_is_unknown() {
+  setup
+  OUT="$( cd "$T/scripts" && source common/server_control.sh && source common/archive_restore.sh
+    command() {
+      if [[ "$1" == -v && ( "$2" == screen || "$2" == systemctl ) ]]; then return 1; fi
+      builtin command "$@"
+    }
+    require_server_stopped 2>&1 )"
+  assert_nonzero "$?" "unknown is not stopped"
+  assert_contains "$OUT" "Cannot tell whether testinst is running" "says so"
+}
+
+test_server_is_running_is_down_when_every_available_signal_says_so() {
+  setup
+  ( cd "$T/scripts" && source common/server_control.sh && source common/archive_restore.sh && server_is_running )
+  assert_rc 1 "$?" "screen and systemctl both answer: down"
+}
+
 run_tests

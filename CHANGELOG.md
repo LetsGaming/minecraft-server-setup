@@ -48,6 +48,7 @@ All notable changes to this project are documented here. The format follows
 - `prune-chunks.js --scan` reads regions on worker threads into a per-region record cache and prints NDJSON progress. A repeat scan takes about a tenth of the time, changing a threshold, radius, buffer or zone reads no region file, and `--apply` reads only the regions it deletes from (in parallel). Options `--workers` and `--no-cache`.
 - `update-server.js` records the new version after the jar swap instead of before it, and disables incompatible mods (reversible, `mods/disabled/`) instead of deleting jars by filename match.
 - `backup.sh`, `restore.sh` and `rollback.sh` take the operation lock, so they no longer overlap with each other or with an upgrade.
+- The shell test runner now fails a test that stops before its last statement (an `exit`, or an `errexit` leaked from a sourced script, used to end it silently with assertions unrun) and a test that makes no assertion at all; `tests/shell/test_assert_harness.sh` tests the runner itself. New tests cover the prune protections, spoofed chunk tags, decompression bombs, unknown spawn, mod update error statuses, `$` in `server.properties` values, setup download failures, and the interactive update's Java ordering.
 
 ### Fixed
 

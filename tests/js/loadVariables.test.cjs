@@ -60,7 +60,7 @@ test("backup numbers that reach shell arithmetic must be whole numbers", () => {
   for (const [key, value] of bad) {
     assert.throws(
       () => load({ ...BASE, BACKUPS: { ...BASE.BACKUPS, [key]: value } }),
-      new RegExp(`BACKUPS\.${key} must be`),
+      new RegExp(`BACKUPS\\.${key} must be`),
       `${key}=${JSON.stringify(value)}`,
     );
   }

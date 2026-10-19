@@ -9,3 +9,9 @@ Terms specific to this project that are easy to misread.
 **Instance lock.** A named per-instance lock (`maintenance`, `onjoin`) that keeps a second copy of the same script from running. Separate from the operation lock.
 
 **Confirmed save.** A `save-all flush` the server has acknowledged: over RCON the command's reply, in screen mode the server's own "Saved the game" log line written after the command was sent. A backup of a running server is made only after one.
+
+**Mkdir lock.** The lock used where `flock` is missing: a folder `<lock file>.d` holding a `pid` file, taken over when that process is gone. The shell scripts and the Node mod scripts both use it, so they still exclude each other.
+
+**Forced chunk.** A chunk kept loaded with `/forceload`, stored per dimension in `data/chunks.dat`. The prune never deletes one.
+
+**Prune backup.** The archive named to `prune-chunks.js --apply` with `--backup=<archive>`. The script checks that the file exists, has content, lies in the backups folder and is recent; the upgrade job passes the archive it made.

@@ -40,16 +40,32 @@ assert_not_logged() {
   if ! grep -qF -- "$1" "$SHIM_LOG" 2>/dev/null; then _ok "$2"; else _bad "$2" "shim log unexpectedly has '$1'"; fi
 }
 
+# Runs every test_* function of the sourcing file, each in its own subshell.
+# A test counts as failed when it prints a FAIL line, when it never reached its
+# last statement (an exit, or an errexit inherited from a sourced script, ended
+# it with assertions still to run), or when it made no assertion at all.
 run_tests() {
-  local fn
+  local fn out rc ok bad skipped
+  out="${TMPDIR:-/tmp}/.shelltest.$$"
   for fn in $(declare -F | awk '{print $3}' | grep '^test_'); do
     echo "$fn"
-    ( "$fn" ) > "${TMPDIR:-/tmp}/.shelltest.$$" 2>&1 || true
-    cat "${TMPDIR:-/tmp}/.shelltest.$$"
-    PASS=$((PASS + $(grep -c '^  ok   - ' "${TMPDIR:-/tmp}/.shelltest.$$" || true)))
-    FAIL=$((FAIL + $(grep -c '^  FAIL - ' "${TMPDIR:-/tmp}/.shelltest.$$" || true)))
-    SKIP=$((SKIP + $(grep -c '^  skip - ' "${TMPDIR:-/tmp}/.shelltest.$$" || true)))
-    rm -f "${TMPDIR:-/tmp}/.shelltest.$$"
+    rc=0
+    ( "$fn"; echo "  end  - $fn" ) > "$out" 2>&1 || rc=$?
+    grep -v '^  end  - ' "$out"
+    ok=$(grep -c '^  ok   - ' "$out" || true)
+    bad=$(grep -c '^  FAIL - ' "$out" || true)
+    skipped=$(grep -c '^  skip - ' "$out" || true)
+    PASS=$((PASS + ok))
+    FAIL=$((FAIL + bad))
+    SKIP=$((SKIP + skipped))
+    if ! grep -q "^  end  - $fn\$" "$out"; then
+      FAIL=$((FAIL + 1))
+      echo "  FAIL - $fn stopped before its last statement (exit status $rc)"
+    elif (( ok + bad + skipped == 0 )); then
+      FAIL=$((FAIL + 1))
+      echo "  FAIL - $fn made no assertions"
+    fi
+    rm -f "$out"
   done
   echo "RESULT pass=$PASS fail=$FAIL skip=$SKIP"
   [[ "$FAIL" -eq 0 ]]
