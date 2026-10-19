@@ -183,3 +183,21 @@ test("JDK names sort by version, not as strings", () => {
     ["temurin@21.0.10", "temurin@21.0.9", "adopt@21.0.2"],
   );
 });
+
+test("sendWebhook sends every event when WEBHOOK_EVENTS is empty, and only the listed ones otherwise", withInstance((inst) => {
+  const { spawnSync } = require("node:child_process");
+  const script = path.join(inst.scripts, "update", "update-server.js");
+  const send = (events) => {
+    fs.writeFileSync(inst.stubLog, "");
+    const code = `require(${JSON.stringify(script)}).sendWebhook({ WEBHOOK_URL: "https://hooks.example/x", WEBHOOK_EVENTS: ${JSON.stringify(events)}, INSTANCE_NAME: "inst" }, "update_complete", "done")`;
+    const res = spawnSync(process.execPath, ["-e", code], {
+      encoding: "utf8",
+      env: { ...process.env, NODE_OPTIONS: "--require " + path.join(__dirname, "axiosStub.cjs").split(path.sep).join("/"), AXIOS_STUB_FILE: inst.stubFile, AXIOS_STUB_LOG: inst.stubLog },
+    });
+    assert.equal(res.status, 0, res.stderr);
+    return inst.requests();
+  };
+  assert.deepEqual(send(""), ["POST https://hooks.example/x"], "empty list means every event");
+  assert.deepEqual(send("backup_failed"), [], "an unlisted event is not sent");
+  assert.deepEqual(send("backup_failed update_complete"), ["POST https://hooks.example/x"]);
+}));

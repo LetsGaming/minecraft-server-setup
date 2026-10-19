@@ -21,7 +21,7 @@ Automated Minecraft server setup and management with backup rotation, mod update
 
 ## Prerequisites
 
-- **OS:** Linux (Ubuntu/Debian recommended), macOS, or WSL
+- **OS:** Linux with systemd and cron (Ubuntu/Debian recommended)
 - **Bash:** 4.0+
 - **Node.js:** 18+
 - **Tools:** `screen`, `rsync`, `zstd`, `curl` (installed automatically via `download_packages.sh`)
@@ -124,6 +124,7 @@ After setup, management scripts are in `<target>/scripts/<instance>/`:
 | `update/update-server.js` | Update server version (auto Java install) |
 | `update/check-updates.js` | Check for mod updates |
 | `misc/status.sh` | Show server status and players |
+| `misc/doctor.sh` | Read-only health check of an installed instance (see [Health check](#health-check)) |
 | `api-server/index.js` | minecraft-bot HTTP API wrapper (managed by systemd) |
 
 ### Multi-Instance Management
@@ -134,6 +135,23 @@ bash manage.sh status               # Status of all instances
 bash manage.sh restart survival     # Smart-restart a specific instance
 bash manage.sh backup creative      # Backup a specific instance
 ```
+
+### Health check
+
+```bash
+sudo bash manage.sh doctor              # every instance
+sudo bash manage.sh doctor survival --test-webhook
+```
+
+Run it as an admin with sudo. It prints one `OK`, `WARN`, `FAIL` or `SKIP` line per check and exits 1 when any check fails:
+
+- the systemd unit is enabled and running, and has crash-loop limits in `[Unit]` (`migrate.sh` adds them to older units)
+- the hourly backup cron job (and the restart job when `RESTART_SCHEDULE.ENABLED`) is in the server user's crontab
+- backup usage against `MAX_STORAGE_GB` (warns from 90%, fails above 100%) and free disk space where the backups live (warns under 5 GB)
+- the wrapper's sudoers file passes `visudo -c` (skipped without an `API_SERVER.SERVICE_USER`)
+- the wrapper answers on its port and accepts the configured API key (skipped unless `API_SERVER.ENABLED`)
+
+`--test-webhook` also sends one `webhook_test` notification regardless of `WEBHOOK_EVENTS` and reports whether the endpoint accepted it. Without the flag nothing is sent.
 
 ### RCON vs Screen
 
@@ -146,9 +164,21 @@ Set `SERVER_CONTROL.USE_RCON` in `variables.json`:
 
 Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhooks. Events:
 
-`backup_complete`, `backup_failed`, `update_complete`, `update_failed`, `server_start`, `server_start_failed`, `server_restart`, `rollback_start`, `rollback_complete`
+| Event | Sent when |
+|---|---|
+| `backup_complete` | A backup finished and passed validation |
+| `backup_failed` | A backup failed |
+| `storage_warning` | Backups are still over `MAX_STORAGE_GB` after cleanup evicted every archive it may evict (sent on each hourly cleanup while that stays true) |
+| `server_start` | The server came up |
+| `server_start_failed` | The server did not come up |
+| `server_stop` | `shutdown.sh` stopped the server (`manage.sh stop`, the wrapper's `stop` action). Not sent for a direct `systemctl stop` or a crash |
+| `server_restart` | `smart_restart.sh` restarted the server |
+| `server_crash_loop` | The server crashed repeatedly and `start.sh` gave up |
+| `rollback_start`, `rollback_complete` | A rollback began and finished |
+| `update_start` | A version upgrade began |
+| `update_complete`, `update_failed` | A version upgrade or update finished or failed |
 
-If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. Names in the list that no script emits are accepted and never fire.
+If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. A name in the list that no script sends is accepted, but setup warns about it.
 
 ## Documentation
 
@@ -175,11 +205,10 @@ rather than deleting it, because that directory holds the only copy of its
 credentials. The rest is a short manual checklist:
 [docs/retiring-web-interface.md](docs/retiring-web-interface.md).
 
-The `WEB_INTERFACE` block in `variables.json` is now ignored. Setup warns about
-it once and carries on, so an upgrade does not fail over a leftover key — delete
-the block when convenient. If it had a non-empty `BLOCKED_COMMANDS`, those
-entries move to the bot's `config.json` under `webui.console.blockedCommands`.
-`--interface` is still accepted and does nothing but point you here.
+The `WEB_INTERFACE` block in `variables.json` is ignored, so an upgrade does not
+fail over a leftover key; delete the block when convenient. If it had a
+non-empty `BLOCKED_COMMANDS`, those entries move to the bot's `config.json`
+under `webui.console.blockedCommands`. The `--interface` flag was removed.
 
 The dashboard's backup panel needs the wrapper's `backup-files` and
 `backup-restore` features, and its rollback button needs the `rollback` script
@@ -248,7 +277,7 @@ In the bot's `config.json`, add `apiUrl` and `apiKey` to the server entry:
 
 ### Firewall
 
-Allow inbound TCP on the configured port from the bot VM's IP only:
+The port defaults to 3000 (`variables.example.json` sets 3030). Allow inbound TCP on the configured port from the bot VM's IP only:
 
 ```bash
 ufw allow from <BOT_IP> to any port 3000 proto tcp

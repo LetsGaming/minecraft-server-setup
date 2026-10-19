@@ -1,5 +1,7 @@
 #!/bin/bash
 # Records its arguments and, for `--config -`, the config text read from stdin.
+#   CURL_SHIM_RC=N  exit status (default 0)
+#   CURL_SHIM_HEALTH_CODE / CURL_SHIM_RUNNING_CODE  HTTP status printed for -w calls (default 200)
 #   CURL_SHIM_GATE=1  blocks until $SHIM_STATE/curl_go exists, then writes $SHIM_STATE/curl_done
 echo "curl $*" >> "$SHIM_LOG"
 for a in "$@"; do
@@ -9,4 +11,11 @@ if [[ "${CURL_SHIM_GATE:-}" == 1 ]]; then
   while [[ ! -e "$SHIM_STATE/curl_go" ]]; do :; done
 fi
 touch "$SHIM_STATE/curl_done"
-exit 0
+# With -w the caller wants an HTTP status (doctor.sh probing the wrapper).
+for a in "$@"; do
+  if [[ "$a" == -w ]]; then
+    if [[ "$*" == */health* ]]; then printf '%s' "${CURL_SHIM_HEALTH_CODE:-200}"; else printf '%s' "${CURL_SHIM_RUNNING_CODE:-200}"; fi
+    break
+  fi
+done
+exit "${CURL_SHIM_RC:-0}"

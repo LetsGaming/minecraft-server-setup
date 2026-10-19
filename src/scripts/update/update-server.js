@@ -158,7 +158,7 @@ function askYesNo(question) {
 function sendWebhook(vars, event, message) {
   const url = vars.WEBHOOK_URL;
   if (!url || url === "none") return;
-  const events = (vars.WEBHOOK_EVENTS || "").split(" ");
+  const events = (vars.WEBHOOK_EVENTS || "").split(" ").filter(Boolean);
   if (events.length > 0 && !events.includes(event)) return;
   const isDiscord =
     url.includes("discord.com/api/webhooks") ||
@@ -727,4 +727,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { unavailableMods, UNAVAILABLE_STATUSES, setServerJava, compareJdkNames };
+module.exports = { sendWebhook, unavailableMods, UNAVAILABLE_STATUSES, setServerJava, compareJdkNames };

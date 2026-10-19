@@ -1,0 +1,4 @@
+#!/bin/bash
+# VISUDO_SHIM_RC is the exit status of `visudo -cf <file>` (default 0).
+echo "visudo $*" >> "$SHIM_LOG"
+exit "${VISUDO_SHIM_RC:-0}"

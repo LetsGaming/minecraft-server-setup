@@ -1,0 +1,9 @@
+#!/bin/bash
+# Prints $CRONTAB_SHIM_TEXT for `crontab -l` (with -u too). CRONTAB_SHIM_NONE=1
+# behaves like a user with no crontab. Writes are recorded and swallowed.
+echo "crontab $*" >> "$SHIM_LOG"
+if [[ " $* " == *" -l "* ]]; then
+  if [[ "${CRONTAB_SHIM_NONE:-}" == 1 ]]; then echo "no crontab for tester" >&2; exit 1; fi
+  printf '%s\n' "${CRONTAB_SHIM_TEXT:-}"
+fi
+exit 0

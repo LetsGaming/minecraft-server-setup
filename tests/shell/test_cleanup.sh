@@ -231,6 +231,27 @@ test_the_newest_valid_archive_of_a_tier_is_never_evicted() {
   assert_contains "$OUT" "still above" "the overflow is reported instead"
 }
 
+test_an_overflow_that_eviction_cannot_fix_sends_storage_warning() {
+  setup
+  set_var MAX_STORAGE_GB 1
+  set_var WEBHOOK_URL "https://hooks.example/x"
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" only-good
+  export DU_SHIM_BYTES=$((1073741824 + 5000))
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_contains "$(cat "$SHIM_STATE/curl_stdin")" "hooks.example" "a notification was sent"
+  assert_logged "storage_warning" "of the storage_warning kind"
+}
+
+test_a_run_within_the_limit_sends_no_storage_warning() {
+  setup
+  set_var MAX_STORAGE_GB 1
+  set_var WEBHOOK_URL "https://hooks.example/x"
+  export DU_SHIM_BYTES=100
+  run_script "$CLEANUP"
+  assert_not_logged "storage_warning" "nothing to warn about"
+}
+
 test_a_corrupt_newest_archive_does_not_shield_older_ones_from_being_the_kept_one() {
   setup
   set_var MAX_HOURLY_BACKUPS 1

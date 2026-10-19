@@ -6,6 +6,22 @@ const VALID_GC = ["g1gc", "zgc"];
 const MEMORY_PATTERN = /^\d+[GMK]$/i;
 /** Placeholders shipped in variables.example.json; never a real key. */
 const EXAMPLE_API_KEYS = ["replace-with-a-long-random-secret"];
+/** Every event the scripts send; the README documents the same list. */
+const KNOWN_WEBHOOK_EVENTS = [
+  "backup_complete",
+  "backup_failed",
+  "server_start",
+  "server_start_failed",
+  "server_stop",
+  "server_restart",
+  "server_crash_loop",
+  "rollback_start",
+  "rollback_complete",
+  "update_start",
+  "update_complete",
+  "update_failed",
+  "storage_warning",
+];
 
 function loadVariables() {
   const variablesPath = path.resolve(__dirname, "..", "..", "..", "variables.json");
@@ -105,6 +121,16 @@ function loadVariables() {
     }
     if (notif.WEBHOOK_EVENTS && !Array.isArray(notif.WEBHOOK_EVENTS)) {
       throw new Error("NOTIFICATIONS.WEBHOOK_EVENTS must be an array.");
+    }
+    for (const event of notif.WEBHOOK_EVENTS || []) {
+      if (!KNOWN_WEBHOOK_EVENTS.includes(event)) {
+        process.stderr.write(
+          `[WARN] NOTIFICATIONS.WEBHOOK_EVENTS lists "${event}", which no script sends.
+` +
+          `       Known events: ${KNOWN_WEBHOOK_EVENTS.join(", ")}.
+`
+        );
+      }
     }
   }
 
@@ -244,28 +270,8 @@ function loadVariables() {
     });
   }
 
-  // ── WEB_INTERFACE (retired) ─────────────────────────────────────────────
-  // The bundled web interface (minecraft-server-manager) was retired; the
-  // minecraft-bot dashboard does the same job and reaches this host through
-  // the API wrapper. The key is warned about rather than rejected: an existing
-  // variables.json still carries it, and failing setup over a leftover block
-  // would break upgrades for no benefit.
-  if (data.WEB_INTERFACE !== undefined) {
-    process.stderr.write(
-      "[WARN] WEB_INTERFACE is no longer used and is ignored. The bundled web\n" +
-      "       interface was retired — use the minecraft-bot dashboard, which\n" +
-      "       talks to this host via API_SERVER. You can delete the block.\n"
-    );
-    if (Array.isArray(data.WEB_INTERFACE.BLOCKED_COMMANDS) &&
-        data.WEB_INTERFACE.BLOCKED_COMMANDS.length > 0) {
-      process.stderr.write(
-        "       Its BLOCKED_COMMANDS moved to the bot's config.json, under\n" +
-        "       webui.console.blockedCommands.\n"
-      );
-    }
-  }
-
   return data;
 }
 
 module.exports = loadVariables;
+module.exports.KNOWN_WEBHOOK_EVENTS = KNOWN_WEBHOOK_EVENTS;
