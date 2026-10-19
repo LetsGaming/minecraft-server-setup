@@ -8,7 +8,7 @@ does three things, in this order of risk:
    removed (a copy stays in the pre-migration backup archive).
 2. **Variables.** New keys are appended to `common/variables.txt`; your values are never
    overwritten.
-3. **Server-side migrations** (`src/migrations/server.sh`). Files the suite wrote for the
+3. **Server-side migrations** (`migrate-lib/server_migrations.sh`). Files the suite wrote for the
    server itself, which a scripts update alone never reaches.
 
 The Minecraft server is stopped only when the scripts it runs change, and never by the
@@ -48,8 +48,28 @@ The world, mods, `server.jar` and `server.properties` are never touched.
 
 ## Adding one
 
-Add three functions to `src/migrations/server.sh` (`sm_<id>_describe`, `_check`, `_apply`) and
+Add three functions to `migrate-lib/server_migrations.sh` (`sm_<id>_describe`, `_check`, `_apply`) and
 append the id to `SERVER_MIGRATIONS`. `_apply` returns 0 when done, 1 when it failed and 3 when
 the operator has to do something. Replace files by writing a temporary copy and renaming it, never
 edit one a running server may be reading. Cover the three outcomes in
 `tests/shell/test_server_migrations.sh`.
+
+## How migrate.sh is organized
+
+`migrate.sh` only runs the phases in order. The code lives in `migrate-lib/`, one module per concern. Each module defines functions and constants and nothing else, so loading it runs nothing, and `migrate.sh` sources every module by name (`tests/shell/test_migrate_modules.sh` fails when a module is not sourced exactly once). The modules share one shell with `migrate.sh`, so state is plain global variables, as it was before the split.
+
+| Phase | Modules |
+|---|---|
+| Inputs | `ui.sh` (messages, `run_cmd`), `cli.sh` (flags, `--help`), `context.sh` (target instance, shared state) |
+| Plan, nothing is changed | `preflight.sh`, `plan_scripts.sh`, `api_wrapper.sh`, `variables.sh`, `structure.sh`, `server_migration_steps.sh`, `plan.sh` (scope, summary, confirmation) |
+| Apply | `locks.sh`, `backup.sh`, `recovery.sh` (undo on failure), `server_lifecycle.sh`, `structure.sh`, `replace_scripts.sh`, `api_wrapper.sh`, `variables.sh`, `server_migration_steps.sh`, `npm.sh` |
+| Finish | `verify.sh`, `report.sh` |
+| Helpers | `json_config.sh`, `npm.sh`, `server_migrations.sh` (the migrations themselves, see above) |
+
+Rules when changing a module:
+
+- Keep phase functions global-state functions: no `local` for anything a later phase reads, and no `declare` (it is local inside a function).
+- End a phase function with `return 0`. `migrate.sh` runs under `set -e`, and a function whose last command was an `a && b` that did not run would otherwise abort the migration.
+- Call phase functions as plain statements, never as `if f` or `f || ...`, so `set -e` still stops the run inside them.
+- Do not use `BASH_SOURCE` in a module. The checkout root is `MIGRATE_SCRIPT_DIR`, set by `migrate.sh`.
+- `migrate-lib/` is not deployed to servers (only `src/scripts/` is), so a change here never reaches an installed instance except through running `migrate.sh`.

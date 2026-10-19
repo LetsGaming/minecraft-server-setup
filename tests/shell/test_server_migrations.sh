@@ -1,5 +1,5 @@
 #!/bin/bash
-# Tests for src/migrations/server.sh and how migrate.sh uses it.
+# Tests for migrate-lib/server_migrations.sh and how migrate.sh uses it.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib/assert.sh"
 source "$HERE/lib/fixture.sh"
@@ -44,7 +44,7 @@ setup() {
   chmod 750 "$SM_INSTANCE_DIR/start.sh"
   printf '%s' "$OLD_UNIT" > "$SM_UNIT_DIR/testinst.service"
   # shellcheck source=/dev/null
-  source "$ROOT/src/migrations/server.sh"
+  source "$ROOT/migrate-lib/server_migrations.sh"
 }
 
 test_an_old_install_has_both_migrations_pending() {
