@@ -42,6 +42,12 @@ function axios(config) {
 // Like the real module, so scripts can set a default timeout on it.
 axios.defaults = { timeout: 0 };
 axios.get = (url, config) => Promise.resolve().then(() => respond(lookup(url), config));
+// Webhook posts are only recorded (as "POST <url>"), never answered.
+axios.post = (url) => {
+  if (process.env.AXIOS_STUB_LOG) fs.appendFileSync(process.env.AXIOS_STUB_LOG, `POST ${url}
+`);
+  return Promise.resolve({ status: 204, data: {} });
+};
 
 Module._load = function (request, ...rest) {
   if (request === "axios") return axios;
