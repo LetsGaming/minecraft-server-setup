@@ -37,3 +37,5 @@ send_message "Server §6is shutting down§r now!"
 systemctl_cmd stop
 
 echo "Server stopped."
+notify_success "server_stop" "Server $INSTANCE_NAME stopped."
+wait_for_notifications

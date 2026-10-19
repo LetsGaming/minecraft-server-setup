@@ -4,6 +4,7 @@ set -e
 CLEANUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$CLEANUP_DIR/../../common/load_variables.sh"
 source "$CLEANUP_DIR/../../common/utils.sh"
+source "$CLEANUP_DIR/../../common/webhook.sh"
 
 log() {
   echo "[$(date +'%F %T')] $*"
@@ -282,6 +283,8 @@ enforce_storage_limit() {
   done < <(storage_eviction_dirs)
 
   log "WARN: still above the ${MAX_STORAGE_GB} GB limit after evicting every archive that may be evicted."
+  notify_warning "storage_warning" "Backups use $((current_bytes / 1024 / 1024)) MB, still above the ${MAX_STORAGE_GB} GB limit after evicting every archive that may be evicted."
+  wait_for_notifications
 }
 
 # Apply policies

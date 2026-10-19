@@ -146,9 +146,21 @@ Set `SERVER_CONTROL.USE_RCON` in `variables.json`:
 
 Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhooks. Events:
 
-`backup_complete`, `backup_failed`, `update_complete`, `update_failed`, `server_start`, `server_start_failed`, `server_restart`, `rollback_start`, `rollback_complete`
+| Event | Sent when |
+|---|---|
+| `backup_complete` | A backup finished and passed validation |
+| `backup_failed` | A backup failed |
+| `storage_warning` | Backups are still over `MAX_STORAGE_GB` after cleanup evicted every archive it may evict (sent on each hourly cleanup while that stays true) |
+| `server_start` | The server came up |
+| `server_start_failed` | The server did not come up |
+| `server_stop` | `shutdown.sh` stopped the server (`manage.sh stop`, the wrapper's `stop` action). Not sent for a direct `systemctl stop` or a crash |
+| `server_restart` | `smart_restart.sh` restarted the server |
+| `server_crash_loop` | The server crashed repeatedly and `start.sh` gave up |
+| `rollback_start`, `rollback_complete` | A rollback began and finished |
+| `update_start` | A version upgrade began |
+| `update_complete`, `update_failed` | A version upgrade or update finished or failed |
 
-If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. Names in the list that no script emits are accepted and never fire.
+If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. A name in the list that no script sends is accepted, but setup warns about it.
 
 ## Documentation
 
@@ -248,7 +260,7 @@ In the bot's `config.json`, add `apiUrl` and `apiKey` to the server entry:
 
 ### Firewall
 
-Allow inbound TCP on the configured port from the bot VM's IP only:
+The port defaults to 3000 (`variables.example.json` sets 3030). Allow inbound TCP on the configured port from the bot VM's IP only:
 
 ```bash
 ufw allow from <BOT_IP> to any port 3000 proto tcp

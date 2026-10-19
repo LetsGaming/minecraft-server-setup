@@ -6,6 +6,22 @@ const VALID_GC = ["g1gc", "zgc"];
 const MEMORY_PATTERN = /^\d+[GMK]$/i;
 /** Placeholders shipped in variables.example.json; never a real key. */
 const EXAMPLE_API_KEYS = ["replace-with-a-long-random-secret"];
+/** Every event the scripts send; the README documents the same list. */
+const KNOWN_WEBHOOK_EVENTS = [
+  "backup_complete",
+  "backup_failed",
+  "server_start",
+  "server_start_failed",
+  "server_stop",
+  "server_restart",
+  "server_crash_loop",
+  "rollback_start",
+  "rollback_complete",
+  "update_start",
+  "update_complete",
+  "update_failed",
+  "storage_warning",
+];
 
 function loadVariables() {
   const variablesPath = path.resolve(__dirname, "..", "..", "..", "variables.json");
@@ -105,6 +121,16 @@ function loadVariables() {
     }
     if (notif.WEBHOOK_EVENTS && !Array.isArray(notif.WEBHOOK_EVENTS)) {
       throw new Error("NOTIFICATIONS.WEBHOOK_EVENTS must be an array.");
+    }
+    for (const event of notif.WEBHOOK_EVENTS || []) {
+      if (!KNOWN_WEBHOOK_EVENTS.includes(event)) {
+        process.stderr.write(
+          `[WARN] NOTIFICATIONS.WEBHOOK_EVENTS lists "${event}", which no script sends.
+` +
+          `       Known events: ${KNOWN_WEBHOOK_EVENTS.join(", ")}.
+`
+        );
+      }
     }
   }
 
@@ -269,3 +295,4 @@ function loadVariables() {
 }
 
 module.exports = loadVariables;
+module.exports.KNOWN_WEBHOOK_EVENTS = KNOWN_WEBHOOK_EVENTS;

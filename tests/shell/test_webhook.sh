@@ -48,6 +48,14 @@ test_wait_for_notifications_waits_for_the_background_request() {
   assert_rc 0 "$?" "the request has finished by the time the wait returns"
 }
 
+test_shutdown_sends_server_stop() {
+  setup
+  server_running
+  ( cd "$T/scripts" && bash shutdown.sh ) > /dev/null 2>&1
+  assert_rc 0 "$?" "shutdown succeeds"
+  assert_logged "server_stop" "the stop is announced"
+}
+
 test_no_webhook_means_no_curl() {
   setup
   echo 'WEBHOOK_URL=""' >> "$T/scripts/common/variables.txt"

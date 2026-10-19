@@ -35,6 +35,21 @@ const BASE = {
   JAVA: {},
 };
 
+test("a webhook event no script sends is warned about; known ones are not", () => {
+  const warnings = [];
+  const realWrite = process.stderr.write;
+  process.stderr.write = (chunk) => { warnings.push(String(chunk)); return true; };
+  try {
+    // BASE has no JAVA.SERVER, so loading ends in that error; the event check runs before it.
+    assert.throws(() => load({ ...BASE, NOTIFICATIONS: { WEBHOOK_EVENTS: ["backup_failed", "storage_warning", "server_stopp"] } }), /SERVER/);
+  } finally {
+    process.stderr.write = realWrite;
+  }
+  const text = warnings.join("");
+  assert.match(text, /"server_stopp"/);
+  assert.doesNotMatch(text, /"backup_failed"|"storage_warning"/);
+});
+
 test("TARGET_DIR_NAME must be a plain folder name (S-001)", () => {
   for (const bad of [".", "..", "a/b", "../x", "~"]) {
     assert.throws(() => load({ ...BASE, TARGET_DIR_NAME: bad }), /TARGET_DIR_NAME/);
