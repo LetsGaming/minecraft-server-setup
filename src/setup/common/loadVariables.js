@@ -36,19 +36,21 @@ function loadVariables() {
 
   // ── BACKUPS ──
   const backups = data.BACKUPS;
-  if (typeof backups.COMPRESSION_LEVEL !== "number" || backups.COMPRESSION_LEVEL < 1 || backups.COMPRESSION_LEVEL > 19) {
-    throw new Error("BACKUPS.COMPRESSION_LEVEL must be a number between 1 and 19.");
+  // These land in shell arithmetic and zstd flags in the deployed scripts, so a
+  // fraction or a string would break backups and cleanup at run time.
+  if (!Number.isInteger(backups.COMPRESSION_LEVEL) || backups.COMPRESSION_LEVEL < 1 || backups.COMPRESSION_LEVEL > 19) {
+    throw new Error("BACKUPS.COMPRESSION_LEVEL must be a whole number between 1 and 19.");
   }
-  if (typeof backups.MAX_STORAGE_GB !== "number" || backups.MAX_STORAGE_GB < 1) {
-    throw new Error("BACKUPS.MAX_STORAGE_GB must be a positive number.");
+  if (!Number.isInteger(backups.MAX_STORAGE_GB) || backups.MAX_STORAGE_GB < 1) {
+    throw new Error("BACKUPS.MAX_STORAGE_GB must be a positive whole number.");
   }
   for (const key of ["MAX_HOURLY_BACKUPS", "MAX_DAILY_BACKUPS", "MAX_WEEKLY_BACKUPS", "MAX_MONTHLY_BACKUPS"]) {
-    if (typeof backups[key] !== "number" || backups[key] < 0) {
-      throw new Error(`BACKUPS.${key} must be a non-negative number.`);
+    if (!Number.isInteger(backups[key]) || backups[key] < 0) {
+      throw new Error(`BACKUPS.${key} must be a non-negative whole number.`);
     }
   }
-  if (backups.MAX_UPDATE_BACKUPS !== undefined && (typeof backups.MAX_UPDATE_BACKUPS !== "number" || backups.MAX_UPDATE_BACKUPS < 1)) {
-    throw new Error("BACKUPS.MAX_UPDATE_BACKUPS must be a positive number when set.");
+  if (backups.MAX_UPDATE_BACKUPS !== undefined && (!Number.isInteger(backups.MAX_UPDATE_BACKUPS) || backups.MAX_UPDATE_BACKUPS < 1)) {
+    throw new Error("BACKUPS.MAX_UPDATE_BACKUPS must be a positive whole number when set.");
   }
 
   // ── API_SERVER (optional) ──
@@ -109,8 +111,15 @@ function loadVariables() {
   // ── RESTART_SCHEDULE (optional) ──
   if (data.RESTART_SCHEDULE) {
     const rs = data.RESTART_SCHEDULE;
-    if (rs.INTERVAL_HOURS !== undefined && (typeof rs.INTERVAL_HOURS !== "number" || rs.INTERVAL_HOURS < 1)) {
-      throw new Error("RESTART_SCHEDULE.INTERVAL_HOURS must be a positive number.");
+    if (rs.INTERVAL_HOURS !== undefined) {
+      const h = rs.INTERVAL_HOURS;
+      // cron's "*/N" hour field restarts its count at midnight, so only a
+      // divisor of 24 gives an even interval; a multiple of 24 is whole days.
+      if (!Number.isInteger(h) || h < 1 || (h <= 24 ? 24 % h !== 0 : h % 24 !== 0)) {
+        throw new Error(
+          "RESTART_SCHEDULE.INTERVAL_HOURS must be a whole number of hours that divides 24 (1, 2, 3, 4, 6, 8, 12, 24) or is a multiple of 24.",
+        );
+      }
     }
     if (rs.WARN_SECONDS !== undefined && (typeof rs.WARN_SECONDS !== "number" || rs.WARN_SECONDS < 5)) {
       throw new Error("RESTART_SCHEDULE.WARN_SECONDS must be at least 5.");

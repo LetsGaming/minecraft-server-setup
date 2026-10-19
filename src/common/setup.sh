@@ -379,13 +379,16 @@ maybe_start_server() {
   if [ "$NO_START" = false ]; then
     if sudo -v &>/dev/null; then
       log "Starting the server..."
-      run_or_echo "bash \"$SCRIPT_DIR/src/setup/management/start_server.sh\""
-      if [ "$EULA" = false ]; then
-        echo
-        warn "Server started but EULA not yet accepted."
-        echo "Attach to the server with:"
-        echo "  screen -r $instance_name"
-        echo "Then type 'I agree' and press Enter."
+      if run_or_echo "NO_SERVICE=\"$NO_SERVICE\" bash \"$SCRIPT_DIR/src/setup/management/start_server.sh\""; then
+        if [ "$EULA" = false ]; then
+          echo
+          warn "Server started but EULA not yet accepted."
+          echo "Attach to the server with:"
+          echo "  screen -r $instance_name"
+          echo "Then type 'I agree' and press Enter."
+        fi
+      else
+        warn "The server did not start (see above). Setup itself finished."
       fi
     else
       error "Insufficient sudo privileges to start the server."

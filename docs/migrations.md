@@ -12,7 +12,15 @@ does three things, in this order of risk:
    server itself, which a scripts update alone never reaches.
 
 The Minecraft server is stopped only when the scripts it runs change, and never by the
-server-side migrations.
+server-side migrations. When a stop is needed, the run checks that the server really is down
+(the unit inactive and no screen session of that exact name) before it moves anything, and
+puts the old layout back (instance folder, unit paths, `SERVER_PATH`) if a later step fails.
+
+The operation locks stay held across the swap of the scripts folder: `.locks/` is moved into
+the new tree rather than copied. Because the whole folder is swapped, ACLs that
+`service_user.sh` granted on it are lost; the final summary prints the command to run again.
+Each run leaves a `<scripts>_backup_<stamp>` archive next to the scripts folder, and the
+newest five are kept (`MIGRATE_KEEP_ARCHIVES=N`; `0` keeps them all).
 
 ## Server-side migrations
 

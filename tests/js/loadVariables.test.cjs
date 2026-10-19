@@ -47,3 +47,37 @@ test("the example's API key placeholder is refused (S-018)", () => {
     /placeholder/,
   );
 });
+
+test("backup numbers that reach shell arithmetic must be whole numbers", () => {
+  const bad = [
+    ["COMPRESSION_LEVEL", 3.5],
+    ["COMPRESSION_LEVEL", "3"],
+    ["MAX_STORAGE_GB", 10.5],
+    ["MAX_HOURLY_BACKUPS", 2.5],
+    ["MAX_DAILY_BACKUPS", "5"],
+    ["MAX_MONTHLY_BACKUPS", -1],
+  ];
+  for (const [key, value] of bad) {
+    assert.throws(
+      () => load({ ...BASE, BACKUPS: { ...BASE.BACKUPS, [key]: value } }),
+      new RegExp(`BACKUPS\.${key} must be`),
+      `${key}=${JSON.stringify(value)}`,
+    );
+  }
+  assert.throws(() => load({ ...BASE, BACKUPS: { ...BASE.BACKUPS, MAX_UPDATE_BACKUPS: 1.5 } }), /MAX_UPDATE_BACKUPS/);
+  // Whole numbers pass this check and stop at the next missing section instead.
+  assert.throws(() => load(BASE), /SERVER/);
+});
+
+test("the restart interval must divide 24 or be whole days", () => {
+  for (const hours of [5, 7, 13, 25, 36, 0, 1.5, "6"]) {
+    assert.throws(
+      () => load({ ...BASE, RESTART_SCHEDULE: { INTERVAL_HOURS: hours } }),
+      /INTERVAL_HOURS/,
+      `INTERVAL_HOURS=${JSON.stringify(hours)}`,
+    );
+  }
+  for (const hours of [1, 2, 3, 4, 6, 8, 12, 24, 48, 72]) {
+    assert.throws(() => load({ ...BASE, RESTART_SCHEDULE: { INTERVAL_HOURS: hours } }), /SERVER/, `INTERVAL_HOURS=${hours}`);
+  }
+});

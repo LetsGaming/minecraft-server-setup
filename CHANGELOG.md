@@ -89,6 +89,14 @@ All notable changes to this project are documented here. The format follows
 - Scheduled and smart restarts no longer treat an unreadable player count as zero: the screen-mode `/list` answer is read from the log position recorded before the command and matched only as the server's own line, and an unknown count is handled as "players are online". `get_player_count` and `get_player_list` fail when the server could not be asked.
 - `maintenance.sh` no longer overwrites the saved MOTD when an earlier run did not finish, and skipped backups and restarts say so in the log.
 - `rcon.js` accepts `--timeout-ms=N`.
+- `migrate.sh` keeps its operation locks across the swap of the scripts folder (`.locks/` is moved into the new tree, not copied), puts the old layout back (instance folder, unit paths, `SERVER_PATH`, wrapper folder) when a step after the move fails, checks that the server really stopped before it moves the instance folder, matches instance names exactly (instance `mc` no longer matches `mc2`), prints the command that restores the wrapper user's ACLs after the swap, and keeps only the newest 5 `<scripts>_backup_*` archives (`MIGRATE_KEEP_ARCHIVES`).
+- The API wrapper install is swapped in by renaming a finished folder, so a failure part way can no longer leave a half-deleted wrapper. The new folder keeps the old one's owner, mode and ACL, and `api-server-config.json`, `.env`, `variables.txt` and `logs/` carry over.
+- The instance's systemd unit gets `TimeoutStopSec=300`, an `ExecStop` that flushes the world first, `PrivateTmp=true`, `ProtectSystem=full` and `ReadWritePaths`. Existing units are not rewritten.
+- The backup and restart cron jobs stop when `crontab -l` fails for any reason other than "no crontab" instead of replacing the crontab with one that lost the other jobs, quote their paths, and the restart interval must divide 24 (or be whole days).
+- The API wrapper's unit starts it with the node binary setup ran under.
+- `start_server.sh` reports a server that did not start: through the unit it returns the start script's status, and under `--no-service` it launches the instance's own `start.sh` in screen and checks the session is still there.
+- `loadVariables.js` requires whole numbers for `COMPRESSION_LEVEL`, `MAX_STORAGE_GB`, the `MAX_*_BACKUPS` counts and `INTERVAL_HOURS`.
+- `$&`, `$$` and similar in the MOTD or RCON password are written to `server.properties` as typed (they were read as replacement patterns, which broke RCON authentication), and a trailing backslash or leading space in a value can no longer change the next line or be dropped.
 
 ## [5.0.0] - 2026-10-10
 

@@ -3,6 +3,7 @@
 const path = require("path");
 const fs = require("fs");
 const loadVariables = require("../common/loadVariables");
+const { applyProperties } = require("../common/properties");
 
 const vars = loadVariables();
 const {
@@ -62,11 +63,7 @@ function updateServerProperties() {
 
   const updates = {
     "max-players": MAX_PLAYERS,
-    // server.properties is a Java .properties file: the value runs to the end
-    // of the line and quotes are literal, so escaping " as \" (as before) would
-    // show a literal backslash in-game. Just strip newlines/CR, which would
-    // otherwise truncate or corrupt the line.
-    motd: String(MOTD).replace(/\r?\n/g, ""),
+    motd: MOTD,
     "level-seed": SEED,
     "white-list": WHITELIST,
     difficulty: DIFFICULTY,
@@ -82,16 +79,7 @@ function updateServerProperties() {
     updates["rcon.password"] = serverControl.RCON_PASSWORD || "";
   }
 
-  for (const [key, value] of Object.entries(updates)) {
-    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const regex = new RegExp(`^${escapedKey}=.*$`, "m");
-    const line = `${key}=${value}`;
-    if (regex.test(content)) {
-      content = content.replace(regex, line);
-    } else {
-      content += `\n${line}`;
-    }
-  }
+  content = applyProperties(content, updates);
 
   fs.writeFileSync(serverPropsPath, content, "utf-8");
 

@@ -18,6 +18,10 @@ How `backup/backup.sh`, `backup/restore.sh` and `rollback.sh` treat your data, a
 
 `maintenance.sh` and `message_onjoin.sh` take a per-instance lock through `acquire_instance_lock` in `src/scripts/common/utils.sh`; a second copy for the same instance exits with a message. The lock file lives in one private directory (mode `700`) per instance, `scripts/<instance>/.locks` unless `INSTANCE_LOCK_DIR` is set, so cron, an SSH session and the wrapper's `sudo` runs all take the same lock. It is never placed in the world-writable `/tmp`. With `flock` the lock is released by the kernel when the process dies, so a crashed run cannot strand it. Without `flock` the helper falls back to a `mkdir` lock that records the owner's pid and is taken over when that process is gone. Set `INSTANCE_LOCK_DIR` in the environment of the script (for example in the systemd unit) to move the lock directory.
 
+## The server's unit and stopping
+
+The instance's systemd unit (written by `create_service.sh`) gives a stop up to `TimeoutStopSec=300` and runs `common/graceful_stop.sh` as `ExecStop`: it flushes the world with a confirmed `save-all flush` while the server is still up, and exits `0` whatever happens, then systemd stops the processes. It does not send `stop`, because `start.sh` restarts a JVM that exits. The unit also sets `PrivateTmp=true`, `ProtectSystem=full` and `ReadWritePaths=` for the instance and backups folders. `NoNewPrivileges` is left off on purpose: `screen` is setgid on Debian-based systems and would lose that. Units written before this change are not rewritten; add the same lines by hand if you want them.
+
 ## Cleanup
 
 `backup/automation/cleanup_backups.sh` applies the retention policy.

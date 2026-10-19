@@ -180,7 +180,7 @@ KillMode=process
 StateDirectory=${TARGET_DIR_NAME}-api-server
 StateDirectoryMode=0700
 Environment="MC_STATE_DIR=/var/lib/${TARGET_DIR_NAME}-api-server"
-ExecStart=${serviceUser ? process.execPath : "/usr/bin/node"} ${API_SERVER_ENTRY}
+ExecStart=${process.execPath} ${API_SERVER_ENTRY}
 Restart=on-failure
 RestartSec=5s
 # Unlike the PM2 deployment path this unit previously had no ceiling at
