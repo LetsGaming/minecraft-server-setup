@@ -55,6 +55,19 @@ function assertPlainFilename(name) {
   }
 }
 
+/** Throws unless a download URL is https. */
+function assertHttps(url) {
+  const protocol = new URL(url).protocol;
+  if (protocol !== "https:") throw new Error(`Refusing a ${protocol.replace(":", "")} download: ${url}`);
+}
+
+/** axios beforeRedirect hook: a redirect may not leave https, whoever sends it. */
+function httpsOnlyRedirect(options) {
+  if (options.protocol !== "https:") {
+    throw new Error(`Refusing a redirect to ${String(options.protocol).replace(":", "")}://${options.hostname ?? ""}`);
+  }
+}
+
 function rmQuiet(file) {
   try {
     fs.rmSync(file, { force: true });
@@ -90,6 +103,7 @@ async function downloadToTemp(url, tempPath, opts = {}) {
   } = opts;
 
   try {
+    assertHttps(url);
     const response = await axios({
       url,
       method: "GET",
@@ -97,6 +111,8 @@ async function downloadToTemp(url, tempPath, opts = {}) {
       timeout: timeoutMs,
       maxContentLength: maxBytes,
       maxBodyLength: maxBytes,
+      maxRedirects: 5,
+      beforeRedirect: httpsOnlyRedirect,
       signal: AbortSignal.timeout(deadlineMs),
       validateStatus: (s) => s >= 200 && s < 300,
     });
@@ -125,7 +141,10 @@ async function downloadToTemp(url, tempPath, opts = {}) {
       },
     });
 
-    await pipeline(response.data, meter, fs.createWriteStream(tempPath));
+    // A leftover file or link at the temp path is removed, never written through:
+    // "wx" fails if something is there again by the time the file is created.
+    rmQuiet(tempPath);
+    await pipeline(response.data, meter, fs.createWriteStream(tempPath, { flags: "wx", mode: 0o644 }));
 
     if (hash512 && hash512.digest("hex") !== sha512.toLowerCase()) {
       throw new Error("Downloaded file failed sha512 verification.");
@@ -137,6 +156,25 @@ async function downloadToTemp(url, tempPath, opts = {}) {
   } catch (err) {
     rmQuiet(tempPath);
     throw err;
+  }
+}
+
+/**
+ * True when the file at `file` has the digest a remote API published for it.
+ * False when the file cannot be read or when no digest was published: a file
+ * nobody can vouch for is not one to register as installed.
+ *
+ * @param {string} file
+ * @param {{sha512?: string, sha1?: string}} hashes  expected hex digests
+ */
+function fileMatchesHash(file, { sha512, sha1 } = {}) {
+  const algo = sha512 ? "sha512" : sha1 ? "sha1" : null;
+  if (!algo) return false;
+  try {
+    const digest = crypto.createHash(algo).update(fs.readFileSync(file)).digest("hex");
+    return digest === (algo === "sha512" ? sha512 : sha1).toLowerCase();
+  } catch {
+    return false;
   }
 }
 
@@ -184,7 +222,10 @@ async function downloadMavenVerified(url, finalPath, opts = {}) {
 module.exports = {
   safeFilenameFromUrl,
   assertPlainFilename,
+  assertHttps,
+  httpsOnlyRedirect,
   downloadToTemp,
   downloadVerified,
+  fileMatchesHash,
   downloadMavenVerified,
 };

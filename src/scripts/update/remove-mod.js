@@ -121,6 +121,7 @@ function main() {
   }
 
   let removedFile = null;
+  const failures = [];
   for (const jarPath of toRemove) {
     try {
       if (fs.existsSync(jarPath)) {
@@ -130,7 +131,13 @@ function main() {
       }
     } catch (err) {
       console.error(`Failed to remove ${jarPath}: ${err.message}`);
+      failures.push(`${path.basename(jarPath)} (${err.message})`);
     }
+  }
+  // The entry is the record that the jar is there: dropping it while the jar
+  // stays would leave a mod the server loads and nothing tracks.
+  if (failures.length > 0) {
+    fail("remove-failed", `Could not delete ${failures.join(", ")}; "${key}" is still registered.`);
   }
 
   delete downloadedVersions.mods[key];

@@ -28,6 +28,19 @@ Mods with no build for the target are listed in the result as "kept on an old
 build" when the first start worked. A mod that loads can still misbehave in
 game; the result says so.
 
+## Java
+
+A target version may need a newer Java than the server uses. The JDK is installed through
+Jabba before the server is touched; its name comes from Jabba's remote index, so it must be
+plain letters, digits and `. _ @ + -` and is passed to `bash` as an argument, never spliced
+into a command. Pointing the server at the new JDK (the `JAVA=` line of its `variables.txt`)
+happens only after the update is confirmed and the backup is done, so an aborted interactive
+update leaves the server on the Java it had.
+
+The JDK archive itself is not checksum-verified: Jabba's index lists download URLs but no
+digests, so there is nothing to compare against. The Jabba installer script is pinned by
+commit and checked against a SHA-256; the JDK download relies on HTTPS and on Jabba.
+
 ## Progress
 
 Progress is one JSON object per line on stdout and in

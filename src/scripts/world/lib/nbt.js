@@ -31,6 +31,7 @@ class Reader {
   constructor(buf) {
     this.buf = buf;
     this.pos = 0;
+    this.bigLongs = false;
   }
   need(n) {
     if (n < 0 || this.pos + n > this.buf.length) throw new NbtError("NBT ended early");
@@ -63,9 +64,9 @@ class Reader {
   }
   i64() {
     this.need(8);
-    const v = Number(this.buf.readBigInt64BE(this.pos));
+    const big = this.buf.readBigInt64BE(this.pos);
     this.pos += 8;
-    return v;
+    return this.bigLongs ? big : Number(big);
   }
   f32() {
     this.need(4);
@@ -208,9 +209,14 @@ function read(r, type) {
   }
 }
 
-/** The whole tree of a (small) NBT document, as a plain object. */
-function parseNbt(buf) {
+/**
+ * The whole tree of a (small) NBT document, as a plain object. Longs are
+ * numbers, which is exact up to 2^53; `bigLongs` returns BigInts instead, for
+ * values that use all 64 bits (packed chunk positions).
+ */
+function parseNbt(buf, { bigLongs = false } = {}) {
   const r = new Reader(buf);
+  r.bigLongs = bigLongs;
   const type = r.u8();
   if (type !== TAG.COMPOUND) throw new NbtError("NBT root is not a compound");
   r.string();
@@ -405,6 +411,7 @@ const NAME = {
   statusLower: Buffer.from("status"),
   blockEntities: Buffer.from("block_entities"),
   structures: Buffer.from("structures"),
+  level: Buffer.from("Level"),
   starts: Buffer.from("starts"),
   references: Buffer.from("References"),
   id: Buffer.from("id"),
@@ -555,11 +562,48 @@ function readStructures(buf, pos) {
 }
 
 /**
+ * Offsets of the tags that sit directly in the root compound (or in a root-level
+ * Level compound, the layout before 1.18), up to and including offset `upTo`.
+ */
+function rootTagStarts(buf, upTo) {
+  const starts = new Set();
+  let pos = 3 + buf.readUInt16BE(1);
+  let inLevel = false;
+  while (pos <= upTo) {
+    if (pos >= buf.length) throw overrun();
+    const type = buf[pos];
+    if (type === TAG.END) {
+      if (!inLevel) break;
+      inLevel = false;
+      pos++;
+      continue;
+    }
+    if (pos + 3 > buf.length) throw overrun();
+    starts.add(pos);
+    const nameLen = buf.readUInt16BE(pos + 1);
+    const valuePos = pos + 3 + nameLen;
+    if (valuePos > buf.length) throw overrun();
+    if (!inLevel && type === TAG.COMPOUND && eq(buf, pos + 3, nameLen, NAME.level)) {
+      inLevel = true;
+      pos = valuePos;
+      continue;
+    }
+    pos = skipAt(buf, valuePos, type);
+  }
+  return starts;
+}
+
+/**
  * The same answer as chunkSignals, found by searching for the few tags it wants
  * instead of walking past the sections, which are most of the document and hold
  * nothing it needs. A tag header (type byte, name length, name) is long enough
  * that a false hit inside block data is not a practical concern, and each hit is
  * parsed from there, so a damaged document still throws.
+ *
+ * A hit counts only where the tag sits directly in the root compound. Item data
+ * in a block entity can carry a tag of the same name, and in hash order it may
+ * come before the real one; when any hit is somewhere else the answer comes from
+ * the walking version instead.
  *
  * @returns {{inhabited: number|undefined, flags: number, blockEntities: number}}
  */
@@ -569,15 +613,25 @@ function chunkSignalsFast(buf) {
   let flags = 0;
   let blockEntities = 0;
 
-  let at = buf.indexOf(FIND.inhabited);
+  const atInhabited = buf.indexOf(FIND.inhabited);
+  let atStatus = buf.indexOf(FIND.status);
+  if (atStatus < 0) atStatus = buf.indexOf(FIND.statusLower);
+  const atBlockEntities = buf.indexOf(FIND.blockEntities);
+  const atStructures = buf.indexOf(FIND.structures);
+  const hits = [atInhabited, atStatus, atBlockEntities, atStructures].filter((h) => h >= 0);
+  if (hits.length > 0) {
+    const starts = rootTagStarts(buf, Math.max(...hits));
+    if (!hits.every((h) => starts.has(h))) return chunkSignals(buf);
+  }
+
+  let at = atInhabited;
   if (at >= 0) {
     const pos = at + FIND.inhabited.length;
     if (pos + 8 > buf.length) throw overrun();
     inhabited = buf.readInt32BE(pos) * 4294967296 + buf.readUInt32BE(pos + 4);
   }
 
-  at = buf.indexOf(FIND.status);
-  if (at < 0) at = buf.indexOf(FIND.statusLower);
+  at = atStatus;
   if (at >= 0) {
     const pos = at + FIND.status.length;
     if (pos + 2 > buf.length) throw overrun();
@@ -586,7 +640,7 @@ function chunkSignalsFast(buf) {
     if (!FULL.includes(buf.toString("utf8", pos + 2, pos + 2 + len))) flags |= SIGNAL.NOT_FULL;
   }
 
-  at = buf.indexOf(FIND.blockEntities);
+  at = atBlockEntities;
   if (at >= 0) {
     const pos = at + FIND.blockEntities.length;
     if (pos + 5 > buf.length) throw overrun();
@@ -595,7 +649,7 @@ function chunkSignalsFast(buf) {
     blockEntities = found.count;
   }
 
-  at = buf.indexOf(FIND.structures);
+  at = atStructures;
   if (at >= 0) flags |= readStructures(buf, at + FIND.structures.length);
 
   return { inhabited, flags, blockEntities };

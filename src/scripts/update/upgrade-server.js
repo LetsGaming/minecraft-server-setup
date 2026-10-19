@@ -278,7 +278,13 @@ function runUpgrade(deps, opts) {
   let pruneResult = null;
   if (opts.prunePlan) {
     say("prune", "running", "Deleting unused chunks");
-    const pruned = deps.run("prune", ["--apply", `--plan=${opts.prunePlan}`, `--time-budget=${PRUNE_TIME_BUDGET_SECONDS}`, "--json"]);
+    const pruned = deps.run("prune", [
+      "--apply",
+      `--plan=${opts.prunePlan}`,
+      `--backup=${deps.archivePath(archive)}`,
+      `--time-budget=${PRUNE_TIME_BUDGET_SECONDS}`,
+      "--json",
+    ]);
     pruneResult = parseLines(pruned.stdout).find((l) => "ok" in l) ?? null;
     if (pruned.code !== 0 || !pruneResult || !pruneResult.ok) {
       say("prune", "error", pruneResult?.error ?? "The prune failed. The whole job is rolled back.");
@@ -385,9 +391,6 @@ function realDeps({ scriptsDir, serverPath, backupsPath, statusFile }) {
       // S-015: every step has a ceiling, so one that hangs (a stalled download,
       // a wedged JVM) cannot keep the server down and the lock held forever.
       const r = spawnSync(cmd, [script, ...args], {
-        // The prune runs only after this job's backup (S-025); this is how
-        // prune-chunks.js knows there is one.
-        ...(kind === "prune" ? { env: { ...process.env, MC_PRUNE_BACKED_UP: "1" } } : {}),
         encoding: "utf8",
         maxBuffer: 16 * 1024 * 1024,
         timeout: STEP_TIMEOUT_MS[kind] ?? 30 * 60_000,

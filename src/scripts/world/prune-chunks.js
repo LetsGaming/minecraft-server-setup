@@ -10,7 +10,7 @@
  *   node prune-chunks.js --inspect --plan=<id> --dimension=<id> --cx=<n> --cz=<n>   one chunk, in full
  *   node prune-chunks.js --dimensions             (names and region counts, no chunk is read)
  *   node prune-chunks.js --scan   [--params=<json> | --params-file=<path> | --params-stdin] [--profile] [--no-cache] [--workers=<n>]
- *   node prune-chunks.js --apply  --plan=<id> [--backed-up] [--workers=<n>] [--time-budget=<seconds>]
+ *   node prune-chunks.js --apply  --plan=<id> --backup=<archive> [--allow-unknown-spawn] [--workers=<n>] [--time-budget=<seconds>]
  *   node prune-chunks.js --settings=get
  *   node prune-chunks.js --settings=set --params=<json>
  *
@@ -19,9 +19,12 @@
  * and only what a fresh scan still agrees on; it refuses to run while the
  * server is up, because a JVM holds region files open and rewrites them.
  *
- * --apply needs a backup behind it: upgrade-server.js takes one before it calls
- * --apply (and says so with MC_PRUNE_BACKED_UP=1); run by hand, take one
- * yourself and pass --backed-up.
+ * --apply needs a backup behind it, and names it: upgrade-server.js takes one
+ * before it calls --apply and passes its path; run by hand, take one yourself
+ * and pass --backup=<archive> (or set MC_PRUNE_BACKUP). The archive must exist,
+ * be a non-empty .tar.zst or .tar.gz inside the backups folder, and be at most
+ * a day old. A plan made while level.dat was unreadable is refused unless
+ * --allow-unknown-spawn is given: its spawn protection is a guess.
  */
 
 const fs = require("fs");
@@ -40,6 +43,7 @@ const JOURNAL_FILE = path.join(PRUNE_DIR, "prune-apply.journal");
 const DEFAULT_TIME_BUDGET_SECONDS = 45 * 60;
 const SETTINGS_FILE = path.join(PRUNE_DIR, "settings.json");
 const PLANS_KEPT = 5;
+const BACKUP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const PLAN_ID_RE = /^[a-f0-9]{16}$/;
 
 const ENGINE = { name: "builtin", version: 1 };
@@ -95,6 +99,12 @@ function prunePlans(keepId) {
 function writeJournal(entry) {
   ensureDir();
   writePrivate(JOURNAL_FILE, JSON.stringify({ version: 1, ...entry }));
+}
+
+/** Put a journal back exactly as it was, or remove it when there was none. */
+function restoreJournal(previous) {
+  if (previous) writePrivate(JOURNAL_FILE, JSON.stringify(previous));
+  else fs.rmSync(JOURNAL_FILE, { force: true });
 }
 
 function readJournal() {
@@ -158,6 +168,42 @@ function summarizeProfile(profile, started) {
   };
 }
 
+/** True when `child` is `parent` or lies below it. */
+function isInside(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/**
+ * Why a backup path does not count as a backup, or null when it does. A flag
+ * anyone can type proves nothing; a file that exists, is recent, has content and
+ * sits in the backups folder at least shows one was made.
+ */
+function backupProblem(file, vars) {
+  if (!file) return "no backup archive was named";
+  let real;
+  let st;
+  try {
+    real = fs.realpathSync(file);
+    st = fs.statSync(real);
+  } catch {
+    return `the backup ${file} does not exist`;
+  }
+  if (!st.isFile() || st.size === 0) return `${file} is not a non-empty file`;
+  if (!/\.tar\.(zst|gz)$/.test(real)) return `${file} is not a .tar.zst or .tar.gz archive`;
+  if (vars.BACKUPS_PATH && vars.BACKUPS_PATH !== "none") {
+    let root;
+    try {
+      root = fs.realpathSync(vars.BACKUPS_PATH);
+    } catch {
+      return "the backups folder does not exist";
+    }
+    if (!isInside(root, real)) return `${file} is not inside the backups folder`;
+  }
+  if (Date.now() - st.mtimeMs > BACKUP_MAX_AGE_MS) return `${file} is more than a day old`;
+  return null;
+}
+
 function serverIsRunning(vars) {
   // The setup suite's own check: RCON, screen session or systemd, whichever answers.
   const { spawnSync } = require("child_process");
@@ -179,6 +225,7 @@ function reenterLocked() {
   const common = path.join(SCRIPTS_DIR, "common");
   const script = 'source "$1/load_variables.sh"; source "$1/utils.sh"; acquire_operation_lock prune || exit 75; shift; node "$@"; rc=$?; release_operation_lock; exit $rc';
   const r = spawnSync("bash", ["-c", script, "prune-lock", common, __filename, ...process.argv.slice(2)], { stdio: "inherit" });
+  if (r.error) fail("lock_failed", `The operation lock needs bash, which could not be run: ${r.error.message}`);
   if (r.status === 75) fail("busy", "Another operation is running for this server.");
   process.exit(r.status ?? 1);
 }
@@ -220,6 +267,13 @@ function progressApply() {
   };
 }
 
+/** A flag value as an integer; null when the flag is missing, empty or not a whole number. */
+function wholeNumber(raw) {
+  if (raw === null || raw === undefined || String(raw).trim() === "") return null;
+  const n = Number(raw);
+  return Number.isInteger(n) ? n : null;
+}
+
 function workersOf(args) {
   const raw = args.get("workers");
   if (raw === null || raw === undefined) return defaultWorkers();
@@ -229,8 +283,8 @@ function workersOf(args) {
 
 async function main() {
   const args = parseArgs({
-    flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null, dimension: null, cx: null, cz: null, rx: null, rz: null },
-    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin", "inspect", "tile", "backed-up"],
+    flags: { params: null, "params-file": null, plan: null, settings: null, workers: null, "time-budget": null, dimension: null, cx: null, cz: null, rx: null, rz: null, backup: null },
+    boolFlags: ["status", "scan", "apply", "json", "profile", "no-cache", "dimensions", "params-stdin", "inspect", "tile", "allow-unknown-spawn"],
   });
   const vars = loadVariables(path.join(SCRIPTS_DIR, "common", "variables.txt"), { optional: true });
 
@@ -259,10 +313,10 @@ async function main() {
   if (!serverPath || !fs.existsSync(serverPath)) fail("server_path", "SERVER_PATH does not exist.");
 
   if (args.bool("tile")) {
-    const rx = Number(args.get("rx"));
-    const rz = Number(args.get("rz"));
+    const rx = wholeNumber(args.get("rx"));
+    const rz = wholeNumber(args.get("rz"));
     const dimension = args.get("dimension");
-    if (!dimension || !Number.isInteger(rx) || !Number.isInteger(rz)) fail("params", "--tile needs --dimension, --rx and --rz.");
+    if (!dimension || rx === null || rz === null) fail("params", "--tile needs --dimension, --rx and --rz.");
     let tile;
     try {
       ensureDir();
@@ -277,10 +331,10 @@ async function main() {
 
   if (args.bool("inspect")) {
     const id = args.get("plan");
-    const cx = Number(args.get("cx"));
-    const cz = Number(args.get("cz"));
+    const cx = wholeNumber(args.get("cx"));
+    const cz = wholeNumber(args.get("cz"));
     const dimension = args.get("dimension");
-    if (!id || !PLAN_ID_RE.test(id) || !dimension || !Number.isInteger(cx) || !Number.isInteger(cz)) {
+    if (!id || !PLAN_ID_RE.test(id) || !dimension || cx === null || cz === null) {
       fail("params", "--inspect needs --plan, --dimension, --cx and --cz.");
     }
     let plan;
@@ -349,17 +403,22 @@ async function main() {
     if (serverIsRunning(vars)) fail("server_running", "The server must be stopped before chunks are deleted.");
     // S-025: deleting chunks cannot be undone, so it only runs with a backup
     // behind it: inside the upgrade job (update/upgrade.sh --prune-only), which
-    // takes one first and sets MC_PRUNE_BACKED_UP, or by hand with --backed-up.
-    if (process.env.MC_PRUNE_BACKED_UP !== "1" && !args.bool("backed-up")) {
+    // takes one first and passes its path, or by hand with --backup=<archive>.
+    const problem = backupProblem(args.get("backup") ?? process.env.MC_PRUNE_BACKUP, vars);
+    if (problem) {
       fail(
         "no_backup",
-        "Deleting chunks needs a backup first. Run it through update/upgrade.sh --prune-only, which takes one, or take a backup yourself and pass --backed-up.",
+        `Deleting chunks needs a backup first (${problem}). Run it through update/upgrade.sh --prune-only, which takes one, or take a backup yourself and pass --backup=<archive>.`,
       );
     }
     out({ phase: "prune", msg: "Deleting unused chunks" });
     const budget = Number(args.get("time-budget") ?? DEFAULT_TIME_BUDGET_SECONDS);
     const startedAt = new Date().toISOString();
-    writeJournal({ state: "applying", plan: id, startedAt, pid: process.pid });
+    // An unfinished apply from earlier is kept in the new journal, and put back
+    // untouched if this one is refused before it deletes anything.
+    const previous = readJournal();
+    const { earlier: _older, ...earlier } = previous ?? {};
+    writeJournal({ state: "applying", plan: id, startedAt, pid: process.pid, ...(previous ? { earlier } : {}) });
     try {
       // Regions the plan touches are read fresh (in parallel); the rest may come from the cache.
       const touched = touchedKeys(plan);
@@ -369,17 +428,17 @@ async function main() {
         serverPath,
         plan,
         cacheDir: CACHE_DIR,
-        reread: new Set(),
+        allowUnknownSpawn: args.bool("allow-unknown-spawn"),
         timeBudgetMs: Number.isFinite(budget) && budget > 0 ? budget * 1000 : 0,
         onProgress: progressApply(),
       });
       fs.rmSync(JOURNAL_FILE, { force: true });
       out({ ok: true, ...res });
     } catch (err) {
-      // Refused before anything was deleted: nothing is half done.
-      if (["plan_stale", "plan_invalid"].includes(err.code)) fs.rmSync(JOURNAL_FILE, { force: true });
-      else writeJournal({ state: "failed", plan: id, startedAt, error: err.message, code: err.code ?? null });
-      fail(["plan_stale", "plan_invalid", "time_budget"].includes(err.code) ? err.code : "apply_failed", err.message);
+      // Refused before anything was deleted: nothing new is half done.
+      if (["plan_stale", "plan_invalid", "spawn_unknown"].includes(err.code)) restoreJournal(previous);
+      else writeJournal({ state: "failed", plan: id, startedAt, error: err.message, code: err.code ?? null, ...(previous ? { earlier } : {}) });
+      fail(["plan_stale", "plan_invalid", "spawn_unknown", "time_budget"].includes(err.code) ? err.code : "apply_failed", err.message);
     }
     return;
   }

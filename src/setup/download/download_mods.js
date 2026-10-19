@@ -16,6 +16,7 @@ const {
   safeFilenameFromUrl,
   downloadVerified,
 } = require("../../scripts/update/lib/download");
+const { pickVersion } = require("../../scripts/update/lib/versions");
 
 // ==== Argument Helpers ====
 
@@ -106,6 +107,13 @@ function validateSetup(mcVersion, loader, ids) {
 // ==== Core Download Logic ====
 
 const processedMods = new Set();
+/** Every mod that was asked for or required and did not arrive, with the reason. */
+const failures = [];
+
+function recordFailure(projectId, reason) {
+  console.error(`FAILED ${projectId}: ${reason}`);
+  failures.push({ projectId, reason });
+}
 
 async function downloadModrinthProject(projectId, mcVersion, loader, downloadDir) {
   if (processedMods.has(projectId)) return;
@@ -120,9 +128,7 @@ async function downloadModrinthProject(projectId, mcVersion, loader, downloadDir
     );
 
     if (!compatibleVersion) {
-      console.warn(
-        `No compatible version for ${projectId} (${mcVersion}, ${loader})`
-      );
+      recordFailure(projectId, `no compatible version (${mcVersion}, ${loader})`);
       return;
     }
 
@@ -138,7 +144,13 @@ async function downloadModrinthProject(projectId, mcVersion, loader, downloadDir
       compatibleVersion.files.find((f) => f.primary) ||
       compatibleVersion.files[0];
     if (!file || !file.url) {
-      console.warn(`No downloadable file found for ${projectId}`);
+      recordFailure(projectId, "no downloadable file");
+      return;
+    }
+    // A mod goes onto the server and runs there, so a build with no published
+    // checksum is not one setup can vouch for.
+    if (!file.hashes?.sha512 && !file.hashes?.sha1) {
+      recordFailure(projectId, "Modrinth publishes no checksum for it, so it cannot be verified");
       return;
     }
 
@@ -162,25 +174,20 @@ async function downloadModrinthProject(projectId, mcVersion, loader, downloadDir
       }
     }
   } catch (err) {
-    console.error(
-      `Error processing ${projectId}:`,
-      err.response?.data || err.message
-    );
+    const detail = err.response?.data;
+    recordFailure(projectId, typeof detail === "string" ? detail : err.message);
   }
 }
 
 async function fetchProjectVersions(projectId) {
-  const url = `https://api.modrinth.com/v2/project/${projectId}/version`;
+  const url = `https://api.modrinth.com/v2/project/${encodeURIComponent(projectId)}/version`;
   const resp = await axios.get(url);
   return resp.data || [];
 }
 
 function selectCompatibleVersion(versions, mcVersion, loader) {
-  return versions.find(
-    (v) =>
-      v.game_versions.includes(mcVersion) &&
-      v.loaders.includes(loader.toLowerCase())
-  );
+  // The newest release; a beta or alpha only for a mod that has no release.
+  return pickVersion(versions, mcVersion, loader.toLowerCase());
 }
 
 // ==== Main Entrypoint ====
@@ -208,4 +215,13 @@ function selectCompatibleVersion(versions, mcVersion, loader) {
     console.log(`\nProcessing project ID: ${projectId}`);
     await downloadModrinthProject(projectId, minecraftVersion, modLoader, downloadDir);
   }
-})();
+
+  if (failures.length > 0) {
+    console.error(`\n${failures.length} mod(s) could not be downloaded:`);
+    for (const f of failures) console.error(`  - ${f.projectId}: ${f.reason}`);
+    process.exitCode = 1;
+  }
+})().catch((err) => {
+  console.error(`Mod download failed: ${err.message}`);
+  process.exitCode = 1;
+});

@@ -121,6 +121,27 @@ function runCheckUpdates(version) {
   });
 }
 
+/** Install a required dependency by project id through add-mod.js; resolves to its slug. */
+function installDependency(projectId) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      process.execPath,
+      [path.resolve(__dirname, "add-mod.js"), projectId, "--json"],
+      { env: { ...process.env, MC_OPERATION_LOCK_HELD: "1" } },
+      (err, stdout, stderr) => {
+        let out = null;
+        try {
+          out = JSON.parse(stdout.trim().split("\n").filter(Boolean).pop());
+        } catch {
+          /* no JSON: fall through to the error */
+        }
+        if (!err && out?.ok) return resolve(out.slug ?? projectId);
+        reject(new Error(out?.error ?? (stderr || err?.message || "add-mod.js failed").trim()));
+      },
+    );
+  });
+}
+
 // ---------------- update runner ----------------
 
 /**
@@ -167,13 +188,28 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
   const upToDate = [];
   const failed = [];
 
+  // Projects the check saw installed, by project id; a required dependency that
+  // is among them needs nothing.
+  const installedProjectIds = new Set(results.map((m) => m.projectId).filter(Boolean));
+
   for (const mod of scoped) {
-    if (mod.status !== "update_available") {
+    if (mod.status === "up_to_date") {
       console.log(`No update available for: ${mod.slug}\n`);
       upToDate.push(mod.slug);
       continue;
     }
-    if (!mod.downloadUrl) continue;
+    if (mod.status !== "update_available") {
+      // error, no_versions, no_matching_version, invalid_entry: the mod was not
+      // checked or has no build to move to, which is not the same as being current.
+      const reason = mod.error ?? mod.message ?? mod.status;
+      console.error(`Could not check ${mod.slug}: ${reason}`);
+      failed.push({ slug: mod.slug, error: String(reason) });
+      continue;
+    }
+    if (!mod.downloadUrl) {
+      failed.push({ slug: mod.slug, error: "The update lists no download." });
+      continue;
+    }
 
     try {
       const filename = safeFilenameFromUrl(mod.downloadUrl);
@@ -196,22 +232,38 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
         sha512: mod.downloadSha512 || undefined,
       });
 
-      if (previous?.filename) {
-        safeUnlink(path.join(currentDir, previous.filename));
-      } else {
-        for (const jar of detectInstalledJars(currentDir, mod.slug, filename)) {
-          safeUnlink(jar.fullPath);
-        }
-      }
-
+      // The new jar goes in by rename before the old one is deleted, so a
+      // failure in between leaves two builds rather than none. A new file name
+      // sits next to the old one for a moment; the same name replaces it.
       fs.renameSync(tempPath, targetPath);
       downloadedVersions.mods[mod.slug] = {
         versionId: mod.latestVersionId,
         filename,
       };
       writeManifest(downloadedVersionsPath, downloadedVersions);
+
+      const oldJars = previous?.filename
+        ? [path.join(currentDir, previous.filename)]
+        : detectInstalledJars(currentDir, mod.slug, filename).map((jar) => jar.fullPath);
+      for (const oldJar of oldJars) {
+        if (path.resolve(oldJar) !== path.resolve(targetPath)) safeUnlink(oldJar);
+      }
       console.log(`Downloaded and installed: ${filename}\n`);
       updated.push({ slug: mod.slug, toVersionId: mod.latestVersionId, filename });
+
+      // A new build can need a mod the old one did not. Without it the server
+      // fails to start after the next restart.
+      for (const dep of mod.requiredDependencies ?? []) {
+        if (installedProjectIds.has(dep.projectId)) continue;
+        try {
+          const added = await installDependency(dep.projectId);
+          installedProjectIds.add(dep.projectId);
+          console.log(`Installed required dependency: ${added}\n`);
+        } catch (depErr) {
+          console.error(`Failed to install dependency ${dep.projectId} of ${mod.slug}: ${depErr.message}`);
+          failed.push({ slug: mod.slug, error: `Updated, but its required dependency ${dep.projectId} could not be installed: ${depErr.message}` });
+        }
+      }
     } catch (err) {
       // One mod failing must not abort the rest of a batch.
       console.error(`Failed to update ${mod.slug}: ${err.message}`);

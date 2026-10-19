@@ -61,7 +61,7 @@ The instance's systemd unit (written by `create_service.sh`) gives a stop up to 
 
 ## Downloads
 
-The Node update scripts (`src/scripts/update/lib/download.js`) treat everything a remote API names as untrusted. A download goes to `<target>.tmp` first and is renamed into place only after it passed its checks, so a failed or rejected download leaves no partial file behind. `add-mod.js` and `update-mods.js` verify the sha512 that Modrinth publishes, `update-server.js` verifies the sha1 that Mojang publishes. The file name is taken from the URL, percent-decoded and then required to be a single plain name, so a hostile URL cannot write outside `mods/`. Bodies are capped (512 MiB by default) and bounded by a response timeout and an overall deadline.
+The Node update scripts (`src/scripts/update/lib/download.js`) treat everything a remote API names as untrusted. A download goes to `<target>.tmp` first and is renamed into place only after it passed its checks, so a failed or rejected download leaves no partial file behind. `add-mod.js` and `update-mods.js` verify the sha512 that Modrinth publishes, `update-server.js` verifies the sha1 that Mojang publishes. The file name is taken from the URL, percent-decoded and then required to be a single plain name, so a hostile URL cannot write outside `mods/`. Bodies are capped (512 MiB by default) and bounded by a response timeout and an overall deadline. Download URLs must be https and a redirect may not leave https. The temporary file is created exclusively (a leftover file or link at that path is removed first, never written through). Setup's CurseForge server pack uses the same rules (2 GiB cap) and is checked against the SHA-1 CurseForge publishes.
 
 ## Tests
 

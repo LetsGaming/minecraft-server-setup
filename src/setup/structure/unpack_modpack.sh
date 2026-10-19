@@ -23,6 +23,24 @@ if [ ! -f "$MODPACK_SOURCE" ]; then
   exit 1
 fi
 
+# The archive comes from a download. Read its listing before anything is
+# written: no entry may point outside the instance folder (an absolute path or a
+# ".." segment), and none may be a symbolic link, which a later entry could be
+# written through.
+while IFS= read -r entry; do
+  normalized="${entry//\\//}"
+  case "/$normalized/" in
+    //* | */../*)
+      echo "Refusing the modpack: entry '$entry' leaves the instance folder." >&2
+      exit 1
+      ;;
+  esac
+done < <(unzip -Z -1 "$MODPACK_SOURCE")
+if unzip -Z "$MODPACK_SOURCE" | grep -q '^l'; then
+  echo "Refusing the modpack: it contains a symbolic link." >&2
+  exit 1
+fi
+
 mkdir -p "$INSTANCE_DIR"
 unzip -o -q "$MODPACK_SOURCE" -d "$INSTANCE_DIR"
 echo "Modpack unpacked successfully."

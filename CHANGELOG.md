@@ -18,6 +18,12 @@ All notable changes to this project are documented here. The format follows
 - `restore.sh` refuses `--with-scripts` and `--install-units` without a terminal, so the wrapper's sudoers rule can no longer put archived scripts or units back. `docs/sudoers-setup.md` and `docs/service-user.md` now say what the wrapper's key is worth: installing a Modrinth mod, running an upgrade and typing console commands.
 - The `.mc-meta` folder (a copy of `variables.txt` with the RCON password, webhook URL and API key) no longer survives in the live server folder after `rollback.sh` or a failed `restore.sh`, and `backup.sh` never includes one.
 - `check_updates.sh` passes the CurseForge key to curl on stdin instead of the command line.
+- **Chunk deletion needs a backup you name, and the script checks it.** `prune-chunks.js --apply` takes `--backup=<archive>` (or `MC_PRUNE_BACKUP`): a non-empty `.tar.zst`/`.tar.gz` inside the backups folder, at most a day old. The `--backed-up` flag and `MC_PRUNE_BACKED_UP` no longer count as proof. The upgrade job passes the archive it just made.
+- Downloads are bounded and verified: setup's CurseForge server pack has a start timeout, a transfer deadline, a size cap, https-only redirects and a SHA-1 check against CurseForge's, and every download goes through a temporary file created exclusively. Plain-http download URLs are refused.
+- A server pack zip is listed before it is unpacked and refused if an entry is an absolute path, has a `..` segment or is a symbolic link.
+- JDK names from Jabba's remote index are checked (letters, digits and `. _ @ + -`) and passed to `bash` as an argument instead of being spliced into a command (`update-server.js`, `install_java.js`). `docs/upgrade.md` notes that the JDK archives themselves are not checksum-verified, because Jabba's index publishes no digests.
+- `add-mod.js` registers a same-named file already in `mods/` only when it matches the checksum Modrinth publishes, and otherwise replaces it with a verified download. `toggle-mod.js` refuses a manifest file name that is not a plain name.
+- A chunk that inflates past 64 MiB, or an external `.mcc` file over that size, is treated as unreadable and left alone (a decompression bomb can no longer exhaust memory during a scan).
 
 ### Added
 
@@ -97,6 +103,15 @@ All notable changes to this project are documented here. The format follows
 - `start_server.sh` reports a server that did not start: through the unit it returns the start script's status, and under `--no-service` it launches the instance's own `start.sh` in screen and checks the session is still there.
 - `loadVariables.js` requires whole numbers for `COMPRESSION_LEVEL`, `MAX_STORAGE_GB`, the `MAX_*_BACKUPS` counts and `INTERVAL_HOURS`.
 - `$&`, `$$` and similar in the MOTD or RCON password are written to `server.properties` as typed (they were read as replacement patterns, which broke RCON authentication), and a trailing backslash or leading space in a value can no longer change the next line or be dropped.
+- **Chunk pruning protects more.** Chunks kept loaded with `/forceload` (read per dimension from `data/chunks.dat`) and player respawn points (old and 1.21.5 layouts) are never deleted. Dimension ids now match between player files and the folder scan (`minecraft:custom` and `custom` are the same dimension). Unreadable player files and an unreadable `chunks.dat` are reported as plan warnings. `--apply` refuses a plan made without a readable `level.dat` (`spawn_unknown`) unless `--allow-unknown-spawn` is given.
+- A fractional buffer, radius or threshold is rounded to a whole number, so a buffer of 1.5 no longer silently protects nothing. A manual selection across the whole coordinate range is applied in time proportional to the number of region files.
+- The quick scan of a chunk no longer takes an `InhabitedTime` (or block entity, structure or status tag) from item data inside a block entity; it only accepts tags at the top of the chunk and otherwise falls back to a full walk.
+- An unfinished prune apply is no longer erased or overwritten by a refused attempt: the earlier note is kept inside the new one and put back as it was if the new apply is refused before it deletes anything. `--tile` and `--inspect` reject a missing `--rx`, `--rz`, `--cx` or `--cz` instead of reading it as 0, and `--apply` answers in JSON when bash is missing.
+- **Mod updates report what happened.** A mod that could not be checked, or has no build for the target version, is listed as failed (and a single `update-mod.js` exits 1) instead of "no update available". New required dependencies of an updated mod are installed. The new jar is renamed into place before the old one is deleted. Builds are chosen release first, then beta, then alpha (updates, `add-mod.js` and setup); an installed beta newer than the last release is not "updated" away. Slugs are URL-encoded.
+- `remove-mod.js` keeps a mod's manifest entry when its jar cannot be deleted.
+- Setup mod downloads exit non-zero when a mod or a required dependency is missing, has no published checksum or fails verification; the CurseForge server pack records no loader or version rather than the word "none" when it lists none.
+- The mod scripts take the operation lock even where `flock` is missing, using the same `mkdir` lock as the shell scripts, and refuse to run when no lock can be taken (they used to run unlocked).
+- An interactive `update-server.js` points the server at the new JDK only after the update is confirmed and the backup is done; an aborted update leaves `JAVA=` as it was.
 
 ## [5.0.0] - 2026-10-10
 

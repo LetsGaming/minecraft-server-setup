@@ -193,4 +193,60 @@ test_with_a_service_the_start_scripts_failure_is_the_result() {
   assert_rc 0 "$RC" "a working one succeeds"
 }
 
+# ── unpacking a modpack ──────────────────────────────────────────────────────
+
+# mk_zip <file> <name:kind>...: kind is "file" or "link"; the entries are written
+# as a Unix zip would, so unzip -Z shows a link as one.
+mk_zip() {
+  local file="$1"; shift
+  python3 - "$file" "$@" <<'PY'
+import stat, sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    for spec in sys.argv[2:]:
+        name, kind = spec.rsplit(":", 1)
+        info = zipfile.ZipInfo(name)
+        info.create_system = 3
+        info.external_attr = ((stat.S_IFLNK | 0o777) if kind == "link" else (stat.S_IFREG | 0o644)) << 16
+        z.writestr(info, "/etc" if kind == "link" else "data")
+PY
+}
+
+unpack() { # entries... ; sets OUT and RC
+  local suite="$T/suite"
+  mkdir -p "$suite/src/setup/download/temp"
+  mk_zip "$suite/src/setup/download/temp/server-pack.zip" "$@"
+  OUT="$(SCRIPT_DIR="$suite" bash "$REPO/src/setup/structure/unpack_modpack.sh" 2>&1 < /dev/null)"
+  RC=$?
+}
+
+test_a_modpack_is_unpacked_when_every_entry_stays_inside() {
+  setup
+  if ! command -v python3 > /dev/null 2>&1 || ! command -v unzip > /dev/null 2>&1; then skip "unpack" "python3 or unzip is missing"; return; fi
+  unpack "config/a.toml:file" "mods/m.jar:file"
+  assert_rc 0 "$RC" "unpacked"
+  assert_exists "$R/instances/testinst/config/a.toml" "the file is in the instance"
+}
+
+test_a_modpack_with_an_entry_outside_the_instance_is_refused_before_anything_is_written() {
+  setup
+  if ! command -v python3 > /dev/null 2>&1 || ! command -v unzip > /dev/null 2>&1; then skip "unpack" "python3 or unzip is missing"; return; fi
+  unpack "ok.txt:file" "../../escape.txt:file"
+  assert_rc 1 "$RC" "refused"
+  assert_contains "$OUT" "leaves the instance folder" "says why"
+  assert_missing "$R/instances/testinst/ok.txt" "no entry was extracted"
+  unpack "/tmp/absolute.txt:file"
+  assert_rc 1 "$RC" "an absolute path is refused too"
+  unpack 'a\..\b.txt:file'
+  assert_rc 1 "$RC" "so is a backslash path with a .. segment"
+}
+
+test_a_modpack_with_a_symbolic_link_is_refused() {
+  setup
+  if ! command -v python3 > /dev/null 2>&1 || ! command -v unzip > /dev/null 2>&1; then skip "unpack" "python3 or unzip is missing"; return; fi
+  unpack "link:link" "link/escape.txt:file"
+  assert_rc 1 "$RC" "refused"
+  assert_contains "$OUT" "symbolic link" "says why"
+  assert_missing "$R/instances/testinst/link" "nothing was extracted"
+}
+
 run_tests

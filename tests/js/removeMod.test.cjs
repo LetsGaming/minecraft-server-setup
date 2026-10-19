@@ -167,3 +167,74 @@ test(
     }
   }),
 );
+
+// ── the mod scripts take the operation lock even without flock(1) ──
+
+function withManifestMod(inst) {
+  fs.writeFileSync(path.join(inst.mods, "sodium-1.0.jar"), "x");
+  inst.writeManifest({ mods: { sodium: { versionId: "v1", filename: "sodium-1.0.jar" } } });
+}
+
+const NO_FLOCK = (lockDir) => ({ INSTANCE_LOCK_DIR: lockDir, MC_OPERATION_LOCK_HELD: "", MC_TEST_NO_FLOCK: "1", MC_TEST_LOCK_WAIT: "1" });
+
+test(
+  "without flock a live holder's mkdir lock keeps the script out",
+  withInstance((inst) => {
+    withManifestMod(inst);
+    const lockDir = path.join(inst.root, "locks");
+    const held = path.join(lockDir, "operation_inst.lock.d");
+    fs.mkdirSync(held, { recursive: true });
+    fs.writeFileSync(path.join(held, "pid"), `${process.pid}\n`);
+    fs.writeFileSync(path.join(lockDir, "operation_inst.lock.kind"), "restore\n");
+    const res = inst.run("remove-mod.js", ["sodium", "--json"], NO_FLOCK(lockDir));
+    const out = lastJson(res.stdout);
+    assert.equal(res.code, 75);
+    assert.equal(out.ok, false);
+    assert.equal(out.code, "busy");
+    assert.match(out.error, /restore/);
+    assert.equal(fs.existsSync(path.join(inst.mods, "sodium-1.0.jar")), true, "nothing was removed");
+    assert.equal(fs.existsSync(held), true, "the holder's lock is left alone");
+  }),
+);
+
+test(
+  "without flock the lock of a dead holder is taken over, and released afterwards",
+  withInstance((inst) => {
+    withManifestMod(inst);
+    const lockDir = path.join(inst.root, "locks");
+    const held = path.join(lockDir, "operation_inst.lock.d");
+    fs.mkdirSync(held, { recursive: true });
+    fs.writeFileSync(path.join(held, "pid"), "999999\n");
+    const res = inst.run("remove-mod.js", ["sodium", "--json"], NO_FLOCK(lockDir));
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(lastJson(res.stdout).ok, true);
+    assert.equal(fs.existsSync(path.join(inst.mods, "sodium-1.0.jar")), false);
+    assert.equal(fs.existsSync(held), false, "the lock folder is gone after the run");
+  }),
+);
+
+test(
+  "without flock a free lock is taken for the run and records who holds it",
+  withInstance((inst) => {
+    withManifestMod(inst);
+    const lockDir = path.join(inst.root, "locks");
+    const res = inst.run("remove-mod.js", ["sodium", "--json"], NO_FLOCK(lockDir));
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(fs.readFileSync(path.join(lockDir, "operation_inst.lock.kind"), "utf8").trim(), "mods");
+    assert.equal(fs.existsSync(path.join(lockDir, "operation_inst.lock.d")), false);
+  }),
+);
+
+test(
+  "a jar that cannot be deleted keeps its manifest entry",
+  withInstance((inst) => {
+    // A directory named like the jar: unlink fails on every platform.
+    fs.mkdirSync(path.join(inst.mods, "sodium-1.0.jar"));
+    inst.writeManifest({ mods: { sodium: { versionId: "v1", filename: "sodium-1.0.jar" } } });
+    const res = inst.run("remove-mod.js", ["sodium", "--json"], { MC_OPERATION_LOCK_HELD: "1" });
+    const out = lastJson(res.stdout);
+    assert.equal(out.ok, false);
+    assert.equal(out.code, "remove-failed");
+    assert.ok(inst.readManifest().mods.sodium, "the mod is still registered");
+  }),
+);
