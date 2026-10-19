@@ -206,7 +206,7 @@ test_run_backup_skips_quietly_when_locked() {
   export FLOCK_SHIM_BUSY=1 MC_OPERATION_LOCK_HELD=1
   run_script "$RUN_BACKUP"
   assert_rc 0 "$RC" "cron run exits 0 when another backup is active"
-  assert_contains "$OUT" "Another backup is running" "logs the skip"
+  assert_contains "$OUT" "This backup was SKIPPED" "logs the skip"
 }
 
 test_backup_yields_to_a_running_operation() {

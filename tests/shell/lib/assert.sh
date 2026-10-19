@@ -45,12 +45,17 @@ assert_not_logged() {
 # last statement (an exit, or an errexit inherited from a sourced script, ended
 # it with assertions still to run), or when it made no assertion at all.
 run_tests() {
-  local fn out rc ok bad skipped
+  local fn out rc ok bad skipped had_errexit
   out="${TMPDIR:-/tmp}/.shelltest.$$"
   for fn in $(declare -F | awk '{print $3}' | grep '^test_'); do
     echo "$fn"
-    rc=0
-    ( "$fn"; echo "  end  - $fn" ) > "$out" 2>&1 || rc=$?
+    # Not inside a || or if: bash ignores errexit there, which would hide a test
+    # that a failing command ends early.
+    had_errexit=false; [[ $- == *e* ]] && had_errexit=true
+    set +e
+    ( "$fn"; echo "  end  - $fn" ) > "$out" 2>&1
+    rc=$?
+    $had_errexit && set -e
     grep -v '^  end  - ' "$out"
     ok=$(grep -c '^  ok   - ' "$out" || true)
     bad=$(grep -c '^  FAIL - ' "$out" || true)

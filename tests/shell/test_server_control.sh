@@ -251,7 +251,7 @@ test_disable_auto_save_does_not_fall_back_to_screen() {
   export NODE_SHIM_RCON_RC=1
   in_scripts disable_auto_save > /dev/null 2>&1
   assert_nonzero "$?" "save-off failed"
-  assert_not_logged "save-off" "no console fallback for save-off"
+  assert_not_logged "-X stuff" "no console fallback for save-off"
 }
 
 test_enable_auto_save_still_falls_back_to_screen() {
@@ -260,7 +260,7 @@ test_enable_auto_save_still_falls_back_to_screen() {
   server_running
   export NODE_SHIM_RCON_RC=1
   in_scripts enable_auto_save > /dev/null 2>&1
-  assert_logged "save-on" "save-on is retried through the console"
+  assert_logged "-X stuff" "save-on is retried through the console"
 }
 
 # ── player counts ────────────────────────────────────────────────────────────
