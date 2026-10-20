@@ -92,9 +92,10 @@ sm_instance_start_script_apply() {
 # create_service.sh writes StartLimitIntervalSec/Burst/Action, which bound a
 # crash loop: five failed starts in two minutes and systemd stops retrying. A
 # unit written before that has none, so a broken server restarts forever. Only
-# those three lines are added, after RestartSec; nothing else in a unit the
-# operator may have edited is touched, and a unit that already sets any
-# StartLimit* is left alone.
+# those three lines go in [Unit], where systemd reads them, and any StartLimit*
+# found in [Service] (ignored there) is moved; nothing else in a unit the
+# operator may have edited is touched, and a unit that already has them in
+# [Unit] is left alone.
 
 _sm_unit_file() { echo "$(_sm_unit_dir)/${SM_INSTANCE_NAME}.service"; }
 

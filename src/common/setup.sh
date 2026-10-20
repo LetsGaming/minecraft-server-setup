@@ -157,14 +157,8 @@ run_optional_setup() {
     warn "EULA not accepted. Please do so before launching the server."
   fi
 
-  local api_enabled=false
-  if [ "$SETUP_API_SERVER" = true ]; then
-    api_enabled=true
-  else
-    # Still set up if enabled in variables.json and flag wasn't explicitly suppressed
-    api_enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.ENABLED || false)" 2>/dev/null)
-  fi
-  if [ "$api_enabled" = "true" ]; then
+  # --y skips the prompt, so ENABLED in variables.json is re-checked here.
+  if [ "$SETUP_API_SERVER" = true ] || api_server_enabled_in_config; then
     log "Setting up minecraft-bot API wrapper service..."
     setup_api_wrapper
   else
@@ -438,7 +432,7 @@ run_preflight_check() {
 
   # 4. Check required tools
   echo "[CHECK] Required tools..."
-  for tool in screen rsync zstd tar curl; do
+  for tool in screen rsync zstd tar curl jq unzip cron setfacl; do
     if command -v "$tool" &>/dev/null; then
       echo "  ✓ $tool"
     else

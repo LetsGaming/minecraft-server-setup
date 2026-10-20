@@ -27,7 +27,7 @@ newest five are kept (`MIGRATE_KEEP_ARCHIVES=N`; `0` keeps them all).
 | Id | What it does | Takes effect |
 |---|---|---|
 | `instance_start_script` | Replaces `<instance>/start.sh` with `src/vanilla/start.sh` (lifecycle events, crash-loop webhook). The old file is kept as `start.sh.pre-migrate-<time>`. | at the next server start |
-| `unit_start_limits` | Adds `StartLimitIntervalSec=120`, `StartLimitBurst=5` and `StartLimitAction=none` to the instance's systemd unit, after `RestartSec`, then `daemon-reload`. A unit that already sets any `StartLimit*` is left alone. The old unit is kept in `common/migration-backups/`. | at the next crash loop |
+| `unit_start_limits` | Puts `StartLimitIntervalSec=120`, `StartLimitBurst=5` and `StartLimitAction=none` in the `[Unit]` section of the instance's systemd unit (systemd ignores them in `[Service]`), then `daemon-reload`. `StartLimit*` lines that sit in `[Service]` move to `[Unit]` with their values; a unit that already has them in `[Unit]` is left alone. A unit without `[Service]` and `RestartSec=` is skipped. The old unit is kept in `common/migration-backups/`. | at the next crash loop |
 
 Each migration looks at the real files to decide whether it still applies, so it is safe to
 run again and needs no record to be right. Results are also appended to
@@ -43,6 +43,15 @@ migrate.sh <scripts-dir> --list-server-migrations   # pending or current, last r
 migrate.sh <scripts-dir> --dry-run                  # the whole migration, nothing written
 migrate.sh <scripts-dir> --no-server-migrations     # scripts and services only
 ```
+
+Other options: `--y` (no confirmation prompts), `--restart` (also restart the server when only its
+scripts change, so a new `start.sh` is used at once), `--no-stop` (never stop the server, not even
+for the layout move below) and `--no-service-restart` (print the API wrapper restart command
+instead of running it). `migrate.sh --help` has the full list.
+
+An install from before the `instances/` layout is moved automatically: `<root>/<instance>/` becomes
+`<root>/instances/<instance>/` and `<root>/api-server/` becomes `<root>/services/api-server/`
+(`SERVER_PATH` and the unit files are updated). The server is stopped for the move.
 
 The world, mods, `server.jar` and `server.properties` are never touched.
 

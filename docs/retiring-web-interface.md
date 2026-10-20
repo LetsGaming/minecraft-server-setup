@@ -69,9 +69,9 @@ non-empty `BLOCKED_COMMANDS`, move those entries to the bot's
 secret store. See [secrets-management.md](secrets-management.md).
 
 **sudoers** — nothing to change. The panel used the same grants the API wrapper
-does, and those are still needed. See [sudoers-setup.md](sudoers-setup.md), but
-do check the two script-path patterns there: `rollback.sh` sits at the top level
-of `scripts/`, and a sudo rule matching only `scripts/*/*` misses it.
+does, and those are still needed. See [sudoers-setup.md](sudoers-setup.md); its
+rules name every script, including `rollback.sh`, which sits directly in
+`scripts/<instance>/` rather than in a subfolder.
 
 **Firewall** — if you opened port 3001, close it.
 

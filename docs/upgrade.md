@@ -24,6 +24,11 @@ it works the same from SSH.
 8. **If it still fails:** the backup from step 4 (not "the newest one") is restored,
    the version record is put back, and the old version is started.
 
+Options: `--countdown=<seconds>` (default 30; 0 skips the warning), `--start-timeout=<seconds>`
+(how long to wait for `Done`; default 300). With `--prune-plan=<id>` the chunk prune runs
+between steps 5 and 6, and `--prune-only` runs the job without a version change; see
+[chunk-pruning.md](chunk-pruning.md).
+
 Mods with no build for the target are listed in the result as "kept on an old
 build" when the first start worked. A mod that loads can still misbehave in
 game; the result says so.
@@ -54,8 +59,10 @@ a build is simply kept.
 ## Locking
 
 The whole job holds the per-instance **operation lock** (`acquire_operation_lock`
-in `common/utils.sh`). `restore.sh`, `rollback.sh` and `backup.sh` take the same
-lock, so none of them can run while an upgrade does. Scripts the job starts itself
+in `common/utils.sh`). `restore.sh`, `rollback.sh`, `backup.sh`, backup cleanup, `shutdown.sh`,
+`restart.sh`, `smart_restart.sh`, `maintenance.sh`, `prune-chunks.js` and the mod scripts take the
+same lock, so none of them can run while an upgrade does (a stop or restart asked for in that
+window exits `75`). Scripts the job starts itself
 pass because it exports `MC_OPERATION_LOCK_HELD=1`. A refused run exits `75`.
 
 ## Lifecycle events

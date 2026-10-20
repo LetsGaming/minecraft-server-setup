@@ -27,6 +27,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- Setup now installs `jq`, so webhook notifications work without a manual install, and `--check` also verifies `jq`, `unzip`, `cron` and `setfacl`.
 - **`manage.sh doctor [instance]`** checks an installed instance without changing anything: the unit is enabled and running with crash-loop limits, the backup (and restart) cron jobs exist, backup usage and free disk space are within bounds, the wrapper's sudoers file parses, and the wrapper answers and accepts the configured API key. `--test-webhook` also sends one test notification and reports whether the endpoint accepted it. Run it as an admin with sudo.
 - **The `storage_warning` and `server_stop` webhook events now fire.** `storage_warning` is sent when backups are still over `MAX_STORAGE_GB` after cleanup has evicted everything it may; `server_stop` when `shutdown.sh` (and so `manage.sh stop` or the wrapper's stop action) has stopped the server. The README lists every event and when it is sent.
 - Setup warns about names in `NOTIFICATIONS.WEBHOOK_EVENTS` that no script sends.
@@ -45,6 +46,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- With `API_SERVER.ENABLED` set to true, setup deploys the API wrapper without asking; it still asks when it is false, and `--api-server` still works.
+- The documented Bash minimum is now 4.3 (the argument parser already needed it).
 - `migrate.sh` is split into modules under `migrate-lib/` (the server-side migrations moved there from `src/migrations/`). It still lives in the repo root and behaves the same: same options, output, files and recovery. `docs/migrations.md` describes the layout.
 
 - **The API wrapper is installed from its release, not a submodule.** `api-server-release.json` pins a wrapper version and its sha256; `--api-server` downloads that built release from GitHub, checks it and runs `npm ci --omit=dev` (`src/setup/management/install_api_server.js`). A host without the wrapper downloads nothing, and cloning no longer needs `--recurse-submodules`. `migrate.sh` replaces an installed wrapper that is not the pinned release (including a copy from the submodule days), keeping `api-server-config.json` and `logs/`; a failed download leaves the running wrapper untouched. The wrapper's `dist/` is now always present: the old copy step never built it. A leftover `src/scripts/api-server/` in a checkout is no longer used and can be deleted. See `docs/wrapper-release.md`.

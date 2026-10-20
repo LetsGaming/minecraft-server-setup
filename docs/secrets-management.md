@@ -4,7 +4,7 @@ Credentials (RCON password, API key, webhook URL) are read from `variables.json`
 
 ## Environment variables
 
-### minecraft-api-server
+### mc-api-server
 
 | Variable | Overrides |
 |---|---|

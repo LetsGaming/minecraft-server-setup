@@ -45,6 +45,7 @@ install_if_missing unzip unzip
 install_if_missing node nodejs
 install_if_missing npm npm
 install_if_missing cron cron
+install_if_missing jq jq
 install_if_missing rsync rsync
 install_if_missing zstd zstd
 # setfacl: the wrapper's service user gets its access through ACLs

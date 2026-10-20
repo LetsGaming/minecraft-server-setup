@@ -22,9 +22,11 @@ Automated Minecraft server setup and management with backup rotation, mod update
 ## Prerequisites
 
 - **OS:** Linux with systemd and cron (Ubuntu/Debian recommended)
-- **Bash:** 4.0+
+- **Bash:** 4.3+
 - **Node.js:** 18+
-- **Tools:** `screen`, `rsync`, `zstd`, `curl` (installed automatically via `download_packages.sh`)
+- **Tools:** `curl`, `screen`, `unzip`, `node`, `npm`, `cron`, `rsync`, `zstd`, `jq` and `acl` (`setfacl`) are installed automatically via `download_packages.sh`, which uses `apt`
+- **Preflight:** `main.sh --check` verifies `screen`, `rsync`, `zstd`, `tar`, `curl`, `jq`, `unzip`, `cron` and `setfacl` are on the PATH, plus `variables.json`, Node.js, `node_modules`, disk space and the optional CurseForge, RCON, webhook and API settings. `jq` builds the webhook payloads; without it notifications are skipped with a message
+- **Install location:** setup writes to `$HOME/<TARGET_DIR_NAME>/`: `instances/<instance>/` (the server), `scripts/<instance>/` (the runtime scripts), `services/api-server/` (the optional wrapper) and, unless `BACKUPS.BACKUPS_PATH` is set, `backups/<instance>/`
 
 ## Installation
 
@@ -38,7 +40,7 @@ The API wrapper is not in this repository: setup downloads it only when you enab
 
 ## Configuration
 
-Copy [`variables.example.json`](./variables.example.json) to `variables.json` and edit it — all settings are in one file (the first setup run creates the copy for you if it is missing). `variables.json` is git-ignored because it holds your RCON password, API key and webhook URL; edit only your copy:
+Copy [`variables.example.json`](./variables.example.json) to `variables.json` and edit it. All settings are in one file (if it is missing, the first setup or `--check` run creates the copy and stops so you can edit it). `variables.json` is git-ignored because it holds your RCON password, API key and webhook URL; edit only your copy:
 
 ```jsonc
 {
@@ -61,13 +63,14 @@ Copy [`variables.example.json`](./variables.example.json) to `variables.json` an
     "ENABLED": false,
     "INTERVAL_HOURS": 12,
     "SKIP_IF_EMPTY": true,            // Skip warning if no players online
-    "WARN_SECONDS": 30
+    "WARN_SECONDS": 30                // At least 5. INTERVAL_HOURS must divide 24 (1, 2, 3, 4, 6, 8, 12, 24) or be a multiple of 24
   },
 
   "API_SERVER": {
     "ENABLED": false,                 // true = set up the minecraft-bot API wrapper
     "PORT": 3000,                     // Port the wrapper listens on
     "API_KEY": ""                     // Shared secret, at least 32 characters (openssl rand -hex 32). Must match apiKey in the bot's config.json
+    "SERVICE_USER": ""                // Optional: run the wrapper as its own unprivileged user (docs/service-user.md)
   },
 
   "BACKUPS": { ... },
@@ -106,6 +109,20 @@ npm run check
 npm run setup
 ```
 
+Options (both `main.sh` and `main-vanilla.sh`; `--help` lists them):
+
+| Option | Effect |
+|---|---|
+| `--check` | Validate config, tools and disk space, then exit |
+| `--dry-run` | Only print what would be done |
+| `--verbose` | Print additional logging info |
+| `--no-start` | Do not start the server |
+| `--agree-eula` | Accept the EULA |
+| `--no-service` | Skip creating the systemd service |
+| `--no-backup` | Skip creating the backup job |
+| `--api-server` | Set up the minecraft-bot API wrapper service |
+| `--y` | Skip the prompts and take the defaults. This **accepts the EULA** |
+
 ### Runtime Scripts
 
 After setup, management scripts are in `<target>/scripts/<instance>/`:
@@ -125,7 +142,10 @@ After setup, management scripts are in `<target>/scripts/<instance>/`:
 | `update/check-updates.js` | Check for mod updates |
 | `misc/status.sh` | Show server status and players |
 | `misc/doctor.sh` | Read-only health check of an installed instance (see [Health check](#health-check)) |
-| `api-server/index.js` | minecraft-bot HTTP API wrapper (managed by systemd) |
+| `update/upgrade.sh` | Move to a new Minecraft version as one supervised job (see [docs/upgrade.md](docs/upgrade.md)) |
+| `world/prune-chunks.js` | Optional deletion of unused chunks (see [docs/chunk-pruning.md](docs/chunk-pruning.md)) |
+
+The API wrapper is not among these scripts: it runs from `<target>/services/api-server/` (see [minecraft-bot API Wrapper](#minecraft-bot-api-wrapper)).
 
 ### Multi-Instance Management
 
@@ -134,7 +154,10 @@ bash manage.sh list                 # List all instances
 bash manage.sh status               # Status of all instances
 bash manage.sh restart survival     # Smart-restart a specific instance
 bash manage.sh backup creative      # Backup a specific instance
+bash manage.sh update survival      # Check mods of a specific instance for updates
 ```
+
+`manage.sh` also has `start <instance>` and `stop <instance>` (a graceful shutdown); `manage.sh help` lists everything.
 
 ### Health check
 
@@ -188,6 +211,11 @@ If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. A name in the l
 | What backup, restore and rollback do and refuse to do | [docs/backup-restore.md](docs/backup-restore.md) |
 | API keys, RCON passwords, `.env` | [docs/secrets-management.md](docs/secrets-management.md) |
 | sudo rules the scripts need | [docs/sudoers-setup.md](docs/sudoers-setup.md) |
+| Running the wrapper as its own unprivileged user | [docs/service-user.md](docs/service-user.md) |
+| Bringing an installed server up to the current suite (`migrate.sh`) | [docs/migrations.md](docs/migrations.md) |
+| Moving to a new Minecraft version | [docs/upgrade.md](docs/upgrade.md) |
+| Deleting unused chunks before an upgrade | [docs/chunk-pruning.md](docs/chunk-pruning.md), [benchmarks](docs/prune-benchmarks.md) |
+| Terms used across the docs | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
 | Retiring the bundled web interface | [docs/retiring-web-interface.md](docs/retiring-web-interface.md) |
 | Which API wrapper release is installed, and bumping it | [docs/wrapper-release.md](docs/wrapper-release.md) |
 
@@ -252,7 +280,7 @@ Enable it in `variables.json` before running setup:
 }
 ```
 
-Then run setup normally (it will prompt) or pass the flag explicitly:
+Then run setup normally: with `API_SERVER.ENABLED` true the wrapper is set up and setup does not ask. With `ENABLED` false, setup asks whether to set it up, or you can pass the flag to skip the question:
 
 ```bash
 sudo -u <user> bash main.sh --api-server

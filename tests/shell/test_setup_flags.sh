@@ -1,0 +1,75 @@
+#!/bin/bash
+# Setup flag prompting (API wrapper), the package installer's tool list and the
+# tools --check verifies. Nothing installs anything: sudo and npm are shims and
+# the prompt is a stub.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$HERE/../.." && pwd)"
+source "$HERE/lib/assert.sh"
+
+setup() {
+  T="$(mktemp -d)"
+  trap 'rm -rf "$T"' EXIT
+  export SCRIPT_DIR="$T"
+  command -v cygpath > /dev/null 2>&1 && SCRIPT_DIR="$(cygpath -m "$T")"
+  mkdir -p "$T/bin"
+}
+
+write_variables() { # enabled (true|false)
+  printf '{ "API_SERVER": { "ENABLED": %s } }\n' "$1" > "$T/variables.json"
+}
+
+# Prints "flag=<value> asked=<n>" after prompt_for_flags with every other
+# prompt already answered.
+prompt_result() { # initial SETUP_API_SERVER
+  (
+    ask_yes_no() { echo "$1" >> "$T/asked"; return 1; }
+    source "$REPO/src/common/flags.sh"
+    ACCEPT_ALL=false NO_START=true EULA=true NO_SERVICE=true NO_BACKUP=true SETUP_API_SERVER="$1"
+    prompt_for_flags
+    echo "flag=$SETUP_API_SERVER asked=$(grep -c . "$T/asked" 2> /dev/null || echo 0)"
+  )
+}
+
+test_enabled_in_config_skips_the_wrapper_prompt() {
+  setup; write_variables true
+  assert_eq "flag=true asked=0" "$(prompt_result false)" "wrapper is set up and nothing is asked"
+}
+
+test_disabled_in_config_still_asks() {
+  setup; write_variables false
+  assert_eq "flag=false asked=1" "$(prompt_result false)" "the answer decides"
+}
+
+test_the_flag_still_works_when_disabled_in_config() {
+  setup; write_variables false
+  assert_eq "flag=true asked=0" "$(prompt_result true)" "--api-server is kept and not asked again"
+}
+
+test_install_script_installs_jq_with_the_other_packages() {
+  setup
+  export SHIM_LOG="$T/shim.log"; : > "$SHIM_LOG"
+  printf '#!/bin/bash\necho "sudo $*" >> "$SHIM_LOG"\nexit 0\n' > "$T/bin/sudo"
+  printf '#!/bin/bash\nexit 0\n' > "$T/bin/npm"
+  chmod +x "$T/bin/sudo" "$T/bin/npm"
+  # PATH holds only the shims, so every tool counts as missing.
+  PATH="$T/bin" "$BASH" "$REPO/src/setup/download/download_packages.sh" > /dev/null 2>&1
+  assert_logged "sudo apt install -y jq" "jq is installed"
+  assert_logged "sudo apt install -y unzip" "unzip is installed"
+  assert_logged "sudo apt install -y acl" "acl is installed"
+}
+
+test_preflight_reports_each_required_tool() {
+  setup; write_variables false
+  local out
+  out="$( ( source "$REPO/src/common/setup.sh"; run_preflight_check ) 2>&1 < /dev/null || true )"
+  local tool
+  for tool in screen rsync zstd tar curl jq unzip cron setfacl; do
+    if [[ "$out" == *"✓ $tool"* || "$out" == *"✗ $tool not found"* ]]; then
+      _ok "--check looks at $tool"
+    else
+      _bad "--check looks at $tool" "no result line for $tool"
+    fi
+  done
+}
+
+run_tests

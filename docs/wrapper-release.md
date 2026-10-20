@@ -7,8 +7,8 @@ not part of this repository. `api-server-release.json` pins one of its releases:
 ```json
 {
   "repository": "LetsGaming/minecraft-server-api",
-  "version": "4.1.0",
-  "sha256": "<sha256 of mc-api-server-4.1.0.tar.gz>"
+  "version": "x.y.z",
+  "sha256": "<sha256 of mc-api-server-x.y.z.tar.gz>"
 }
 ```
 
@@ -31,7 +31,7 @@ keeps `api-server-config.json`, `.env`, `variables.txt` and `logs/`, and writes
 # What is installed, compared with the pin; changes nothing
 node src/setup/management/install_api_server.js --dir <target>/services/api-server --check
 # Offline host: install a tarball fetched elsewhere (still checked against the pin)
-node src/setup/management/install_api_server.js --dir <target>/services/api-server --tarball mc-api-server-4.1.0.tar.gz
+node src/setup/management/install_api_server.js --dir <target>/services/api-server --tarball mc-api-server-x.y.z.tar.gz
 ```
 
 `MC_API_SERVER_RELEASE_BASE` replaces `https://github.com/<repository>/releases/download`
@@ -70,7 +70,7 @@ wrapper's `release` workflow, when its `SETUP_REPO_TOKEN` secret is set). By
 hand:
 
 ```bash
-v=4.1.0
+v=x.y.z
 curl -fsSLO "https://github.com/LetsGaming/minecraft-server-api/releases/download/v$v/mc-api-server-$v.tar.gz"
 sha256sum "mc-api-server-$v.tar.gz"   # compare with the release's .sha256 asset
 ```

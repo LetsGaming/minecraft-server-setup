@@ -11,6 +11,12 @@ set_flags_from_defaults() {
   fi
 }
 
+api_server_enabled_in_config() {
+  local enabled
+  enabled=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.ENABLED || false)" 2>/dev/null)
+  [ "$enabled" = "true" ]
+}
+
 prompt_for_flags() {
   if [ "$ACCEPT_ALL" = false ]; then
     if [ "$NO_START" = false ]; then
@@ -26,7 +32,11 @@ prompt_for_flags() {
       ask_yes_no "Do you want a backup job?" && NO_BACKUP=false || NO_BACKUP=true
     fi
     if [ "$SETUP_API_SERVER" = false ]; then
-      ask_yes_no "Do you want to set up the minecraft-bot API wrapper?" && SETUP_API_SERVER=true || SETUP_API_SERVER=false
+      if api_server_enabled_in_config; then
+        SETUP_API_SERVER=true
+      else
+        ask_yes_no "Do you want to set up the minecraft-bot API wrapper?" && SETUP_API_SERVER=true || SETUP_API_SERVER=false
+      fi
     fi
   fi
 }

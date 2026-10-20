@@ -1,6 +1,6 @@
 # Reverse Proxy Setup (HTTPS)
 
-`minecraft-api-server` should be served behind a TLS-terminating reverse proxy whenever the bot reaches it over a network you do not trust. It runs scripts and reads files on this host and is authenticated by a single API key, so plaintext on an untrusted network hands that key to anyone on the path.
+`mc-api-server` should be served behind a TLS-terminating reverse proxy whenever the bot reaches it over a network you do not trust. It runs scripts and reads files on this host and is authenticated by a single API key, so plaintext on an untrusted network hands that key to anyone on the path.
 
 The examples use port `3030`, the `API_SERVER.PORT` in `variables.example.json`; use yours. With a proxy in front, make the wrapper listen on loopback only, so the plain-HTTP port is not reachable from outside: add `Environment="MC_BIND_HOST=127.0.0.1"` and `Environment="MC_TRUST_PROXY=true"` to its unit (`sudo systemctl edit <install>-api-server`), or close the port in your firewall.
 
@@ -14,7 +14,7 @@ The examples use port `3030`, the `API_SERVER.PORT` in `variables.example.json`;
 # Redirect HTTP → HTTPS
 server {
     listen 80;
-    server_name mc.example.com;
+    server_name mc-api.example.com;
     return 301 https://$host$request_uri;
 }
 
@@ -30,6 +30,7 @@ server {
         proxy_pass         http://127.0.0.1:3030;
         proxy_set_header   Host $host;
         proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $remote_addr;  # set, not appended: the wrapper trusts this header
         proxy_read_timeout 3600s;  # required for SSE /logs/stream
         proxy_buffering    off;    # required for SSE
     }
