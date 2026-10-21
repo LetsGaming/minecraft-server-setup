@@ -29,7 +29,7 @@ _summary_onoff() { # value-that-means-on
   if [ "$1" = true ]; then echo "on"; else echo "off"; fi
 }
 
-summary_render() {
+summary_print() {
   local service backups
   service=on
   [ "${NO_SERVICE:-false}" != true ] || service=off
@@ -57,6 +57,10 @@ summary_render() {
     corrections_render
   fi
   echo
+}
+
+summary_render() {
+  summary_print
 
   if ! ui_is_interactive && [ "${EULA:-false}" = true ]; then
     return 0
@@ -72,7 +76,13 @@ eula_confirm() {
     echo "The EULA was accepted with --agree-eula."
     return 0
   fi
-  ask_yes_no "Do you accept the Minecraft EULA?"
+  local answer=""
+  printf "Do you accept the Minecraft EULA? [y/N]: "
+  read -r answer || { echo; return 1; }
+  case "${answer,,}" in
+    y | yes) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 final_screen() {

@@ -70,8 +70,10 @@ if [ "$ROUTE" != power ]; then
   run_wizard "$ROUTE"
 fi
 
-set_flags_from_defaults "$@"
-prompt_for_flags
+if [ "$ROUTE" = power ]; then
+  set_flags_from_defaults "$@"
+  prompt_for_flags
+fi
 
 # Arm the rollback trap now that we are about to make real changes.
 _SETUP_SUCCESS=false

@@ -91,11 +91,25 @@ wizard_apply_flags() {
 
 # Summary, EULA, then write variables.json and set the install flags.
 _wizard_confirm_and_write() {
+  local wrote_curseforge=false
   summary_render || _wizard_nothing_changed
   eula_confirm || _wizard_nothing_changed
+  if [ "${DRY_RUN:-false}" = true ]; then
+    echo "Dry run: nothing was written or installed."
+    summary_print
+    exit 0
+  fi
   _wizard_guard_config
-  config_write "$SCRIPT_DIR/variables.json" || exit 1
-  config_write_curseforge "$SCRIPT_DIR/src/setup/download/json/curseforge_variables.json" || exit 1
+  if [ -n "${ANSWERS[curseforge_pack]-}" ] || [ -n "${ANSWERS[curseforge_key]-}" ]; then
+    config_write_curseforge "$SCRIPT_DIR/src/setup/download/json/curseforge_variables.json" || exit 1
+    wrote_curseforge=true
+  fi
+  if ! config_write "$SCRIPT_DIR/variables.json"; then
+    if [ "$wrote_curseforge" = true ]; then
+      rm -f "$SCRIPT_DIR/src/setup/download/json/curseforge_variables.json"
+    fi
+    exit 1
+  fi
   wizard_apply_flags
 }
 
@@ -136,10 +150,19 @@ run_default_route() {
 
 # Prints the megabytes for a size such as 4G or 2048M, or nothing when it is not one.
 _wizard_size_to_mb() { # size
+  [[ "$1" =~ ^[0-9]{1,6}[GgMm]$ ]] || return 0
   case "$1" in
     *[Gg]) echo $(( 10#${1%?} * 1024 )) ;;
-    *[Mm]) echo $(( 10#${1%?} )) ;;
+    *) echo $(( 10#${1%?} )) ;;
   esac
+}
+
+# A value that is not a size is passed on as typed so choose_heap records the correction.
+_wizard_choose_heap_for() { # size
+  local mb
+  mb="$(_wizard_size_to_mb "$1")"
+  [ -n "$mb" ] || mb="$1"
+  choose_heap "$mb"
 }
 
 run_guided_route() {
@@ -165,7 +188,7 @@ run_guided_route() {
 
   _wizard_target_dir_name
   choose_instance_name "${ANSWERS[INSTANCE_NAME]:-server}" "$WIZARD_TARGET_DIR_NAME"
-  choose_heap "$(_wizard_size_to_mb "${ANSWERS[memory]:-}")"
+  _wizard_choose_heap_for "${ANSWERS[memory]:-}"
   choose_server_port
   ANSWERS[INSTANCE_NAME]="$CHOSEN_INSTANCE_NAME"
   ANSWERS[memory]="$(heap_to_java_size "$CHOSEN_HEAP_MB")"

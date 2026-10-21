@@ -11,7 +11,7 @@ setup() {
   mkdir -p "$T/repo/src/setup/download/json" "$T/bin" "$T/home" "$T/state"
   cp "$REPO/variables.example.json" "$T/repo/"
   cp "$HERE"/shims/{ss,ip,whiptail} "$T/bin/"
-  printf '#!/bin/bash\nif [ -n "${NODE_SHIM_RC:-}" ]; then exit "$NODE_SHIM_RC"; fi\nprintf "%%s\\n" "$NODE_SHIM_OUT"\n' > "$T/bin/node"
+  printf '#!/bin/bash\n[ "$1" = -v ] && { echo v20.1.0; exit 0; }\nif [ -n "${NODE_SHIM_RC:-}" ]; then exit "$NODE_SHIM_RC"; fi\nprintf "%%s\\n" "$NODE_SHIM_OUT"\n' > "$T/bin/node"
   chmod +x "$T/bin"/*
   printf 'MemAvailable:    8388608 kB\n' > "$T/meminfo"
   : > "$T/replies"
@@ -238,6 +238,168 @@ test_failure_screen_keeps_variables_json() {
   assert_exists "$T/repo/variables.json" "config kept"
   out="$(source "$REPO/src/wizard/summary.sh"; ROUTE=power; failure_screen)"
   assert_eq "" "$out" "silent for the power route"
+}
+
+eula_rc() { # stdin-text (the word EOF means no input at all)
+  local rc=0
+  if [ "$1" = EOF ]; then
+    ( source "$REPO/src/common/ui.sh"; source "$REPO/src/wizard/summary.sh"; EULA=false; eula_confirm ) < /dev/null > /dev/null 2>&1 || rc=$?
+  else
+    ( source "$REPO/src/common/ui.sh"; source "$REPO/src/wizard/summary.sh"; EULA=false; eula_confirm ) <<< "$1" > /dev/null 2>&1 || rc=$?
+  fi
+  echo "$rc"
+}
+
+test_eula_accepts_only_an_explicit_yes() {
+  assert_eq 1 "$(eula_rc "")" "empty answer is not accepted"
+  assert_eq 1 "$(eula_rc EOF)" "end of input is not accepted"
+  assert_eq 1 "$(eula_rc n)" "no is not accepted"
+  assert_eq 1 "$(eula_rc maybe)" "other text is not accepted"
+  assert_eq 0 "$(eula_rc y)" "y is accepted"
+  assert_eq 0 "$(eula_rc YES)" "YES is accepted"
+}
+
+test_wizard_apply_flags_keeps_user_flags_and_sets_vanilla() {
+  local out
+  out="$(
+    source "$REPO/src/wizard/route.sh"
+    declare -A ANSWERS=([server_kind]=fabric)
+    NO_START=true NO_SERVICE=false NO_BACKUP=false SETUP_API_SERVER=true EULA=false ACCEPT_ALL=false VANILLA=false
+    wizard_apply_flags
+    echo "$NO_START $NO_SERVICE $NO_BACKUP $SETUP_API_SERVER $EULA $ACCEPT_ALL $VANILLA"
+    ANSWERS=([server_kind]=modpack [backups]=false)
+    wizard_apply_flags
+    echo "$VANILLA $NO_BACKUP"
+    ANSWERS=([server_kind]=vanilla)
+    wizard_apply_flags
+    echo "$VANILLA"
+  )"
+  assert_eq $'true false false true true true true\nfalse true\ntrue' "$out" "flags kept, vanilla follows the server type"
+}
+
+test_invalid_memory_size_falls_back_to_safe_heap_with_correction() {
+  setup
+  local out
+  out="$(
+    source "$REPO/src/common/ui.sh"; source "$REPO/src/common/corrections.sh"; source "$REPO/src/common/detect.sh"
+    source "$REPO/src/wizard/safety.sh"; source "$REPO/src/wizard/route.sh"
+    _wizard_choose_heap_for 1.5G; echo "$CHOSEN_HEAP_MB $(corrections_count)"
+    corrections_reset
+    _wizard_choose_heap_for abc; echo "$CHOSEN_HEAP_MB $(corrections_count)"
+    corrections_reset
+    _wizard_choose_heap_for 2G; echo "$CHOSEN_HEAP_MB $(corrections_count)"
+  )"
+  assert_eq $'6144 1\n6144 1\n2048 0' "$out" "bad sizes are corrected, good sizes kept"
+}
+
+test_failing_config_write_leaves_no_half_config() {
+  setup
+  local rc=0
+  (
+    source "$REPO/src/common/ui.sh"; source "$REPO/src/common/corrections.sh"; source "$REPO/src/common/detect.sh"
+    source "$REPO/src/wizard/config_writer.sh"; source "$REPO/src/wizard/summary.sh"; source "$REPO/src/wizard/route.sh"
+    config_write() { return 1; }
+    declare -A ANSWERS=([server_kind]=modpack [curseforge_pack]=123 [curseforge_key]=k)
+    EULA=true
+    MC_SETUP_FORCE_TTY='' _wizard_confirm_and_write
+  ) < /dev/null > /dev/null 2>&1 || rc=$?
+  assert_eq 1 "$rc" "fails"
+  assert_missing "$T/repo/variables.json" "no variables.json"
+  assert_missing "$T/repo/src/setup/download/json/curseforge_variables.json" "no curseforge file"
+}
+
+main_setup() {
+  setup
+  cp "$REPO/main.sh" "$T/repo/"
+  cp -r "$REPO/src/." "$T/repo/src/"
+  local tool
+  printf '#!/bin/bash\n[ "$1" = -v ] && exit 0\nexec "$@"\n' > "$T/bin/sudo"
+  printf '#!/bin/bash\n[ "$1" = update ] && exit 0\nexit 100\n' > "$T/bin/apt"
+  for tool in curl screen unzip cron rsync zstd setfacl npm systemctl service; do printf '#!/bin/bash\nexit 0\n' > "$T/bin/$tool"; done
+  printf '#!/bin/bash\nprintf "nodejs:\n  Candidate: 20.1.0\n"\n' > "$T/bin/apt-cache"
+  chmod +x "$T/bin"/*
+  cat >> "$T/repo/src/common/setup.sh" <<'EOF'
+run_server_setup() { echo "PROBE NO_BACKUP=$NO_BACKUP SETUP_API_SERVER=$SETUP_API_SERVER VANILLA=$VANILLA EULA=$EULA"; [ -z "${PROBE_FAIL:-}" ] || return 3; }
+run_optional_setup() { :; }
+run_server_cleanup() { :; }
+maybe_start_server() { :; }
+snapshot_setup_state() { :; }
+EOF
+}
+
+run_main_wiz() { # stdin-text, then main.sh args
+  local input="$1" out rc=0
+  shift
+  out="$(cd "$T/repo" && PATH="$T/bin:$(dirname "$(command -v jq)"):/usr/bin:/bin" EULA='' bash main.sh "$@" <<< "$input" 2>&1)" || rc=$?
+  echo "$out"
+  echo "rc=$rc"
+}
+
+test_main_default_without_terminal_needs_agree_eula() {
+  main_setup
+  export MC_SETUP_FORCE_TTY=
+  local out
+  out="$(run_main_wiz "" --default)"
+  assert_contains "$out" "rc=1" "exits 1"
+  assert_contains "$out" "--agree-eula" "names the flag"
+  assert_missing "$T/repo/variables.json" "nothing written"
+  out="$(run_main_wiz "" --default --agree-eula)"
+  assert_contains "$out" "rc=0" "proceeds with the flag"
+  assert_contains "$out" "PROBE" "install pipeline reached without prompts"
+  assert_exists "$T/repo/variables.json" "config written"
+  assert_contains "$out" "Your server is set up." "final screen shown"
+}
+
+test_main_guided_answers_survive_into_the_pipeline() {
+  main_setup
+  cat > "$T/replies" <<'EOF'
+0|my-world
+0|fabric
+0|latest
+0|4G
+0|10
+0|A Minecraft Server
+0|normal
+1|
+0|
+1|
+1|
+0|
+1|
+EOF
+  export WHIPTAIL_SHIM_REPLIES="$T/replies"
+  local out
+  out="$(run_main_wiz $'y\ny\n' --guided)"
+  assert_contains "$out" "PROBE NO_BACKUP=true SETUP_API_SERVER=false VANILLA=true EULA=true" "backups answer reaches the pipeline"
+}
+
+test_main_dry_run_writes_nothing() {
+  main_setup
+  export MC_SETUP_FORCE_TTY=
+  local out
+  out="$(run_main_wiz "" --default --agree-eula --dry-run)"
+  assert_contains "$out" "rc=0" "exits 0"
+  assert_contains "$out" "Dry run: nothing was written or installed." "says so"
+  assert_not_contains "$out" "Your server is set up." "no final screen"
+  assert_not_contains "$out" "PROBE" "pipeline not started"
+  assert_missing "$T/repo/variables.json" "no config"
+  out="$(run_main_wiz "" --default --agree-eula --dry-run)"
+  assert_contains "$out" "Dry run: nothing was written" "second run still uses the wizard"
+}
+
+test_main_failure_message_is_printed_once_and_exit_code_kept() {
+  main_setup
+  export MC_SETUP_FORCE_TTY='' PROBE_FAIL=1
+  local out
+  out="$(run_main_wiz "" --default --agree-eula)"
+  assert_contains "$out" "rc=3" "original exit code kept"
+  assert_eq 1 "$(grep -c "Your answers are saved in variables.json" <<< "$out")" "message printed exactly once"
+  assert_exists "$T/repo/variables.json" "config kept"
+  unset PROBE_FAIL
+  rm -f "$T/repo/variables.json"
+  out="$(run_main_wiz "" --default --agree-eula)"
+  assert_contains "$out" "rc=0" "success exits 0"
+  assert_not_contains "$out" "Your answers are saved" "no failure message on success"
 }
 
 run_tests
