@@ -300,6 +300,59 @@ EOS
   assert_exists "$T/repo/old.json" "other files are kept"
 }
 
+# Runs a script that installs a caller handler (one that returns, so a second run would show), the
+# guard under test and then calls the handler directly; prints the output and rc=<n>.
+chain_run() { # signal marker-file body
+  local out rc=0
+  cat > "$T/chain.sh" <<EOS
+source "$REPO/src/wizard/manifest.sh"
+source "$REPO/src/wizard/config_writer.sh"
+source "$REPO/src/wizard/route.sh"
+trap 'echo caller-ran; trap -p EXIT; rm -f "$2"' $1
+trap 'echo exit-trap' EXIT
+$3
+echo not-reached
+EOS
+  out="$(bash "$T/chain.sh" 2>&1)" || rc=$?
+  printf '%s\nrc=%s\n' "$out" "$rc"
+}
+
+test_writer_handler_runs_the_callers_handler_once_before_exit() {
+  setup
+  local sig out status
+  for sig in TERM INT; do
+    status=143
+    [ "$sig" = INT ] && status=130
+    echo key > "$T/marker"
+    echo secret > "$T/out/.variables.assign.x"
+    echo '{}' > "$T/out/.variables.json.x"
+    out="$(chain_run "$sig" "$T/marker" "_cw_guard_begin; _CW_TMP='$T/out/.variables.json.x'; _CW_ASSIGN='$T/out/.variables.assign.x'; _cw_on_signal $sig")"
+    assert_eq 1 "$(grep -c '^caller-ran$' <<< "$out")" "the caller's handler ran exactly once ($sig)"
+    assert_eq $'caller-ran\ntrap -- \'echo exit-trap\' EXIT\nexit-trap\nrc='"$status" "$out" "handler first, EXIT trap intact and run once, status $status ($sig)"
+    assert_missing "$T/marker" "the caller's cleanup happened ($sig)"
+    assert_eq "" "$(ls -A "$T/out")" "the writer's temp files are gone ($sig)"
+  done
+}
+
+test_route_handler_runs_the_callers_handler_once_before_exit() {
+  setup
+  local sig out status
+  mkdir -p "$T/repo"
+  for sig in TERM INT; do
+    status=143
+    [ "$sig" = INT ] && status=130
+    echo key > "$T/marker"
+    echo '{}' > "$T/repo/cf.json"
+    echo '{}' > "$T/repo/old.json"
+    out="$(chain_run "$sig" "$T/marker" "_WZ_OLD_INT=\"\$(trap -p INT)\"; _WZ_OLD_TERM=\"\$(trap -p TERM)\"; _WZ_CF_FILE='$T/repo/cf.json'; _WZ_CFG_FILE='$T/repo/variables.json'; trap '_wizard_on_write_signal $sig' $sig; _wizard_on_write_signal $sig")"
+    assert_eq 1 "$(grep -c '^caller-ran$' <<< "$out")" "the outer handler ran exactly once ($sig)"
+    assert_eq $'caller-ran\ntrap -- \'echo exit-trap\' EXIT\nexit-trap\nrc='"$status" "$out" "handler first, EXIT trap intact and run once, status $status ($sig)"
+    assert_missing "$T/marker" "the outer cleanup happened ($sig)"
+    assert_missing "$T/repo/cf.json" "the key file of this run is removed ($sig)"
+    assert_exists "$T/repo/old.json" "other files are kept ($sig)"
+  done
+}
+
 test_exit_trap_is_kept_after_a_write() {
   need_jq exit-trap || return 0
   setup

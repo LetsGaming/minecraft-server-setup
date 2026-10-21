@@ -59,12 +59,30 @@ _cw_guard_end() {
   [ -z "$_CW_OLD_TERM" ] || eval "$_CW_OLD_TERM"
 }
 
+_cw_trap_arg() { printf '%s' "$3"; }
+
+# Runs the handler that was installed before ours (given as `trap -p` output) exactly once,
+# synchronously, so its cleanup cannot be skipped by a deferred re-raised signal; with no
+# previous handler the signal is re-raised for the default action.
+_cw_pass_on() { # signal previous_trap_text
+  local cmd="" status=143
+  [ "$1" != INT ] || status=130
+  [ -z "$2" ] || cmd="$(eval "_cw_trap_arg $2")"
+  if [ -n "$cmd" ]; then
+    eval "$cmd"
+  else
+    kill -s "$1" "$BASHPID"
+  fi
+  exit "$status"
+}
+
 _cw_on_signal() { # signal
+  local previous="$_CW_OLD_INT"
+  [ "$1" = INT ] || previous="$_CW_OLD_TERM"
   _cw_cleanup_temps
   [ -z "$_CW_OLD_UMASK" ] || umask "$_CW_OLD_UMASK"
   _cw_guard_end
-  kill -s "$1" "$BASHPID"
-  case "$1" in INT) exit 130 ;; *) exit 143 ;; esac
+  _cw_pass_on "$1" "$previous"
 }
 
 _cw_check_target() { # out_path

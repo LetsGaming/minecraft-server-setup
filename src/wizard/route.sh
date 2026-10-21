@@ -102,10 +102,11 @@ _wizard_write_guard_end() {
 
 # Removes only the files this run created, then lets the caller's handler see the signal.
 _wizard_on_write_signal() { # signal
+  local previous="$_WZ_OLD_INT"
+  [ "$1" = INT ] || previous="$_WZ_OLD_TERM"
   rm -f -- "$_WZ_CF_FILE" "$_WZ_CFG_FILE"
   _wizard_write_guard_end
-  kill -s "$1" "$BASHPID"
-  case "$1" in INT) exit 130 ;; *) exit 143 ;; esac
+  _cw_pass_on "$1" "$previous"
 }
 
 # Summary, EULA, then write variables.json and set the install flags.
