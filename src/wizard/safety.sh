@@ -3,22 +3,25 @@
 # globals and must be called directly (not in $(...)) so their corrections are kept.
 # Expects ui.sh, corrections.sh and detect.sh to be sourced.
 
-readonly HEAP_CAP_MB=8192
-readonly HEAP_FLOOR_MB=1024
-readonly HEAP_RESERVE_MIN_MB=1024
-readonly HEAP_RESERVE_PERCENT=25
-readonly LOW_RAM_WARNING_MB=1536
-readonly PRETOUCH_MIN_HEAP_MB=4096
-readonly DEFAULT_SERVER_PORT=25565
-readonly DEFAULT_RCON_PORT=25575
+HEAP_CAP_MB=8192
+HEAP_FLOOR_MB=1024
+HEAP_RESERVE_MIN_MB=1024
+HEAP_RESERVE_PERCENT=25
+LOW_RAM_WARNING_MB=1536
+PRETOUCH_MIN_HEAP_MB=4096
+DEFAULT_SERVER_PORT=25565
+DEFAULT_RCON_PORT=25575
 
 CHOSEN_HEAP_MB=""
 CHOSEN_SERVER_PORT=""
 CHOSEN_RCON_PORT=""
 CHOSEN_INSTANCE_NAME=""
 
+_is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+
 safe_heap_mb() { # available_mb
-  local available="$1" reserve heap
+  local available=0 reserve heap
+  ! _is_uint "${1:-}" || available=$(( 10#$1 ))
   reserve=$(( available * HEAP_RESERVE_PERCENT / 100 ))
   [ "$reserve" -ge "$HEAP_RESERVE_MIN_MB" ] || reserve="$HEAP_RESERVE_MIN_MB"
   heap=$(( available - reserve ))
@@ -28,15 +31,21 @@ safe_heap_mb() { # available_mb
 }
 
 heap_to_java_size() { # mb
-  if [ $(( $1 % 1024 )) -eq 0 ]; then
-    echo "$(( $1 / 1024 ))G"
+  local mb
+  if ! _is_uint "${1:-}"; then
+    echo "1G"
+    return 0
+  fi
+  mb=$(( 10#$1 ))
+  if [ $(( mb % 1024 )) -eq 0 ]; then
+    echo "$(( mb / 1024 ))G"
   else
-    echo "${1}M"
+    echo "${mb}M"
   fi
 }
 
 heap_pretouch() { # heap_mb
-  if [ "$1" -ge "$PRETOUCH_MIN_HEAP_MB" ]; then
+  if _is_uint "${1:-}" && [ "$(( 10#$1 ))" -ge "$PRETOUCH_MIN_HEAP_MB" ]; then
     echo true
   else
     echo false
@@ -49,14 +58,20 @@ choose_heap() { # requested_mb|""
   safe="$(safe_heap_mb "$available")"
   if [ -z "$requested" ]; then
     CHOSEN_HEAP_MB="$safe"
-  elif [ "$requested" -gt "$safe" ]; then
+  elif ! _is_uint "$requested"; then
     CHOSEN_HEAP_MB="$safe"
-    correction_add adjusted "Memory" "${requested} MB" "${safe} MB" \
-      "leaves room for the operating system"
-  elif [ "$requested" -lt "$HEAP_FLOOR_MB" ]; then
-    CHOSEN_HEAP_MB="$HEAP_FLOOR_MB"
+    correction_add adjusted "Memory" "$requested" "${safe} MB"       "that is not a number of megabytes, so the safe amount is used"
   else
-    CHOSEN_HEAP_MB="$requested"
+    requested=$(( 10#$requested ))
+    if [ "$requested" -gt "$safe" ]; then
+      CHOSEN_HEAP_MB="$safe"
+      correction_add adjusted "Memory" "${requested} MB" "${safe} MB"         "leaves room for the operating system"
+    elif [ "$requested" -lt "$HEAP_FLOOR_MB" ]; then
+      CHOSEN_HEAP_MB="$HEAP_FLOOR_MB"
+      correction_add adjusted "Memory" "${requested} MB" "${HEAP_FLOOR_MB} MB"         "a Minecraft server needs at least 1 GB"
+    else
+      CHOSEN_HEAP_MB="$requested"
+    fi
   fi
   if [ "$available" -lt "$LOW_RAM_WARNING_MB" ]; then
     correction_add warning "Low memory" "-" "${CHOSEN_HEAP_MB} MB" \
@@ -90,6 +105,6 @@ choose_instance_name() { # base target_dir_name
   CHOSEN_INSTANCE_NAME="$(detect_free_instance_name "$1" "$2")"
   if [ "$CHOSEN_INSTANCE_NAME" != "$1" ]; then
     correction_add adjusted "Instance name" "$1" "$CHOSEN_INSTANCE_NAME" \
-      "an instance named $1 already exists"
+      "the name $1 is already in use"
   fi
 }

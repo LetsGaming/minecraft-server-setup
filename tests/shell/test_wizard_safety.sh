@@ -8,9 +8,10 @@ source "$REPO/src/common/corrections.sh"
 source "$REPO/src/common/detect.sh"
 source "$REPO/src/wizard/safety.sh"
 SHIM_BIN="$(mktemp -d)"
+MEM_DIR="$(mktemp -d)"
 cp "$HERE/shims/ss" "$SHIM_BIN/"
 chmod +x "$SHIM_BIN/ss"
-trap 'rm -rf "$SHIM_BIN"' EXIT
+trap 'rm -rf "$SHIM_BIN" "$MEM_DIR"' EXIT
 PATH="$SHIM_BIN:$PATH"
 
 set_available_mb() {
@@ -48,11 +49,50 @@ test_heap_request_within_safe_is_kept() {
   setup_each; set_available_mb 8000
   choose_heap 2048
   assert_eq "2048" "$CHOSEN_HEAP_MB" "as requested"
-  choose_heap 512
-  assert_eq "1024" "$CHOSEN_HEAP_MB" "never below the floor"
+  choose_heap 1024
+  assert_eq "1024" "$CHOSEN_HEAP_MB" "exactly the floor"
   choose_heap ""
   assert_eq "6000" "$CHOSEN_HEAP_MB" "empty request uses safe heap"
   assert_eq "0" "$(corrections_count)" "no corrections"
+}
+
+test_heap_request_below_floor_is_corrected() {
+  setup_each; set_available_mb 8000
+  choose_heap 512
+  assert_eq "1024" "$CHOSEN_HEAP_MB" "raised to the floor"
+  assert_eq "1" "$(corrections_count)" "one correction"
+  local out; out="$(corrections_render)"
+  assert_contains "$out" "ADJUSTED" "adjusted severity"
+  assert_contains "$out" "512 MB" "asked value"
+  assert_contains "$out" "at least 1 GB" "reason"
+}
+
+test_heap_non_numeric_request_uses_safe_heap_silently() {
+  setup_each; set_available_mb 8000
+  local out
+  out="$(choose_heap abc 2>&1)"
+  assert_eq "" "$out" "nothing printed"
+  choose_heap abc
+  assert_eq "6000" "$CHOSEN_HEAP_MB" "safe heap"
+  assert_eq "1" "$(corrections_count)" "one correction"
+  assert_contains "$(corrections_render)" "abc" "text as typed"
+  choose_heap "4;x"
+  assert_eq "6000" "$CHOSEN_HEAP_MB" "injection-like text"
+}
+
+test_public_helpers_survive_bad_input() {
+  assert_eq "1024" "$(safe_heap_mb abc)" "non-numeric available"
+  assert_eq "1024" "$(safe_heap_mb "")" "empty available"
+  assert_eq "1G" "$(heap_to_java_size abc)" "bad size falls back"
+  assert_eq "1G" "$(heap_to_java_size "")" "empty size falls back"
+  assert_eq "false" "$(heap_pretouch abc)" "bad pretouch input"
+  assert_eq "3072" "$(safe_heap_mb 04096)" "leading zeros are decimal"
+}
+
+test_resourcing_is_safe() {
+  local rc=0
+  ( source "$REPO/src/wizard/safety.sh" && source "$REPO/src/wizard/safety.sh" ) || rc=$?
+  assert_rc 0 "$rc" "sourcing twice"
 }
 
 test_low_ram_raises_warning_but_returns_value() {
@@ -63,6 +103,20 @@ test_low_ram_raises_warning_but_returns_value() {
   local out; out="$(corrections_render)"
   assert_contains "$out" "WARNING" "warning severity"
   assert_contains "$out" "slow or fail" "explains the risk"
+  assert_contains "$out" "1400 MB" "shows available MB"
+}
+
+test_low_ram_boundary_and_zero() {
+  setup_each; set_available_mb 1535
+  choose_heap ""
+  assert_eq "1" "$(corrections_count)" "1535 warns"
+  corrections_reset; set_available_mb 1536
+  choose_heap ""
+  assert_eq "0" "$(corrections_count)" "1536 does not warn"
+  corrections_reset; set_available_mb 0
+  choose_heap ""
+  assert_eq "1024" "$CHOSEN_HEAP_MB" "zero RAM heap"
+  assert_eq "1" "$(corrections_count)" "zero RAM warns"
 }
 
 test_port_default_when_free_no_correction() {
@@ -90,7 +144,7 @@ test_port_busy_picks_next_and_warns_with_port_number() {
   assert_contains "$out" "25577" "rcon port number"
 }
 
-test_name_collision_picks_next_and_corrects() {
+test_name_collision_picks_next_and_corrects() (
   setup_each
   local d; d="$(mktemp -d)"
   export HOME="$d/home" SYSTEMD_UNIT_DIR="$d/units"
@@ -101,9 +155,9 @@ test_name_collision_picks_next_and_corrects() {
   choose_instance_name alpha mc
   assert_eq "alpha-2" "$CHOSEN_INSTANCE_NAME" "next name"
   assert_eq "1" "$(corrections_count)" "one correction"
-  assert_contains "$(corrections_render)" "alpha-2" "chosen name shown"
+  assert_contains "$(corrections_render)" "the name alpha is already in use" "reason"
   rm -rf "$d"
-}
+)
 
 test_pretouch_off_for_small_heap() {
   assert_eq "false" "$(heap_pretouch 1024)" "1024"
