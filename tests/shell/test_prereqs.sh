@@ -187,6 +187,15 @@ test_npm_ci_runs_in_the_repo_root() {
   assert_logged "npm ci --omit=dev in $root" "npm ci runs from SCRIPT_DIR"
 }
 
+test_npm_ci_leaves_the_working_directory_alone() {
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl ss node npm
+  shim_node v20.1.0
+  mkdir -p "$T/root" "$T/elsewhere"
+  local out
+  out="$( ( cd "$T/elsewhere" && PATH="$BIN"; SCRIPT_DIR="$T/root"; source "$REPO/src/common/prereqs.sh"; ensure_prerequisites power > /dev/null 2>&1; pwd ) )"
+  assert_eq "$(cd "$T/elsewhere" && pwd)" "$out" "the caller's directory is unchanged"
+}
+
 test_failed_nodesource_download_leaves_no_temp_script() {
   new_env apt sudo systemctl screen unzip cron jq rsync zstd setfacl ss npm
   shim_candidate 12.22.9

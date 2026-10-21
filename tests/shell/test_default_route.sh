@@ -277,6 +277,18 @@ test_final_screen_shows_port_and_forwarding_notice() {
   assert_contains "$out" "Server port" "corrections repeated"
 }
 
+test_final_screen_says_where_backups_and_the_service_live() {
+  setup
+  export DRIVE_FINAL=1
+  local out
+  out="$(drive default $'y
+y
+')"
+  out="${out##*Your server is set up.}"
+  assert_contains "$out" "Backups: $T/home/minecraft-server/backups/server" "default backup folder"
+  assert_contains "$out" 'systemd service "server"' "service named"
+}
+
 test_final_screen_without_ip_names_the_local_address() {
   setup
   export IP_SHIM_SRC="" DRIVE_FINAL=1
@@ -351,6 +363,19 @@ test_invalid_memory_size_falls_back_to_safe_heap_with_correction() {
     _wizard_choose_heap_for 2G; echo "$CHOSEN_HEAP_MB $(corrections_count)"
   )"
   assert_eq $'6144 1\n6144 1\n2048 0' "$out" "bad sizes are corrected, good sizes kept"
+}
+
+test_end_of_input_at_the_summary_confirm_counts_as_no() {
+  setup
+  local out
+  out="$(
+    source "$REPO/src/common/ui.sh"; source "$REPO/src/common/corrections.sh"; source "$REPO/src/common/detect.sh"
+    source "$REPO/src/common/prompts.sh"; source "$REPO/src/wizard/summary.sh"
+    declare -A ANSWERS=([server_kind]=vanilla)
+    EULA=false
+    if MC_SETUP_FORCE_TTY=1 summary_render < /dev/null > /dev/null 2>&1; then echo YES; else echo NO; fi
+  )"
+  assert_eq "NO" "$out" "no answer is a no, not a yes"
 }
 
 test_failing_config_write_leaves_no_half_config() {

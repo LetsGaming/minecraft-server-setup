@@ -40,6 +40,7 @@ run_engine() { # route, replies (newline separated), VAR=value...
     export WHIPTAIL_SHIM_REPLIES="$T/replies"
     for assignment in "$@"; do export "${assignment?}"; done
     load_wizard
+    if [ -n "${AFTER_LOAD:-}" ]; then "$AFTER_LOAD"; fi
     engine_run "$route" 2>/dev/null || rc=$?
     echo "rc=$rc"
     for key in "${!ANSWERS[@]}"; do echo "$key=${ANSWERS[$key]}"; done | sort
@@ -51,6 +52,8 @@ extra_entry() {
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     extra_step EXTRA.SETTING string input fallback default "" "" "Extra" "A test-only step."
 }
+
+wizard_manifest_with_extra() { wizard_manifest() { extra_entry; }; }
 
 test_collects_answers_by_json_path() {
   setup
@@ -232,7 +235,7 @@ test_engine_available_follows_wt_available() {
 test_adding_a_manifest_entry_needs_no_engine_change() {
   setup
   local out
-  out="$(run_engine default $'0|typed-value' WIZARD_MANIFEST_EXTRA=extra_entry)"
+  out="$(run_engine default $'0|typed-value' AFTER_LOAD=wizard_manifest_with_extra)"
   assert_contains "$out" "rc=0" "finished"
   assert_contains "$out" "EXTRA.SETTING=typed-value" "extra record answered and keyed by its json path"
   assert_logged "fallback" "default value from the record offered"

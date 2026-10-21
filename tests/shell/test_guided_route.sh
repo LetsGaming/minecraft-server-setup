@@ -127,6 +127,25 @@ test_guided_rejects_existing_instance_name() {
   assert_exists "$T/home/minecraft-server/instances/server" "existing instance untouched"
 }
 
+test_guided_modpack_with_an_existing_pack_file_explains_itself() {
+  setup
+  echo '{"pack_id":"1","api_key":"old"}' > "$T/repo/src/setup/download/json/curseforge_variables.json"
+  printf '%s
+' "0|my-world" "0|modpack" "0|secret-key" "0|123456" "0|4G" "0|10" > "$T/replies"
+  printf '%s
+' "$TAIL_REPLIES" >> "$T/replies"
+  export NODE_SHIM_RC=1
+  local out
+  out="$(drive $'y
+y
+')"
+  assert_contains "$out" "curseforge_variables.json already exists; delete or rename it to enter new pack details." "plain explanation"
+  assert_not_contains "$out" "Refusing to overwrite" "no bare refusal"
+  assert_contains "$out" "rc=1" "exit 1"
+  assert_file_content "$T/repo/src/setup/download/json/curseforge_variables.json" '{"pack_id":"1","api_key":"old"}' "file untouched"
+  assert_missing "$T/repo/variables.json" "no config"
+}
+
 test_guided_fabric_latest_uses_the_resolver() {
   setup
   export NODE_SHIM_OUT='{"minecraft":"1.21.1","notices":[{"severity":"adjusted","text":"26.3 was skipped because mod foo has no build for it; using 1.21.1."}],"dropped":["foo","bar"]}'

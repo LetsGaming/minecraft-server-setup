@@ -156,7 +156,7 @@ ensure_prerequisites() { # route
   fi
 
   echo "Installing Node.js packages..."
-  _prereq_run "cd \"${SCRIPT_DIR:-.}\" && npm ci --omit=dev"
+  _prereq_run "( cd \"${SCRIPT_DIR:-.}\" && npm ci --omit=dev )"
 
   PREREQS_DONE=1
   echo "All packages installed and up to date."

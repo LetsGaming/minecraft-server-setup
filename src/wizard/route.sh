@@ -150,6 +150,10 @@ _wizard_confirm_and_write() {
     exit 0
   fi
   _wizard_guard_config
+  if { [ -n "${ANSWERS[curseforge_pack]-}" ] || [ -n "${ANSWERS[curseforge_key]-}" ]; } && { [ -e "$cf_path" ] || [ -L "$cf_path" ]; }; then
+    ui_notice error "curseforge_variables.json already exists; delete or rename it to enter new pack details." >&2
+    exit 1
+  fi
   _wizard_write_guard_begin
   if [ -n "${ANSWERS[curseforge_pack]-}" ] || [ -n "${ANSWERS[curseforge_key]-}" ]; then
     config_write_curseforge "$cf_path" || { _wizard_write_guard_end; exit 1; }

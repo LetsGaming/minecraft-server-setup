@@ -10,12 +10,6 @@
 
 engine_available() { wt_available; }
 
-# Manifest records plus the optional test-only extras named by WIZARD_MANIFEST_EXTRA.
-_engine_records() {
-  wizard_manifest
-  if [ -n "${WIZARD_MANIFEST_EXTRA:-}" ]; then "$WIZARD_MANIFEST_EXTRA"; fi
-}
-
 # Splits a record into the global array _ENGINE_F (empty fields are kept).
 _engine_split() { # record
   local rest="$1"$'\t'
@@ -73,7 +67,7 @@ engine_run() { # route
     [ -n "$record" ] || continue
     _engine_split "$record"
     case ",${_ENGINE_F[5]}," in *",$route,"*) steps+=("$record") ;; esac
-  done < <(_engine_records)
+  done < <(wizard_manifest)
   count="${#steps[@]}"
 
   while [ "$i" -lt "$count" ]; do

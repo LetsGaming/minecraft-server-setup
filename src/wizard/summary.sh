@@ -86,7 +86,7 @@ eula_confirm() {
 }
 
 final_screen() {
-  local name="${ANSWERS[INSTANCE_NAME]-}" port="${CHOSEN_SERVER_PORT:-25565}" ip
+  local name="${ANSWERS[INSTANCE_NAME]-}" port="${CHOSEN_SERVER_PORT:-25565}" ip backups_path
   ip="$(detect_local_ip || true)"
 
   echo
@@ -103,6 +103,23 @@ final_screen() {
   echo "  need your public address or a dynamic-DNS name. This tool did not configure the router."
   echo "  To check, look up \"port forwarding\" in your router's settings, then test the public"
   echo "  address from outside your home network."
+
+  echo
+  echo "Where things live:"
+  if [ "${NO_BACKUP:-false}" = true ] || [ "${ANSWERS[backups]-true}" = false ]; then
+    echo "  Backups: switched off."
+  else
+    backups_path="${ANSWERS[BACKUPS.BACKUPS_PATH]-}"
+    if [ -z "$backups_path" ] || [ "$backups_path" = none ]; then
+      backups_path="$HOME/${WIZARD_TARGET_DIR_NAME:-minecraft-server}/backups/$name"
+    fi
+    echo "  Backups: $backups_path"
+  fi
+  if [ "${NO_SERVICE:-false}" = true ]; then
+    echo "  Service: none was created, so start the server by hand."
+  else
+    echo "  Service: the server runs as the systemd service \"$name\"; check it with: sudo systemctl status $name"
+  fi
 
   if [ "$(corrections_count)" -gt 0 ]; then
     echo
