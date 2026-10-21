@@ -111,6 +111,14 @@ run_vanilla_setup() {
   run_or_echo "bash \"$SCRIPT_DIR/src/vanilla/structure/move_files.sh\""
 }
 
+run_server_setup() {
+  if [ "$VANILLA" = true ]; then run_vanilla_setup; else run_modpack_setup; fi
+}
+
+run_server_cleanup() {
+  if [ "$VANILLA" = true ]; then run_vanilla_cleanup; else run_modpack_cleanup; fi
+}
+
 run_setup_startup() {
   resolve_instance_vars
 

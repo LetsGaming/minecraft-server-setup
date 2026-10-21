@@ -45,6 +45,32 @@ test_the_flag_still_works_when_disabled_in_config() {
   assert_eq "flag=true asked=0" "$(prompt_result true)" "--api-server is kept and not asked again"
 }
 
+# Which setup and cleanup function a run picks for VANILLA.
+dispatch_result() { # VANILLA value
+  (
+    run_modpack_setup() { echo -n "modpack-setup "; }
+    run_vanilla_setup() { echo -n "vanilla-setup "; }
+    run_modpack_cleanup() { echo -n "modpack-cleanup "; }
+    run_vanilla_cleanup() { echo -n "vanilla-cleanup "; }
+    source <(sed -n '/^run_server_setup()/,/^}/p;/^run_server_cleanup()/,/^}/p' "$REPO/src/common/setup.sh")
+    VANILLA="$1"
+    run_server_setup; run_server_cleanup
+  )
+}
+
+test_a_modpack_run_uses_the_modpack_setup_and_cleanup() {
+  assert_eq "modpack-setup modpack-cleanup " "$(dispatch_result false)" "default is the modpack"
+}
+
+test_the_vanilla_flag_switches_setup_and_cleanup() {
+  assert_eq "vanilla-setup vanilla-cleanup " "$(dispatch_result true)" "--vanilla picks the vanilla pair"
+}
+
+test_main_declares_the_vanilla_flag_and_the_old_script_is_gone() {
+  assert_contains "$(grep -- '"--vanilla"' "$REPO/main.sh")" "VANILLA=false" "flag is declared with a false default"
+  assert_missing "$REPO/main-vanilla.sh" "main-vanilla.sh is removed"
+}
+
 test_install_script_installs_jq_with_the_other_packages() {
   setup
   export SHIM_LOG="$T/shim.log"; : > "$SHIM_LOG"

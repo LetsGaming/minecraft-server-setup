@@ -99,7 +99,7 @@ sudo -u <user> bash main.sh --check
 sudo -u <user> bash main.sh
 
 # Vanilla/Fabric server
-sudo -u <user> bash main-vanilla.sh
+sudo -u <user> bash main.sh --vanilla
 
 # With minecraft-bot API wrapper (for remote bot deployments)
 sudo -u <user> bash main.sh --api-server
@@ -109,7 +109,7 @@ npm run check
 npm run setup
 ```
 
-Options (both `main.sh` and `main-vanilla.sh`; `--help` lists them):
+Options (`--help` lists them):
 
 | Option | Effect |
 |---|---|
@@ -121,6 +121,7 @@ Options (both `main.sh` and `main-vanilla.sh`; `--help` lists them):
 | `--no-service` | Skip creating the systemd service |
 | `--no-backup` | Skip creating the backup job |
 | `--api-server` | Set up the minecraft-bot API wrapper service |
+| `--vanilla` | Set up a vanilla/Fabric server instead of a modpack |
 | `--y` | Skip the prompts and take the defaults. This **accepts the EULA** |
 
 ### Runtime Scripts

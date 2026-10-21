@@ -46,6 +46,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- **One setup script.** `main-vanilla.sh` is gone: run `main.sh --vanilla` for a vanilla/Fabric server (`npm run setup:vanilla` does the same). `npm run check:vanilla` is removed because `--check` is the same for both.
 - With `API_SERVER.ENABLED` set to true, setup deploys the API wrapper without asking; it still asks when it is false, and `--api-server` still works.
 - The documented Bash minimum is now 4.3 (the argument parser already needed it).
 - `migrate.sh` is split into modules under `migrate-lib/` (the server-side migrations moved there from `src/migrations/`). It still lives in the repo root and behaves the same: same options, output, files and recovery. `docs/migrations.md` describes the layout.
@@ -151,6 +152,7 @@ Items marked **BREAKING** change behaviour that scripts, cron jobs or the API wr
 
 ### Changed
 
+- **One setup script.** `main-vanilla.sh` is gone: run `main.sh --vanilla` for a vanilla/Fabric server (`npm run setup:vanilla` does the same). `npm run check:vanilla` is removed because `--check` is the same for both.
 - **BREAKING: `restore.sh` refuses to run (exit 3) while the server is running or when that cannot be determined.** It re-checks right before replacing the server directory. Stop the server first; the API wrapper's restore route enforces the same rule.
 - **BREAKING: `restore.sh` no longer copies systemd units from an archive with `sudo` unprompted.** It prints how each unit differs and installs it only with `--install-units` or an interactive `y`; a non-interactive run (the API wrapper's restore) skips the units with a notice.
 - **BREAKING: `variables.json` validation and `--check` reject an `API_SERVER.API_KEY` shorter than 32 characters**, matching the API wrapper, which refuses to start with one.

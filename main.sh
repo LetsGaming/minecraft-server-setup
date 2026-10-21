@@ -21,6 +21,7 @@ declare -A ARG_OPTS=(
   ["--verbose"]="VERBOSE=false|Print additional logging info"
   ["--y"]="ACCEPT_ALL=false|Accept all defaults and skip prompts"
   ["--check"]="CHECK_ONLY=false|Validate config and environment without running setup"
+  ["--vanilla"]="VANILLA=false|Set up a vanilla/Fabric server instead of a modpack"
 )
 
 # Run lifecycle
@@ -53,8 +54,9 @@ _rollback_if_needed() {
 trap '_rollback_if_needed' EXIT
 trap '_rollback_if_needed; exit 130' INT
 
-run_modpack_setup
+run_server_setup
 run_optional_setup
+# Mark success before cleanup/start so those failures don't trigger rollback
 _SETUP_SUCCESS=true
-run_modpack_cleanup
+run_server_cleanup
 maybe_start_server
