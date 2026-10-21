@@ -173,6 +173,12 @@ _wizard_resolve_default_version() { # [typed version]
   local resolved notice typed="${1:-}"
   local -a notices=() args=()
   [ -z "$typed" ] || args=(--version "$typed")
+  if [ "${DRY_RUN:-false}" = true ] && { ! command -v node > /dev/null 2>&1 || ! command -v jq > /dev/null 2>&1; }; then
+    echo "Dry run: Node.js or jq is not installed yet, so the Minecraft version check was skipped."
+    RESOLVED_MINECRAFT="${typed:-latest} (not checked)"
+    RESOLVED_DROPPED=""
+    return 0
+  fi
   resolved="$(_wizard_resolve_version "${args[@]}")"
   RESOLVED_MINECRAFT="$(jq -r '.minecraft' <<< "$resolved" | tr -d '\r')"
   RESOLVED_DROPPED="$(jq -r '(.dropped // []) | join(",")' <<< "$resolved" | tr -d '\r')"

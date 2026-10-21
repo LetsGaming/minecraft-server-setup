@@ -448,6 +448,23 @@ test_main_dry_run_writes_nothing() {
   assert_contains "$out" "Dry run: nothing was written" "second run still uses the wizard"
 }
 
+test_main_dry_run_on_a_fresh_host_skips_the_version_check() {
+  main_setup
+  if PATH="/usr/bin:/bin" command -v node > /dev/null 2>&1; then
+    skip "fresh host dry run" "this host has node on the base PATH"
+    return 0
+  fi
+  rm -f "$T/bin/node"
+  export MC_SETUP_FORCE_TTY=
+  local out
+  out="$(run_main_wiz "" --default --agree-eula --dry-run)"
+  assert_contains "$out" "rc=0" "exits 0"
+  assert_contains "$out" "Dry run: Node.js or jq is not installed yet, so the Minecraft version check was skipped." "says why"
+  assert_contains "$out" "latest (not checked)" "summary shows the unchecked version"
+  assert_contains "$out" "Dry run: nothing was written or installed." "normal dry-run ending"
+  assert_missing "$T/repo/variables.json" "no config"
+}
+
 test_main_failure_message_is_printed_once_and_exit_code_kept() {
   main_setup
   export MC_SETUP_FORCE_TTY='' PROBE_FAIL=1
