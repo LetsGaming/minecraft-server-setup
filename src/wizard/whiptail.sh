@@ -6,24 +6,28 @@ WT_CANCEL=11
 WT_MIN_COLS=70
 WT_MIN_ROWS=20
 
-_wt_term_size() { # prints "rows cols"
+# Prints "rows cols" only when the size is really known.
+_wt_real_size() {
   local size
   if [ -n "${MC_SETUP_TERM_SIZE:-}" ]; then
     size="$MC_SETUP_TERM_SIZE"
   else
-    size="$(stty size 2>/dev/null)" || size=""
+    size="$(stty size 2>/dev/null)" || return 1
   fi
-  if ! [[ "$size" =~ ^[0-9]+\ [0-9]+$ ]] || [ "${size%% *}" -eq 0 ]; then
-    size="24 80"
-  fi
+  [[ "$size" =~ ^[0-9]+[[:space:]][0-9]+$ ]] && [ "${size%% *}" -gt 0 ] || return 1
   echo "$size"
+}
+
+_wt_term_size() { # prints "rows cols", falling back to 24 80
+  _wt_real_size || echo "24 80"
 }
 
 wt_available() {
   local size
   command -v whiptail >/dev/null 2>&1 || return 1
   [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] || return 1
-  size="$(_wt_term_size)"
+  [ "${MC_SETUP_FORCE_TTY:-}" = 1 ] || [ -t 2 ] || return 1
+  size="$(_wt_real_size)" || return 1
   [ "${size#* }" -ge "$WT_MIN_COLS" ] && [ "${size%% *}" -ge "$WT_MIN_ROWS" ]
 }
 
@@ -54,7 +58,8 @@ _wt_dims() { # text [list_rows]
 _wt_run() {
   local out rc=0
   out="$(whiptail --output-fd 3 "$@" 3>&1 1>&2)" || rc=$?
-  [ "$rc" -eq 0 ] && printf '%s\n' "$out"
+  if [ "$rc" -eq 0 ] && [ -n "$out" ]; then printf '%s
+' "$out"; fi
   return "$rc"
 }
 

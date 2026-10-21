@@ -29,7 +29,7 @@ self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 clean_path=""
 IFS=: read -ra parts <<< "$PATH"
 for p in "${parts[@]}"; do
-  [[ "$p" == "$self_dir" ]] || clean_path="${clean_path:+$clean_path:}$p"
+  [[ "$p" -ef "$self_dir" ]] || clean_path="${clean_path:+$clean_path:}$p"
 done
 real="$(PATH="$clean_path" command -v whiptail)" || { echo "whiptail: not found" >&2; exit 127; }
 exec "$real" "$@"
