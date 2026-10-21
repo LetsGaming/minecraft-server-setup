@@ -30,6 +30,10 @@ select_route() {
     fi
     ROUTE=default
   elif [ "${GUIDED_ROUTE:-false}" = true ]; then
+    if ! ui_is_interactive; then
+      ui_notice error "Guided setup needs an interactive terminal; use --default --agree-eula or a prepared variables.json." >&2
+      exit 1
+    fi
     ROUTE=guided
   elif [ -f "$SCRIPT_DIR/variables.json" ] || ! ui_is_interactive; then
     ROUTE=power

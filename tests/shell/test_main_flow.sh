@@ -13,6 +13,18 @@ setup() {
   export SHIM_LOG="$T/shim.log"; : > "$SHIM_LOG"
   printf '#!/bin/bash\n[ "$1" = -v ] && exit 0\nexec "$@"\n' > "$T/bin/sudo"
   printf '#!/bin/bash\necho "apt $*" >> "$SHIM_LOG"\n[ "$1" = update ] && exit 0\nexit 100\n' > "$T/bin/apt"
+  local tool
+  for tool in curl screen unzip cron jq rsync zstd setfacl npm; do
+    printf '#!/bin/bash
+exit 0
+' > "$T/bin/$tool"
+  done
+  printf '#!/bin/bash
+printf "nodejs:\n  Candidate: 12.22.9\n"
+' > "$T/bin/apt-cache"
+  printf '#!/bin/bash
+exit 127
+' > "$T/bin/node"
   chmod +x "$T/bin"/*
 }
 
@@ -44,12 +56,17 @@ test_power_route_missing_config_still_creates_and_exits() {
 test_existing_flags_still_parse() {
   setup
   local out
-  out="$(run_main --dry-run --no-start --agree-eula --no-service --no-backup --api-server --verbose --y --vanilla)"
-  assert_not_contains "$out" "Unknown option" "all existing flags are accepted"
   out="$(run_main --default --guided --allow-nodesource --help)"
   assert_contains "$out" "--allow-nodesource" "new flags are listed"
   assert_contains "$out" "--default" "new flags are listed"
   assert_contains "$out" "--guided" "new flags are listed"
+  out="$(
+    eval "$(sed -n '/^declare -A ARG_OPTS=(/,/^)/p' "$REPO/main.sh")"
+    source "$REPO/src/common/args.sh"
+    parse_args --default --guided --allow-nodesource --check --dry-run --verbose --no-start --no-service --no-backup --agree-eula --api-server --vanilla --y
+    echo "$DEFAULT_ROUTE $GUIDED_ROUTE $ALLOW_NODESOURCE $CHECK_ONLY $DRY_RUN $VERBOSE $NO_START $NO_SERVICE $NO_BACKUP $EULA $SETUP_API_SERVER $VANILLA $ACCEPT_ALL"
+  )"
+  assert_eq "true true true true true true true true true true true true true" "$out" "every flag sets its variable"
 }
 
 test_guided_route_installs_then_stops_at_the_wizard_stub() {
@@ -59,7 +76,7 @@ test_guided_route_installs_then_stops_at_the_wizard_stub() {
 exit 0
 ' > "$T/bin/node"; chmod +x "$T/bin/node"
   local out
-  out="$(run_main --guided --dry-run)"
+  out="$(MC_SETUP_FORCE_TTY=1 run_main --guided --dry-run)"
   assert_contains "$out" "not available yet" "wizard stub speaks"
   assert_contains "$out" "rc=1" "exits 1"
 }

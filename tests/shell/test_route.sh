@@ -55,12 +55,20 @@ test_default_flag_with_tty_needs_no_eula() {
 
 test_guided_flag_forces_guided() {
   setup
-  assert_contains "$(route_result "" GUIDED_ROUTE=true)" "route=guided" "flag forces guided"
+  assert_contains "$(route_result "" GUIDED_ROUTE=true MC_SETUP_FORCE_TTY=1)" "route=guided" "flag forces guided"
+}
+
+test_guided_flag_without_tty_is_rejected() {
+  setup
+  local out
+  out="$(route_result "" GUIDED_ROUTE=true)"
+  assert_contains "$out" "rc=1" "exits 1"
+  assert_contains "$out" "interactive terminal" "message explains"
 }
 
 test_both_flags_are_rejected() {
   setup
-  assert_contains "$(route_result "" GUIDED_ROUTE=true DEFAULT_ROUTE=true)" "rc=1" "conflict"
+  assert_contains "$(route_result "" GUIDED_ROUTE=true DEFAULT_ROUTE=true MC_SETUP_FORCE_TTY=1)" "rc=1" "conflict"
 }
 
 test_prompt_preselects_default() {
