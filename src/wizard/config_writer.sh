@@ -63,26 +63,28 @@ _cw_trap_arg() { printf '%s' "$3"; }
 
 # Runs the handler that was installed before ours (given as `trap -p` output) exactly once,
 # synchronously, so its cleanup cannot be skipped by a deferred re-raised signal; with no
-# previous handler the signal is re-raised for the default action.
+# previous handler the signal is re-raised for the default action. Locals are __-prefixed
+# and the positional parameters are cleared so the handler sees its own globals and $@.
 _cw_pass_on() { # signal previous_trap_text
-  local cmd="" status=143
-  [ "$1" != INT ] || status=130
-  [ -z "$2" ] || cmd="$(eval "_cw_trap_arg $2")"
-  if [ -n "$cmd" ]; then
-    eval "$cmd"
+  local __cw_sig="$1" __cw_cmd="" __cw_status=143
+  [ "$__cw_sig" != INT ] || __cw_status=130
+  [ -z "$2" ] || __cw_cmd="$(eval "_cw_trap_arg $2")"
+  if [ -n "$__cw_cmd" ]; then
+    set --
+    eval "$__cw_cmd"
   else
-    kill -s "$1" "$BASHPID"
+    kill -s "$__cw_sig" "$BASHPID"
   fi
-  exit "$status"
+  exit "$__cw_status"
 }
 
 _cw_on_signal() { # signal
-  local previous="$_CW_OLD_INT"
-  [ "$1" = INT ] || previous="$_CW_OLD_TERM"
+  local __cw_previous="$_CW_OLD_INT"
+  [ "$1" = INT ] || __cw_previous="$_CW_OLD_TERM"
   _cw_cleanup_temps
   [ -z "$_CW_OLD_UMASK" ] || umask "$_CW_OLD_UMASK"
   _cw_guard_end
-  _cw_pass_on "$1" "$previous"
+  _cw_pass_on "$1" "$__cw_previous"
 }
 
 _cw_check_target() { # out_path

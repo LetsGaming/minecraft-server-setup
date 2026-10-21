@@ -3,6 +3,7 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 source "$HERE/lib/assert.sh"
+source "$HERE/lib/signals.sh"
 
 setup() {
   T="$(mktemp -d)"
@@ -171,46 +172,6 @@ test_atomic_write_leaves_no_partial_file_on_failure() {
   assert_eq "" "$(ls -A "$T/out")" "no temp files left"
 }
 
-signals_unreliable() { # test-label
-  case "$(uname -o 2> /dev/null)" in
-    Msys | Cygwin)
-      skip "$1" "signals are unreliable under MSYS/Cygwin; covered on Linux CI"
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-# Background jobs of a non-interactive shell (or of a backgrounded test run) inherit an
-# ignored SIGINT that bash cannot undo, so the job is started through a tiny exec wrapper
-# that restores the default dispositions.
-sig_exec() {
-  if command -v perl > /dev/null 2>&1; then
-    perl -e '$SIG{INT} = "DEFAULT"; $SIG{TERM} = "DEFAULT"; exec @ARGV' -- "$@"
-  else
-    "$@"
-  fi
-}
-
-# Polls for a marker file (up to ~60 s), signals the whole process group, waits for the
-# process to end (up to ~60 s) and
-# force-kills what is left. Sets SIGNAL_STATUS.
-signal_when_started() { # signal pid marker
-  local sig="$1" pid="$2" marker="$3" i
-  for ((i = 0; i < 600; i++)); do
-    [ -e "$marker" ] && break
-    sleep 0.1
-  done
-  kill -s "$sig" -- "-$pid" 2> /dev/null
-  for ((i = 0; i < 600; i++)); do
-    kill -0 "$pid" 2> /dev/null || break
-    sleep 0.1
-  done
-  if kill -0 "$pid" 2> /dev/null; then kill -9 -- "-$pid" "$pid" 2> /dev/null; fi
-  SIGNAL_STATUS=0
-  wait "$pid" 2> /dev/null || SIGNAL_STATUS=$?
-}
-
 # Starts config_write (or config_write_curseforge) in the background while a jq shim stalls
 # it, sends the signal, and waits for the process to end.
 interrupt_write() { # signal function out_path
@@ -226,7 +187,7 @@ EOS
   JQ_SHIM_SLEEP="$T/jq.started" sig_exec bash "$T/write.sh" < /dev/null > /dev/null 2>&1 &
   pid=$!
   set +m
-  signal_when_started "$sig" "$pid" "$T/jq.started"
+  signal_when_started "$sig" "$pid" "$T/jq.started" "$T/jq.started.release"
   return 0
 }
 
@@ -300,22 +261,28 @@ EOS
   assert_exists "$T/repo/old.json" "other files are kept"
 }
 
-# Runs a script that installs a caller handler (one that returns, so a second run would show), the
-# guard under test and then calls the handler directly; prints the output and rc=<n>.
+# Runs a script that sets the globals cmd and previous, installs a caller handler for the
+# signal (one that returns, so a second run would show) and an EXIT trap, then runs the body;
+# prints the output and rc=<n>. A body can start with `trap - SIG` or `trap '' SIG` to change
+# what the caller had installed.
 chain_run() { # signal marker-file body
   local out rc=0
   cat > "$T/chain.sh" <<EOS
 source "$REPO/src/wizard/manifest.sh"
 source "$REPO/src/wizard/config_writer.sh"
 source "$REPO/src/wizard/route.sh"
-trap 'echo caller-ran; trap -p EXIT; rm -f "$2"' $1
+cmd=g1
+previous=g2
+trap 'echo "caller-ran g=\$cmd,\$previous,[\$*]"; trap -p EXIT; rm -f "$2"' $1
 trap 'echo exit-trap' EXIT
 $3
 echo not-reached
 EOS
-  out="$(bash "$T/chain.sh" 2>&1)" || rc=$?
+  out="$(sig_exec bash "$T/chain.sh" 2>&1)" || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"
 }
+
+CALLER_RAN="caller-ran g=g1,g2,[]"
 
 test_writer_handler_runs_the_callers_handler_once_before_exit() {
   setup
@@ -327,10 +294,21 @@ test_writer_handler_runs_the_callers_handler_once_before_exit() {
     echo secret > "$T/out/.variables.assign.x"
     echo '{}' > "$T/out/.variables.json.x"
     out="$(chain_run "$sig" "$T/marker" "_cw_guard_begin; _CW_TMP='$T/out/.variables.json.x'; _CW_ASSIGN='$T/out/.variables.assign.x'; _cw_on_signal $sig")"
-    assert_eq 1 "$(grep -c '^caller-ran$' <<< "$out")" "the caller's handler ran exactly once ($sig)"
-    assert_eq $'caller-ran\ntrap -- \'echo exit-trap\' EXIT\nexit-trap\nrc='"$status" "$out" "handler first, EXIT trap intact and run once, status $status ($sig)"
+    assert_eq 1 "$(grep -c '^caller-ran' <<< "$out")" "the caller's handler ran exactly once ($sig)"
+    assert_eq "$CALLER_RAN"$'\ntrap -- \'echo exit-trap\' EXIT\nexit-trap\nrc='"$status" "$out" "handler first with its own globals and no arguments, EXIT trap intact and run once, status $status ($sig)"
     assert_missing "$T/marker" "the caller's cleanup happened ($sig)"
     assert_eq "" "$(ls -A "$T/out")" "the writer's temp files are gone ($sig)"
+  done
+}
+
+test_writer_handler_without_a_caller_handler_ends_as_interrupted() {
+  setup
+  local how out
+  for how in "trap - INT" "trap '' INT"; do
+    echo secret > "$T/out/.variables.assign.x"
+    out="$(chain_run INT "$T/marker" "$how; _cw_guard_begin; _CW_ASSIGN='$T/out/.variables.assign.x'; _cw_on_signal INT")"
+    assert_eq $'exit-trap\nrc=130' "$out" "no caller handler ran, EXIT trap ran once, status 130 ($how)"
+    assert_eq "" "$(ls -A "$T/out")" "the temp file is gone ($how)"
   done
 }
 
@@ -344,9 +322,9 @@ test_route_handler_runs_the_callers_handler_once_before_exit() {
     echo key > "$T/marker"
     echo '{}' > "$T/repo/cf.json"
     echo '{}' > "$T/repo/old.json"
-    out="$(chain_run "$sig" "$T/marker" "_WZ_OLD_INT=\"\$(trap -p INT)\"; _WZ_OLD_TERM=\"\$(trap -p TERM)\"; _WZ_CF_FILE='$T/repo/cf.json'; _WZ_CFG_FILE='$T/repo/variables.json'; trap '_wizard_on_write_signal $sig' $sig; _wizard_on_write_signal $sig")"
-    assert_eq 1 "$(grep -c '^caller-ran$' <<< "$out")" "the outer handler ran exactly once ($sig)"
-    assert_eq $'caller-ran\ntrap -- \'echo exit-trap\' EXIT\nexit-trap\nrc='"$status" "$out" "handler first, EXIT trap intact and run once, status $status ($sig)"
+    out="$(chain_run "$sig" "$T/marker" "_wizard_write_guard_begin; _WZ_CF_FILE='$T/repo/cf.json'; _WZ_CFG_FILE='$T/repo/variables.json'; _wizard_on_write_signal $sig")"
+    assert_eq 1 "$(grep -c '^caller-ran' <<< "$out")" "the outer handler ran exactly once ($sig)"
+    assert_eq "$CALLER_RAN"$'\ntrap -- \'echo exit-trap\' EXIT\nexit-trap\nrc='"$status" "$out" "handler first with its own globals and no arguments, EXIT trap intact and run once, status $status ($sig)"
     assert_missing "$T/marker" "the outer cleanup happened ($sig)"
     assert_missing "$T/repo/cf.json" "the key file of this run is removed ($sig)"
     assert_exists "$T/repo/old.json" "other files are kept ($sig)"

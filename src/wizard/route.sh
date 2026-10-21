@@ -100,13 +100,22 @@ _wizard_write_guard_end() {
   [ -z "$_WZ_OLD_TERM" ] || eval "$_WZ_OLD_TERM"
 }
 
+_wizard_write_guard_begin() {
+  _WZ_CF_FILE=""
+  _WZ_CFG_FILE=""
+  _WZ_OLD_INT="$(trap -p INT)"
+  _WZ_OLD_TERM="$(trap -p TERM)"
+  trap '_wizard_on_write_signal INT' INT
+  trap '_wizard_on_write_signal TERM' TERM
+}
+
 # Removes only the files this run created, then lets the caller's handler see the signal.
 _wizard_on_write_signal() { # signal
-  local previous="$_WZ_OLD_INT"
-  [ "$1" = INT ] || previous="$_WZ_OLD_TERM"
+  local __wz_previous="$_WZ_OLD_INT"
+  [ "$1" = INT ] || __wz_previous="$_WZ_OLD_TERM"
   rm -f -- "$_WZ_CF_FILE" "$_WZ_CFG_FILE"
   _wizard_write_guard_end
-  _cw_pass_on "$1" "$previous"
+  _cw_pass_on "$1" "$__wz_previous"
 }
 
 # Summary, EULA, then write variables.json and set the install flags.
@@ -120,12 +129,7 @@ _wizard_confirm_and_write() {
     exit 0
   fi
   _wizard_guard_config
-  _WZ_CF_FILE=""
-  _WZ_CFG_FILE=""
-  _WZ_OLD_INT="$(trap -p INT)"
-  _WZ_OLD_TERM="$(trap -p TERM)"
-  trap '_wizard_on_write_signal INT' INT
-  trap '_wizard_on_write_signal TERM' TERM
+  _wizard_write_guard_begin
   if [ -n "${ANSWERS[curseforge_pack]-}" ] || [ -n "${ANSWERS[curseforge_key]-}" ]; then
     config_write_curseforge "$cf_path" || { _wizard_write_guard_end; exit 1; }
     _WZ_CF_FILE="$cf_path"

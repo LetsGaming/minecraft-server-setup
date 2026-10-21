@@ -4,6 +4,7 @@
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 source "$HERE/lib/assert.sh"
+source "$HERE/lib/signals.sh"
 
 setup() {
   T="$(mktemp -d)"
@@ -168,46 +169,6 @@ test_help_texts_use_plain_language() {
   fi
 }
 
-signals_unreliable() { # test-label
-  case "$(uname -o 2> /dev/null)" in
-    Msys | Cygwin)
-      skip "$1" "signals are unreliable under MSYS/Cygwin; covered on Linux CI"
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-# Background jobs of a non-interactive shell (or of a backgrounded test run) inherit an
-# ignored SIGINT that bash cannot undo, so the job is started through a tiny exec wrapper
-# that restores the default dispositions.
-sig_exec() {
-  if command -v perl > /dev/null 2>&1; then
-    perl -e '$SIG{INT} = "DEFAULT"; $SIG{TERM} = "DEFAULT"; exec @ARGV' -- "$@"
-  else
-    "$@"
-  fi
-}
-
-# Polls for a marker file (up to ~60 s), signals the whole process group, waits for the
-# process to end (up to ~60 s) and
-# force-kills what is left. Sets SIGNAL_STATUS.
-signal_when_started() { # signal pid marker
-  local sig="$1" pid="$2" marker="$3" i
-  for ((i = 0; i < 600; i++)); do
-    [ -e "$marker" ] && break
-    sleep 0.1
-  done
-  kill -s "$sig" -- "-$pid" 2> /dev/null
-  for ((i = 0; i < 600; i++)); do
-    kill -0 "$pid" 2> /dev/null || break
-    sleep 0.1
-  done
-  if kill -0 "$pid" 2> /dev/null; then kill -9 -- "-$pid" "$pid" 2> /dev/null; fi
-  SIGNAL_STATUS=0
-  wait "$pid" 2> /dev/null || SIGNAL_STATUS=$?
-}
-
 # Starts the guided drive in its own process group, waits for the marker file, signals the
 # whole group and sets SIGNAL_STATUS to the driver's wait status.
 run_and_signal() { # signal marker stdin-file
@@ -216,7 +177,7 @@ run_and_signal() { # signal marker stdin-file
   PATH="$T/bin:$PATH" EULA=false sig_exec bash "$T/drive.sh" guided < "$3" > "$T/out" 2>&1 &
   pid=$!
   set +m
-  signal_when_started "$1" "$pid" "$2"
+  signal_when_started "$1" "$pid" "$2" "$T/state/whiptail.release" "${JQ_SHIM_SLEEP:-$T/jq.none}.release"
 }
 
 # A jq that stalls the config merge (the only call with --rawfile) once JQ_SHIM_SLEEP names a marker.
