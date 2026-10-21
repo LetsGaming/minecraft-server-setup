@@ -161,6 +161,20 @@ test_negated_when_is_generic_and_back_skips_it() {
     _engine_when_met "server_kind=modpack" && echo equals-still-works
   )"
   assert_eq $'shown-for-other\nshown-when-unanswered\nequals-still-works' "$out" "negated and plain conditions"
+  out="$(
+    load_wizard
+    declare -gA _ENGINE_BY_ID=([a]="b!=c" [e]="" [f]="x=y")
+    _engine_when_met "a=b!=c" && echo equals-with-bang-in-value
+    _engine_when_met "a!=b!=c" && echo wrong-negated-bang-value
+    _engine_when_met "a!=z!=c" && echo negated-bang-value
+    _engine_when_met "e!=" && echo wrong-empty-negated
+    _engine_when_met "e=" && echo empty-equals
+    _engine_when_met "missing!=" && echo wrong-unanswered-empty
+    _engine_when_met "f!=x=z" && echo negated-equals-in-value
+    _engine_when_met "f!=x=y" && echo wrong-negated-equals-match
+    _engine_when_met "f=x=y" && echo equals-equals-in-value
+  )"
+  assert_eq $'equals-with-bang-in-value\nnegated-bang-value\nempty-equals\nnegated-equals-in-value\nequals-equals-in-value' "$out" "operator is the first one in the condition"
   setup
   out="$(run_engine guided $'0|n\n0|modpack\n0|k\n0|123456\n1|\n0|777\n'"$MODPACK_REST_REPLIES")"
   assert_contains "$out" "curseforge_pack=777" "back from memory skipped the hidden version step"

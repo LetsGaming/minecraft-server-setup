@@ -168,23 +168,89 @@ test_help_texts_use_plain_language() {
   fi
 }
 
-test_ctrl_c_mid_wizard_leaves_no_variables_json() {
-  setup
-  printf '%s\n' "0|my-world" "block|" > "$T/replies"
+# Starts the guided drive in its own process group, waits for the marker file, signals the
+# whole group and sets SIGNAL_STATUS to the driver's wait status.
+run_and_signal() { # signal marker stdin-file
   local pid i
   set -m
-  PATH="$T/bin:$PATH" EULA=false bash "$T/drive.sh" guided < /dev/null > "$T/out" 2>&1 &
+  PATH="$T/bin:$PATH" EULA=false bash "$T/drive.sh" guided < "$3" > "$T/out" 2>&1 &
   pid=$!
   set +m
   for ((i = 0; i < 100; i++)); do
-    [ -e "$T/state/whiptail.blocked" ] && break
+    [ -e "$2" ] && break
     sleep 0.1
   done
-  assert_exists "$T/state/whiptail.blocked" "the wizard is waiting on a screen"
-  kill -INT "$pid" 2> /dev/null
-  wait "$pid" 2> /dev/null
+  kill -s "$1" -- "-$pid" 2> /dev/null
+  SIGNAL_STATUS=0
+  wait "$pid" 2> /dev/null || SIGNAL_STATUS=$?
+}
+
+# A jq that stalls the config merge (the only call with --rawfile) once JQ_SHIM_SLEEP names a marker.
+install_stalling_jq() {
+  REAL_JQ="$(command -v jq)"
+  export REAL_JQ
+  cat > "$T/bin/jq" <<'EOF'
+#!/bin/bash
+case " $* " in
+  *" --rawfile "*) if [ -n "${JQ_SHIM_SLEEP:-}" ]; then echo "$$" > "$JQ_SHIM_SLEEP"; sleep 5; fi ;;
+esac
+exec "$REAL_JQ" "$@"
+EOF
+  chmod +x "$T/bin/jq"
+}
+
+test_ctrl_c_mid_wizard_leaves_no_variables_json() {
+  setup
+  printf '%s\n' "0|my-world" "block|" > "$T/replies"
+  : > "$T/stdin"
+  run_and_signal INT "$T/state/whiptail.blocked" "$T/stdin"
+  assert_exists "$T/state/whiptail.blocked" "the wizard was waiting on a screen"
+  assert_eq 130 "$SIGNAL_STATUS" "the run ends as interrupted"
   assert_missing "$T/repo/variables.json" "no config after Ctrl-C"
   assert_eq "" "$(find "$T/repo" -maxdepth 1 -name ".variables*")" "no temp files after Ctrl-C"
+  assert_eq "gone" "$(kill -0 "$(cat "$T/state/whiptail.blocked")" 2> /dev/null && echo running || echo gone)" "no screen process left running"
+}
+
+test_interrupt_during_the_write_removes_what_this_run_created() {
+  local sig status
+  for sig in INT TERM; do
+    (
+      setup
+      install_stalling_jq
+      printf '%s\n' "0|my-world" "0|modpack" "0|secret-key" "0|123456" "0|4G" "0|10" > "$T/replies"
+      printf '%s\n' "$TAIL_REPLIES" >> "$T/replies"
+      printf 'y\ny\n' > "$T/stdin"
+      export JQ_SHIM_SLEEP="$T/jq.started"
+      run_and_signal "$sig" "$T/jq.started" "$T/stdin"
+      status=130
+      [ "$sig" = TERM ] && status=143
+      assert_exists "$T/jq.started" "the write was stalled after the curseforge file ($sig)"
+      assert_eq "$status" "$SIGNAL_STATUS" "the run ends as interrupted ($sig)"
+      assert_missing "$T/repo/src/setup/download/json/curseforge_variables.json" "the api key file is removed ($sig)"
+      assert_missing "$T/repo/variables.json" "no config ($sig)"
+      assert_eq "" "$(find "$T/repo" -maxdepth 1 -name ".variables*")" "no temp files ($sig)"
+      assert_eq "gone" "$(kill -0 "$(cat "$T/jq.started")" 2> /dev/null && echo running || echo gone)" "nothing left running ($sig)"
+    )
+  done
+}
+
+test_interrupt_keeps_a_curseforge_file_from_an_earlier_run() {
+  local sig
+  for sig in INT TERM; do
+    (
+      setup
+      install_stalling_jq
+      echo '{"pack_id":"1","api_key":"old"}' > "$T/repo/src/setup/download/json/curseforge_variables.json"
+      printf '%s\n' "0|my-world" "0|fabric" "0|1.20.4" "0|4G" "0|10" > "$T/replies"
+      printf '%s\n' "$TAIL_REPLIES" >> "$T/replies"
+      printf 'y\ny\n' > "$T/stdin"
+      export JQ_SHIM_SLEEP="$T/jq.started"
+      run_and_signal "$sig" "$T/jq.started" "$T/stdin"
+      assert_exists "$T/jq.started" "the write was stalled ($sig)"
+      assert_file_content "$T/repo/src/setup/download/json/curseforge_variables.json" '{"pack_id":"1","api_key":"old"}' "the earlier file is untouched ($sig)"
+      assert_missing "$T/repo/variables.json" "no config ($sig)"
+    )
+  done
 }
 
 run_tests

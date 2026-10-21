@@ -89,9 +89,28 @@ wizard_apply_flags() {
   export NO_START NO_SERVICE NO_BACKUP SETUP_API_SERVER EULA ACCEPT_ALL VANILLA
 }
 
+_WZ_CF_FILE=""
+_WZ_CFG_FILE=""
+_WZ_OLD_INT=""
+_WZ_OLD_TERM=""
+
+_wizard_write_guard_end() {
+  trap - INT TERM
+  [ -z "$_WZ_OLD_INT" ] || eval "$_WZ_OLD_INT"
+  [ -z "$_WZ_OLD_TERM" ] || eval "$_WZ_OLD_TERM"
+}
+
+# Removes only the files this run created, then lets the caller's handler see the signal.
+_wizard_on_write_signal() { # signal
+  rm -f -- "$_WZ_CF_FILE" "$_WZ_CFG_FILE"
+  _wizard_write_guard_end
+  kill -s "$1" "$BASHPID"
+  case "$1" in INT) exit 130 ;; *) exit 143 ;; esac
+}
+
 # Summary, EULA, then write variables.json and set the install flags.
 _wizard_confirm_and_write() {
-  local wrote_curseforge=false
+  local cf_path="$SCRIPT_DIR/src/setup/download/json/curseforge_variables.json"
   summary_render || _wizard_nothing_changed
   eula_confirm || _wizard_nothing_changed
   if [ "${DRY_RUN:-false}" = true ]; then
@@ -100,16 +119,23 @@ _wizard_confirm_and_write() {
     exit 0
   fi
   _wizard_guard_config
+  _WZ_CF_FILE=""
+  _WZ_CFG_FILE=""
+  _WZ_OLD_INT="$(trap -p INT)"
+  _WZ_OLD_TERM="$(trap -p TERM)"
+  trap '_wizard_on_write_signal INT' INT
+  trap '_wizard_on_write_signal TERM' TERM
   if [ -n "${ANSWERS[curseforge_pack]-}" ] || [ -n "${ANSWERS[curseforge_key]-}" ]; then
-    config_write_curseforge "$SCRIPT_DIR/src/setup/download/json/curseforge_variables.json" || exit 1
-    wrote_curseforge=true
+    config_write_curseforge "$cf_path" || { _wizard_write_guard_end; exit 1; }
+    _WZ_CF_FILE="$cf_path"
   fi
-  if ! config_write "$SCRIPT_DIR/variables.json"; then
-    if [ "$wrote_curseforge" = true ]; then
-      rm -f "$SCRIPT_DIR/src/setup/download/json/curseforge_variables.json"
-    fi
+  _WZ_CFG_FILE="$SCRIPT_DIR/variables.json"
+  if ! config_write "$_WZ_CFG_FILE"; then
+    rm -f -- "$_WZ_CF_FILE"
+    _wizard_write_guard_end
     exit 1
   fi
+  _wizard_write_guard_end
   wizard_apply_flags
 }
 

@@ -181,6 +181,7 @@ interrupt_write() { # signal function out_path
     source "$REPO/src/wizard/manifest.sh"
     source "$REPO/src/wizard/config_writer.sh"
     declare -A ANSWERS=([INSTANCE_NAME]=a [curseforge_pack]=1 [curseforge_key]=k)
+    [ -z "${WITH_EXIT_TRAP:-}" ] || trap 'echo ran > "$T/exit.marker"' EXIT
     "$fn" "$out"
   ) < /dev/null > /dev/null 2>&1 &
   pid=$!
@@ -224,6 +225,40 @@ test_previous_traps_are_restored_after_a_write() {
     trap -p TERM
   )"
   assert_eq "trap -- 'echo mine' SIGINT" "$out" "INT handler restored, TERM left unset"
+}
+
+test_exit_trap_is_kept_after_a_write() {
+  need_jq exit-trap || return 0
+  setup
+  local out fn
+  for fn in config_write config_write_curseforge; do
+    out="$(
+      source "$REPO/src/wizard/manifest.sh"
+      source "$REPO/src/wizard/config_writer.sh"
+      declare -A ANSWERS=([INSTANCE_NAME]=a [curseforge_pack]=1 [curseforge_key]=k)
+      trap 'echo rollback' EXIT
+      trap -p EXIT
+      "$fn" "$T/out/$fn.json" > /dev/null 2>&1
+      trap -p EXIT
+      trap - EXIT
+    )"
+    assert_eq $'trap -- \'echo rollback\' EXIT\ntrap -- \'echo rollback\' EXIT' "$out" "EXIT trap kept across $fn"
+  done
+}
+
+test_exit_trap_still_runs_after_an_interrupted_write() {
+  need_jq exit-trap || return 0
+  local sig fn
+  for sig in INT TERM; do
+    for fn in config_write config_write_curseforge; do
+      (
+        setup
+        WITH_EXIT_TRAP=1 interrupt_write "$sig" "$fn" "$T/out/v.json"
+        assert_exists "$T/exit.marker" "the caller's EXIT trap still ran after $sig in $fn"
+        assert_eq "" "$(ls -A "$T/out")" "no temp files after $sig in $fn"
+      )
+    done
+  done
 }
 
 test_refuses_to_overwrite() {

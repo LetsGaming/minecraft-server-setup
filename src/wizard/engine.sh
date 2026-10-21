@@ -26,11 +26,12 @@ _engine_split() { # record
   done
 }
 
-_engine_when_met() { # when: id=value or id!=value
+_engine_when_met() { # when: id=value or id!=value, split at the first "="
   [ -z "$1" ] && return 0
-  case "$1" in
-    *"!="*) [ "${_ENGINE_BY_ID[${1%%!=*}]-}" != "${1#*!=}" ] ;;
-    *) [ "${_ENGINE_BY_ID[${1%%=*}]-}" = "${1#*=}" ] ;;
+  local lhs="${1%%=*}" rhs="${1#*=}"
+  case "$lhs" in
+    *"!") [ "${_ENGINE_BY_ID[${lhs%!}]-}" != "$rhs" ] ;;
+    *) [ "${_ENGINE_BY_ID[$lhs]-}" = "$rhs" ] ;;
   esac
 }
 
