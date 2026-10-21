@@ -74,29 +74,33 @@ node_install_action() {
 }
 
 _print_nodesource_refusal() {
-  printf '%s
-'     "Node.js $NODE_MIN_MAJOR or newer is required, and this system's own package is too old."     "Installing Node 22 adds the third-party NodeSource apt repository. To allow that, run"     "the setup again with --allow-nodesource, or install Node yourself with:"     ""     "  curl -fsSL $NODESOURCE_SETUP_URL -o nodesource_setup.sh"     "  sudo -E bash nodesource_setup.sh"     "  sudo apt install -y nodejs" >&2
+  {
+    echo "Node.js $NODE_MIN_MAJOR or newer is required, and this system's own package is too old."
+    echo "Installing Node 22 adds the third-party NodeSource apt repository. To allow that, run"
+    echo "the setup again with --allow-nodesource, or install Node yourself with:"
+    echo ""
+    echo "  curl -fsSL $NODESOURCE_SETUP_URL -o nodesource_setup.sh"
+    echo "  sudo -E bash nodesource_setup.sh"
+    echo "  sudo apt install -y nodejs"
+  } >&2
 }
 
 _install_node_from_nodesource() {
-  local script
+  local script rc=0
   script="$(mktemp)"
-  _prereq_run "curl -fsSL $NODESOURCE_SETUP_URL -o \"$script\""
-  _prereq_run "sudo -E bash \"$script\""
+  {
+    _prereq_run "curl -fsSL $NODESOURCE_SETUP_URL -o \"$script\"" &&
+      _prereq_run "sudo -E bash \"$script\"" &&
+      _prereq_run "sudo apt install -y nodejs"
+  } || rc=$?
   rm -f "$script"
-  _prereq_run "sudo apt install -y nodejs"
+  return "$rc"
 }
 
 ensure_prerequisites() { # route
   [ "${PREREQS_DONE:-0}" = 1 ] && return 0
   local route="${1:-default}" action pkg
   local -a missing=()
-
-  action="$(node_install_action)"
-  if [ "$action" = nodesource ] && [ "${ALLOW_NODESOURCE:-false}" != true ]; then
-    _print_nodesource_refusal
-    exit 1
-  fi
 
   if ! command -v sudo > /dev/null 2>&1; then
     echo "Installing sudo..."
@@ -109,6 +113,12 @@ ensure_prerequisites() { # route
   if [ "${MC_SETUP_UPGRADE_SYSTEM:-false}" = true ]; then
     echo "Upgrading all installed packages (MC_SETUP_UPGRADE_SYSTEM=true)..."
     _prereq_run "sudo apt upgrade -y"
+  fi
+
+  action="$(node_install_action)"
+  if [ "$action" = nodesource ] && [ "${ALLOW_NODESOURCE:-false}" != true ]; then
+    _print_nodesource_refusal
+    exit 1
   fi
 
   while IFS= read -r pkg; do
@@ -131,7 +141,7 @@ ensure_prerequisites() { # route
       ;;
     nodesource)
       echo "Installing Node.js 22 from the NodeSource repository..."
-      _install_node_from_nodesource
+      _install_node_from_nodesource || return 1
       command -v npm > /dev/null 2>&1 || _prereq_run "sudo apt install -y npm"
       ;;
   esac

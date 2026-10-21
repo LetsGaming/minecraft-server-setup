@@ -74,16 +74,9 @@ test_main_declares_the_vanilla_flag_and_the_old_script_is_gone() {
 test_install_script_installs_every_prerequisite() {
   setup
   export SHIM_LOG="$T/shim.log"; : > "$SHIM_LOG"
-  printf '#!/bin/bash
-echo "sudo $*" >> "$SHIM_LOG"
-exit 0
-' > "$T/bin/sudo"
-  printf '#!/bin/bash
-exit 0
-' > "$T/bin/npm"
-  printf '#!/bin/bash
-printf "nodejs:\n  Candidate: 20.1.0\n"
-' > "$T/bin/apt-cache"
+  printf '#!/bin/bash\necho "sudo $*" >> "$SHIM_LOG"\nexit 0\n' > "$T/bin/sudo"
+  printf '#!/bin/bash\nexit 0\n' > "$T/bin/npm"
+  printf '#!/bin/bash\nprintf "nodejs:\\n  Candidate: 20.1.0\\n"\n' > "$T/bin/apt-cache"
   chmod +x "$T/bin/sudo" "$T/bin/npm" "$T/bin/apt-cache"
   # PATH holds only the shims, so every tool except npm counts as missing.
   PATH="$T/bin" "$BASH" "$REPO/src/setup/download/download_packages.sh" > /dev/null 2>&1

@@ -139,4 +139,59 @@ test_second_call_is_a_no_op() {
   assert_eq "0" "$(wc -c < "$SHIM_LOG" | tr -d ' ')" "second call runs nothing"
 }
 
+test_node_action_is_decided_after_apt_update() {
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl npm
+  cat > "$BIN/apt-cache" << 'SHIM'
+#!/bin/bash
+updated=false
+while IFS= read -r line; do
+  [[ "$line" == "sudo apt update"* ]] && updated=true
+done < "$SHIM_LOG"
+if [ "$updated" = true ]; then
+  printf 'nodejs:\n  Candidate: 18.19.0\n'
+else
+  printf 'nodejs:\n  Candidate: (none)\n'
+fi
+SHIM
+  chmod +x "$BIN/apt-cache"
+  local out
+  out="$(in_env ensure_prerequisites power)"
+  assert_contains "$out" "rc=0" "no refusal on empty apt lists"
+  assert_logged "sudo apt install -y nodejs npm" "distro package is used"
+  assert_not_logged "nodesource" "no NodeSource command"
+  assert_not_logged "curl " "nothing is downloaded"
+}
+
+test_distro_action_installs_nodejs_and_npm() {
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl
+  shim_candidate 20.11.0
+  in_env ensure_prerequisites power > /dev/null
+  assert_logged "sudo apt install -y nodejs npm" "node and npm come from the distribution"
+}
+
+test_npm_ci_runs_in_the_repo_root() {
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl node
+  shim_node v20.1.0
+  mkdir -p "$T/root"
+  printf '#!/bin/bash\necho "npm $* in $PWD" >> "$SHIM_LOG"\n' > "$BIN/npm"
+  chmod +x "$BIN/npm"
+  local root; root="$(cd "$T/root" && pwd)"
+  SCRIPT_DIR="$root" in_env ensure_prerequisites power > /dev/null
+  assert_logged "npm ci --omit=dev in $root" "npm ci runs from SCRIPT_DIR"
+}
+
+test_failed_nodesource_download_leaves_no_temp_script() {
+  new_env apt sudo systemctl screen unzip cron jq rsync zstd setfacl npm
+  shim_candidate 12.22.9
+  printf '#!/bin/bash\necho "curl $*" >> "$SHIM_LOG"\n: > "${@: -1}"\nexit 22\n' > "$BIN/curl"
+  chmod +x "$BIN/curl"
+  local out script
+  out="$(ALLOW_NODESOURCE=true in_env ensure_prerequisites power)"
+  assert_not_contains "$out" "rc=0" "the failure is reported"
+  script="$(sed -n 's/^curl .* -o //p' "$SHIM_LOG" | head -n 1)"
+  assert_eq "1" "$([ -n "$script" ] && echo 1)" "the download was attempted"
+  assert_missing "$script" "temp script is removed"
+  assert_not_logged "sudo -E bash" "the script is not run"
+}
+
 run_tests
