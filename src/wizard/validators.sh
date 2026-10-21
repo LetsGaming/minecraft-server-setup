@@ -47,6 +47,17 @@ validate_instance_name() { # value
   return 1
 }
 
+validate_instance_unused() { # value
+  local target
+  target="$(jq -r '.TARGET_DIR_NAME // "minecraft-server"' "${SCRIPT_DIR:-.}/variables.example.json" 2>/dev/null | tr -d '\r')" || target=""
+  [ -n "$target" ] || target=minecraft-server
+  if detect_instance_exists "$1" "$target"; then
+    echo "A server named '$1' already exists on this machine. Pick a different name; the existing server is not touched."
+    return 1
+  fi
+  return 0
+}
+
 validate_free_port() { # value
   local msg
   if ! msg="$(validate_port "$1")"; then

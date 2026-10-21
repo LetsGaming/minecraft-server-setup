@@ -27,6 +27,9 @@ load_wizard() {
 # Replies for the guided steps after server_kind when it is not a modpack (11 steps).
 REST_REPLIES=$'0|1.21.4\n0|6G\n0|20\n0|Hello\n0|hard\n1|\n0|optional\n1|\n1|\n0|https://example.com/hook\n1|'
 
+# The same without the Minecraft version step, which a modpack does not ask.
+MODPACK_REST_REPLIES="${REST_REPLIES#*$'\n'}"
+
 # Prints "rc=<n>" then one "key=value" per answer, sorted; extra args are VAR=value exports.
 run_engine() { # route, replies (newline separated), VAR=value...
   local route="$1" replies="$2" out rc=0 key
@@ -128,10 +131,39 @@ test_when_condition_hides_modpack_steps() {
   assert_not_contains "$out" "curseforge_key" "key hidden for fabric"
   assert_not_contains "$out" "curseforge_pack" "pack hidden for fabric"
   setup
-  out="$(run_engine guided $'0|n\n0|modpack\n0|secret-key\n0|123456\n'"$REST_REPLIES")"
+  out="$(run_engine guided $'0|n\n0|modpack\n0|secret-key\n0|123456\n'"$MODPACK_REST_REPLIES")"
   assert_contains "$out" "rc=0" "finished"
   assert_contains "$out" "curseforge_key=secret-key" "key asked for modpack"
   assert_contains "$out" "curseforge_pack=123456" "pack asked for modpack"
+}
+
+test_negated_when_hides_the_minecraft_version_for_modpacks() {
+  setup
+  local out
+  out="$(run_engine guided $'0|n\n0|modpack\n0|k\n0|123456\n'"$MODPACK_REST_REPLIES")"
+  assert_contains "$out" "rc=0" "finished with one step fewer"
+  assert_not_contains "$out" "JAVA.SERVER.VANILLA.VERSION" "version not asked for a modpack"
+  assert_contains "$out" "memory=6G" "later steps still line up"
+  setup
+  out="$(run_engine guided $'0|n\n0|vanilla\n'"$REST_REPLIES")"
+  assert_contains "$out" "JAVA.SERVER.VANILLA.VERSION=1.21.4" "version asked for vanilla"
+}
+
+test_negated_when_is_generic_and_back_skips_it() {
+  setup
+  local out
+  out="$(
+    load_wizard
+    declare -gA _ENGINE_BY_ID=([server_kind]=modpack)
+    _engine_when_met "server_kind!=modpack" && echo shown-for-modpack
+    _engine_when_met "server_kind!=fabric" && echo shown-for-other
+    _engine_when_met "missing!=x" && echo shown-when-unanswered
+    _engine_when_met "server_kind=modpack" && echo equals-still-works
+  )"
+  assert_eq $'shown-for-other\nshown-when-unanswered\nequals-still-works' "$out" "negated and plain conditions"
+  setup
+  out="$(run_engine guided $'0|n\n0|modpack\n0|k\n0|123456\n1|\n0|777\n'"$MODPACK_REST_REPLIES")"
+  assert_contains "$out" "curseforge_pack=777" "back from memory skipped the hidden version step"
 }
 
 test_changing_kind_back_drops_modpack_answers() {

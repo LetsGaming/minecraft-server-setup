@@ -26,9 +26,12 @@ _engine_split() { # record
   done
 }
 
-_engine_when_met() { # when
+_engine_when_met() { # when: id=value or id!=value
   [ -z "$1" ] && return 0
-  [ "${_ENGINE_BY_ID[${1%%=*}]-}" = "${1#*=}" ]
+  case "$1" in
+    *"!="*) [ "${_ENGINE_BY_ID[${1%%!=*}]-}" != "${1#*!=}" ] ;;
+    *) [ "${_ENGINE_BY_ID[${1%%=*}]-}" = "${1#*=}" ] ;;
+  esac
 }
 
 _engine_default() { # default_spec

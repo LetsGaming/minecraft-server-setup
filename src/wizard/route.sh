@@ -113,21 +113,31 @@ _wizard_confirm_and_write() {
   wizard_apply_flags
 }
 
-run_default_route() {
-  local resolved minecraft dropped notice
+# Sets RESOLVED_MINECRAFT and RESOLVED_DROPPED and records the resolver's notices as
+# corrections. Call it directly, not in $(...).
+RESOLVED_MINECRAFT=""
+RESOLVED_DROPPED=""
+_wizard_resolve_default_version() {
+  local resolved notice
   local -a notices=()
+  resolved="$(_wizard_resolve_version)"
+  RESOLVED_MINECRAFT="$(jq -r '.minecraft' <<< "$resolved" | tr -d '\r')"
+  RESOLVED_DROPPED="$(jq -r '(.dropped // []) | join(",")' <<< "$resolved" | tr -d '\r')"
+  mapfile -t notices < <(jq -r '(.notices // [])[] | if type == "object" then .text else . end' <<< "$resolved" | tr -d '\r')
+  for notice in "${notices[@]}"; do
+    correction_add adjusted "Minecraft version" "latest" "$RESOLVED_MINECRAFT" "$notice"
+  done
+}
+
+run_default_route() {
+  local minecraft dropped
   _wizard_guard_config
   _wizard_target_dir_name
-  resolved="$(_wizard_resolve_version)"
-  minecraft="$(jq -r '.minecraft' <<< "$resolved" | tr -d '\r')"
-  dropped="$(jq -r '(.dropped // []) | join(",")' <<< "$resolved" | tr -d '\r')"
-  mapfile -t notices < <(jq -r '(.notices // [])[] | if type == "object" then .text else . end' <<< "$resolved" | tr -d '\r')
-
   corrections_reset
   declare -gA ANSWERS=()
-  for notice in "${notices[@]}"; do
-    correction_add adjusted "Minecraft version" "latest" "$minecraft" "$notice"
-  done
+  _wizard_resolve_default_version
+  minecraft="$RESOLVED_MINECRAFT"
+  dropped="$RESOLVED_DROPPED"
   choose_instance_name server "$WIZARD_TARGET_DIR_NAME"
   choose_server_port
   choose_heap ""
@@ -166,7 +176,7 @@ _wizard_choose_heap_for() { # size
 }
 
 run_guided_route() {
-  local rc=0
+  local rc=0 typed_version
   _wizard_guard_config
   if ! engine_available; then
     ui_notice info "The guided screens cannot be shown in this terminal, so the quick setup is used instead."
@@ -187,6 +197,16 @@ run_guided_route() {
   esac
 
   _wizard_target_dir_name
+  typed_version="${ANSWERS[JAVA.SERVER.VANILLA.VERSION]-latest}"
+  case "${ANSWERS[server_kind]-}:${typed_version,,}" in
+    fabric:latest | fabric:)
+      _wizard_resolve_default_version
+      ANSWERS[JAVA.SERVER.VANILLA.VERSION]="$RESOLVED_MINECRAFT"
+      if [ -n "$RESOLVED_DROPPED" ]; then
+        ANSWERS[JAVA.SERVER.VANILLA.MODS.EXCLUDE]="$RESOLVED_DROPPED"
+      fi
+      ;;
+  esac
   choose_instance_name "${ANSWERS[INSTANCE_NAME]:-server}" "$WIZARD_TARGET_DIR_NAME"
   _wizard_choose_heap_for "${ANSWERS[memory]:-}"
   choose_server_port
