@@ -1,0 +1,112 @@
+#!/bin/bash
+# Summary, EULA step, final and failure screens for the Default and Guided routes.
+# Expects ui.sh, corrections.sh, detect.sh and prompts.sh to be sourced, plus the globals
+# ANSWERS, CHOSEN_HEAP_MB, CHOSEN_SERVER_PORT and WIZARD_TARGET_DIR_NAME set by the route.
+
+EULA_URL="https://aka.ms/MinecraftEULA"
+
+_summary_server_type() {
+  case "${ANSWERS[server_kind]-fabric}" in
+    vanilla) echo "Vanilla Minecraft (no mods)" ;;
+    modpack) echo "CurseForge modpack" ;;
+    *) echo "Fabric (supports mods)" ;;
+  esac
+}
+
+_summary_mod_groups() {
+  case "${ANSWERS[server_kind]-fabric}" in
+    vanilla) echo "none" ;;
+    modpack) echo "as defined by the modpack" ;;
+    *)
+      local groups="performance and utility"
+      case " ${ANSWERS[optional_mods]-} " in *" optional "*) groups="$groups, optional" ;; esac
+      echo "$groups"
+      ;;
+  esac
+}
+
+_summary_onoff() { # value-that-means-on
+  if [ "$1" = true ]; then echo "on"; else echo "off"; fi
+}
+
+summary_render() {
+  local service backups
+  service=on
+  [ "${NO_SERVICE:-false}" != true ] || service=off
+  backups="$(_summary_onoff "${ANSWERS[backups]-true}")"
+  [ "${NO_BACKUP:-false}" != true ] || backups=off
+
+  echo
+  echo "Here is what will be set up:"
+  printf '  %-20s %s\n' "Server name:" "${ANSWERS[INSTANCE_NAME]-}"
+  printf '  %-20s %s\n' "Server type:" "$(_summary_server_type)"
+  if [ "${ANSWERS[server_kind]-fabric}" != modpack ]; then
+    printf '  %-20s %s\n' "Minecraft version:" "${ANSWERS[JAVA.SERVER.VANILLA.VERSION]-latest}"
+  fi
+  printf '  %-20s %s MB\n' "Memory:" "${CHOSEN_HEAP_MB-}"
+  printf '  %-20s %s\n' "Port:" "${CHOSEN_SERVER_PORT-}"
+  printf '  %-20s %s\n' "Mod groups:" "$(_summary_mod_groups)"
+  printf '  %-20s %s\n' "Start at boot:" "$service"
+  printf '  %-20s %s\n' "Backups:" "$backups"
+  printf '  %-20s %s\n' "Scheduled restarts:" "$(_summary_onoff "${ANSWERS[RESTART_SCHEDULE.ENABLED]-false}")"
+  printf '  %-20s %s\n' "Management API:" "$(_summary_onoff "${ANSWERS[API_SERVER.ENABLED]-false}")"
+
+  if [ "$(corrections_count)" -gt 0 ]; then
+    echo
+    echo "Things that were changed or need your attention:"
+    corrections_render
+  fi
+  echo
+
+  if ! ui_is_interactive && [ "${EULA:-false}" = true ]; then
+    return 0
+  fi
+  ask_yes_no "Continue with this setup?"
+}
+
+eula_confirm() {
+  echo
+  echo "Running a Minecraft server requires accepting the Minecraft EULA:"
+  echo "  $EULA_URL"
+  if [ "${EULA:-false}" = true ]; then
+    echo "The EULA was accepted with --agree-eula."
+    return 0
+  fi
+  ask_yes_no "Do you accept the Minecraft EULA?"
+}
+
+final_screen() {
+  local name="${ANSWERS[INSTANCE_NAME]-}" port="${CHOSEN_SERVER_PORT:-25565}" ip
+  ip="$(detect_local_ip || true)"
+
+  echo
+  echo "Your server is set up."
+  echo "  Location: $HOME/${WIZARD_TARGET_DIR_NAME:-minecraft-server}/instances/$name"
+  echo
+  echo "How to join:"
+  if [ -n "$ip" ]; then
+    echo "  On the same network: use the address $ip and port $port."
+  else
+    echo "  On the same network: use this machine's local address and port $port."
+  fi
+  echo "  Friends elsewhere: the router must forward TCP port $port to this machine, and they"
+  echo "  need your public address or a dynamic-DNS name. This tool did not configure the router."
+  echo "  To check, look up \"port forwarding\" in your router's settings, then test the public"
+  echo "  address from outside your home network."
+
+  if [ "$(corrections_count)" -gt 0 ]; then
+    echo
+    echo "Changes made for you during setup:"
+    corrections_render
+  fi
+}
+
+_FAILURE_NOTE_PRINTED=false
+
+failure_screen() {
+  [ "$_FAILURE_NOTE_PRINTED" != true ] || return 0
+  case "${ROUTE:-}" in default | guided) ;; *) return 0 ;; esac
+  [ -f "${SCRIPT_DIR:-.}/variables.json" ] || return 0
+  _FAILURE_NOTE_PRINTED=true
+  echo "Your answers are saved in variables.json. Run again to retry, or delete it to start over."
+}
