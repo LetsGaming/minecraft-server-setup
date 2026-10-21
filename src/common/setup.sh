@@ -116,12 +116,13 @@ run_server_setup() {
 }
 
 run_post_mod_config() {
-  local instance_dir="$MAIN_DIR/$TARGET_DIR_NAME/instances/$INSTANCE_NAME" jar found=false
+  local instance_dir="$MAIN_DIR/$TARGET_DIR_NAME/instances/$INSTANCE_NAME" jar found=false globs
+  globs=$(shopt -p nullglob nocaseglob || true)
   shopt -s nullglob nocaseglob
   for jar in "$instance_dir"/mods/xaerominimap*.jar "$instance_dir"/mods/xaeroworldmap*.jar; do
     [[ -f "$jar" ]] && found=true
   done
-  shopt -u nullglob nocaseglob
+  eval "$globs"
   [[ "$found" = true ]] || return 0
 
   log "Patching Xaero config keys..."

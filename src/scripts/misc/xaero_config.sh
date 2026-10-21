@@ -33,69 +33,71 @@ applies() { # server_dir prefixes
   return 1
 }
 
-key_re() { printf '^[[:space:]]*%s[[:space:]]*=' "$1"; }
+# Splits a key line into prefix (through the equals sign and blanks), the value
+# token and whatever follows it (blanks, a comment, a carriage return).
+line_re() { printf '^([[:space:]]*%s[[:space:]]*=[[:space:]]*)([^[:space:]#]*)(.*)$' "$1"; }
 
-# Prints the value of the first line holding the key, without surrounding blanks.
+# Prints the value of the first line holding the key.
 read_value() { # file key
   local line re
-  re="$(key_re "$2")"
+  re="$(line_re "$2")"
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" =~ $re ]]; then
-      line="${line#*=}"
-      line="${line%$'\r'}"
-      line="${line#"${line%%[![:space:]]*}"}"
-      printf '%s' "${line%"${line##*[![:space:]]}"}"
+      printf '%s' "${BASH_REMATCH[2]}"
       return 0
     fi
   done < "$1"
   return 1
 }
 
-# Rewrites the file into $3 with the key set to the value.
+# Rewrites the file into $4 with the first line of the key set to the value.
+# Returns non-zero when any write fails.
 render() { # file key value out
   local file="$1" key="$2" value="$3" out="$4"
   local line re eol=$'\n' found=false last_nl=true crlf=false
-  re="$(key_re "$key")"
-  local prefix_re="^([[:space:]]*${key}[[:space:]]*=[[:space:]]*)"
-  : > "$out"
+  re="$(line_re "$key")"
+  : > "$out" || return 1
   while IFS= read -r line || { [[ -n "$line" ]] && last_nl=false; }; do
     [[ "$line" == *$'\r' ]] && crlf=true
-    if [[ "$line" =~ $re ]]; then
-      [[ "$line" =~ $prefix_re ]]
+    if ! $found && [[ "$line" =~ $re ]]; then
       found=true
-      local cr=""
-      [[ "$line" == *$'\r' ]] && cr=$'\r'
-      line="${BASH_REMATCH[1]}${value}${cr}"
+      line="${BASH_REMATCH[1]}${value}${BASH_REMATCH[3]}"
     fi
-    printf '%s' "$line" >> "$out"
-    $last_nl && printf '\n' >> "$out"
+    printf '%s' "$line" >> "$out" || return 1
+    if $last_nl; then printf '\n' >> "$out" || return 1; fi
   done < "$file"
   if ! $found; then
     $crlf && eol=$'\r\n'
-    if ! $last_nl; then printf '%s' "$eol" >> "$out"; fi
-    printf '%s = %s%s' "$key" "$value" "$eol" >> "$out"
+    if ! $last_nl; then printf '%s' "$eol" >> "$out" || return 1; fi
+    printf '%s = %s%s' "$key" "$value" "$eol" >> "$out" || return 1
   fi
+  return 0
 }
 
+CURRENT_TMP=""
+cleanup_tmp() { [[ -n "$CURRENT_TMP" ]] && rm -f "$CURRENT_TMP"; return 0; }
+
 apply_key() { # file key value
-  local file="$1" key="$2" value="$3" dir tmp
+  local file="$1" key="$2" value="$3" dir
   dir="$(dirname "$file")"
   mkdir -p "$dir" || return 1
+  CURRENT_TMP="$(mktemp "$dir/.xaero_config.XXXXXX")" || { CURRENT_TMP=""; return 1; }
   if [[ ! -f "$file" ]]; then
-    printf '%s = %s\n' "$key" "$value" > "$file"
-    return
-  fi
-  tmp="$(mktemp "$dir/.xaero_config.XXXXXX")" || return 1
-  # cp -p carries the mode over; the redirects below keep it.
-  if ! cp -p "$file" "$tmp" || ! render "$file" "$key" "$value" "$tmp"; then
-    rm -f "$tmp"
-    return 1
-  fi
-  if cmp -s "$file" "$tmp"; then
-    rm -f "$tmp"
+    chmod "$(printf '%o' $((0666 & ~$(umask))))" "$CURRENT_TMP" 2> /dev/null
+    printf '%s = %s\n' "$key" "$value" > "$CURRENT_TMP" || { cleanup_tmp; CURRENT_TMP=""; return 1; }
   else
-    mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    # cp -p carries the mode over; the redirects in render keep it.
+    if ! cp -p "$file" "$CURRENT_TMP" || ! render "$file" "$key" "$value" "$CURRENT_TMP"; then
+      cleanup_tmp; CURRENT_TMP=""
+      return 1
+    fi
+    if cmp -s "$file" "$CURRENT_TMP"; then
+      cleanup_tmp; CURRENT_TMP=""
+      return 0
+    fi
   fi
+  mv -f "$CURRENT_TMP" "$file" || { cleanup_tmp; CURRENT_TMP=""; return 1; }
+  CURRENT_TMP=""
 }
 
 cmd_apply() {
@@ -131,6 +133,9 @@ cmd_check() {
 }
 
 main() {
+  trap cleanup_tmp EXIT
+  trap 'cleanup_tmp; exit 130' INT
+  trap 'cleanup_tmp; exit 143' TERM
   if [[ $# -ne 2 || ! -d "$2" ]]; then
     echo "Usage: xaero_config.sh apply|check <server_dir>" >&2
     return 2
@@ -142,4 +147,4 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

@@ -171,4 +171,122 @@ test_post_mod_config_failure_only_warns() {
   assert_contains "$out" "rc=0" "failure is not fatal"
 }
 
+test_empty_file_gets_the_key() {
+  setup; both_jars
+  mkdir -p "$S/config/xaero/lib"
+  : > "$S/$LIB"
+  apply
+  assert_file_content "$S/$LIB" "everyone_tracks_everyone = true" "key added to an empty file"
+}
+
+test_commented_key_is_not_the_key() {
+  setup; both_jars
+  mkdir -p "$S/config/xaero/lib"
+  printf '# everyone_tracks_everyone = false\n' > "$S/$LIB"
+  apply
+  assert_eq $'# everyone_tracks_everyone = false\neveryone_tracks_everyone = true' "$(cat "$S/$LIB")" "comment kept, real key appended"
+}
+
+test_key_name_prefix_cases() {
+  setup; both_jars
+  mkdir -p "$S/config/xaero/world-map" "$S/config/xaero/minimap"
+  printf 'register_minimap_status_effects = false\n' > "$S/$MAP"
+  printf 'register_minimap_status_effects = true\n' > "$S/$MINI"
+  apply
+  assert_eq $'register_minimap_status_effects = false\nregister_status_effects = false' "$(cat "$S/$MAP")" "world map file gets its own key"
+  assert_eq "register_minimap_status_effects = false" "$(cat "$S/$MINI")" "minimap file only has its key patched"
+}
+
+test_last_line_without_newline_is_replaced() {
+  setup; both_jars
+  mkdir -p "$S/config/xaero/lib"
+  printf 'a = 1\neveryone_tracks_everyone = false' > "$S/$LIB"
+  apply
+  assert_eq "$(printf 'a = 1\neveryone_tracks_everyone = true' | md5sum)" "$(md5sum < "$S/$LIB")" "no newline added at the end"
+}
+
+test_mixed_line_endings_preserved() {
+  setup; both_jars
+  mkdir -p "$S/config/xaero/lib"
+  printf 'a = 1\r\neveryone_tracks_everyone = false\nb = 2\r\n' > "$S/$LIB"
+  apply
+  assert_eq "$(printf 'a = 1\r\neveryone_tracks_everyone = true\nb = 2\r\n' | md5sum)" "$(md5sum < "$S/$LIB")" "each line keeps its own ending"
+}
+
+test_server_dir_with_spaces() {
+  setup
+  S="$T/my server dir"
+  mkdir -p "$S/mods"
+  both_jars
+  apply
+  assert_file_content "$S/$MAP" "register_status_effects = false" "created under a path with spaces"
+  assert_rc 0 "$(check > /dev/null; echo $?)" "check works there too"
+}
+
+test_trailing_text_after_value_kept_and_first_match_only() {
+  setup; both_jars
+  mkdir -p "$S/config/xaero/lib"
+  printf 'everyone_tracks_everyone = false # note\neveryone_tracks_everyone = false\n' > "$S/$LIB"
+  apply
+  assert_eq $'everyone_tracks_everyone = true # note\neveryone_tracks_everyone = false' "$(cat "$S/$LIB")" "inline comment kept, duplicate left alone"
+  assert_contains "$(check)" "OK $LIB everyone_tracks_everyone" "check reads the first match too"
+}
+
+test_failed_write_leaves_original_and_no_temp() {
+  setup; both_jars
+  mkdir -p "$S/config/xaero/lib" "$S/config/xaero/minimap"
+  printf 'a = 1\neveryone_tracks_everyone = false\n' > "$S/$LIB"
+  local before rc
+  before="$(md5sum < "$S/$LIB")"
+  (
+    source "$SCRIPT"
+    printf() { return 1; }
+    apply_key "$S/$LIB" everyone_tracks_everyone true
+    echo "rc=$?" > "$T/rc"
+    apply_key "$S/$MAP" register_status_effects false
+    echo "rc=$?" >> "$T/rc"
+  )
+  assert_eq "$before" "$(md5sum < "$S/$LIB")" "original untouched after a failed write"
+  assert_eq $'rc=1\nrc=1' "$(cat "$T/rc")" "both failures reported"
+  assert_eq "common.cfg" "$(ls -A "$S/config/xaero/lib")" "no temp file beside the existing file"
+  assert_missing "$S/$MAP" "no file created by a failed creation"
+  assert_eq "" "$(ls -A "$S/config/xaero/world-map" 2> /dev/null)" "no temp file from the failed creation"
+}
+
+# run_post_mod_config edge cases: mods/ absent, dry run, caller's glob options.
+test_post_mod_config_edge_cases() {
+  setup
+  local sd="$T/repo" out
+  mkdir -p "$sd/src/scripts/misc"
+  printf '#!/bin/bash\necho called >> "%s/calls"\n' "$T" > "$sd/src/scripts/misc/xaero_config.sh"
+  mkdir -p "$T/main/target/instances/inst"
+  out="$(
+    source "$REPO/src/common/logging.sh"
+    source <(sed -n '/^run_post_mod_config()/,/^}/p' "$REPO/src/common/setup.sh")
+    SCRIPT_DIR="$sd" MAIN_DIR="$T/main" TARGET_DIR_NAME=target INSTANCE_NAME=inst DRY_RUN=false
+    run_post_mod_config
+    echo "rc=$?"
+  )"
+  assert_contains "$out" "rc=0" "mods/ absent is fine"
+  assert_missing "$T/calls" "mods/ absent: nothing called"
+  mkdir -p "$T/main/target/instances/inst/mods"
+  : > "$T/main/target/instances/inst/mods/xaerominimap-x.jar"
+  out="$(
+    source "$REPO/src/common/logging.sh"
+    source <(sed -n '/^run_post_mod_config()/,/^}/p' "$REPO/src/common/setup.sh")
+    SCRIPT_DIR="$sd" MAIN_DIR="$T/main" TARGET_DIR_NAME=target INSTANCE_NAME=inst DRY_RUN=true
+    run_post_mod_config
+  )"
+  assert_missing "$T/calls" "dry run calls nothing"
+  assert_contains "$out" "[DRY-RUN]" "dry run only echoes"
+  out="$(
+    source "$REPO/src/common/logging.sh"
+    source <(sed -n '/^run_post_mod_config()/,/^}/p' "$REPO/src/common/setup.sh")
+    SCRIPT_DIR="$sd" MAIN_DIR="$T/main" TARGET_DIR_NAME=target INSTANCE_NAME=inst DRY_RUN=true
+    run_post_mod_config > /dev/null
+    shopt nullglob nocaseglob | tr -s ' \t' ' ' | tr '\n' ';'
+  )"
+  assert_eq "nullglob off;nocaseglob off;" "$out" "caller's glob options restored"
+}
+
 run_tests
