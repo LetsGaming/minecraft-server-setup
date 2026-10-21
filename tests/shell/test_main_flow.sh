@@ -25,7 +25,11 @@ printf "nodejs:\n  Candidate: 12.22.9\n"
   printf '#!/bin/bash
 exit 127
 ' > "$T/bin/node"
+  printf '#!/bin/bash\nexit 0\n' > "$T/bin/apt-get"
   chmod +x "$T/bin"/*
+  mkdir -p "$T/systemd"
+  printf 'ID=ubuntu\nID_LIKE=debian\n' > "$T/os-release"
+  export MC_SETUP_SYSTEMD_DIR="$T/systemd" MC_SETUP_OS_RELEASE="$T/os-release"
 }
 
 run_main() { # args...; prints output then rc=<n>

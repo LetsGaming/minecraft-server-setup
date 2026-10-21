@@ -198,7 +198,9 @@ test_verbose_shows_resolver_stderr_on_success() {
 y
 ')"
   assert_not_contains "$out" "resolver chatter" "quiet by default"
-  out="$(VERBOSE=true drive default $'y
+  rm -f "$T/repo/variables.json"
+  export VERBOSE=true
+  out="$(drive default $'y
 y
 ')"
   assert_contains "$out" "resolver chatter" "shown with VERBOSE=true"
@@ -403,7 +405,11 @@ main_setup() {
   printf '#!/bin/bash\n[ "$1" = update ] && exit 0\nexit 100\n' > "$T/bin/apt"
   for tool in curl screen unzip cron rsync zstd setfacl ss npm systemctl service; do printf '#!/bin/bash\nexit 0\n' > "$T/bin/$tool"; done
   printf '#!/bin/bash\nprintf "nodejs:\n  Candidate: 20.1.0\n"\n' > "$T/bin/apt-cache"
+  printf '#!/bin/bash\nexit 0\n' > "$T/bin/apt-get"
   chmod +x "$T/bin"/*
+  mkdir -p "$T/systemd"
+  printf 'ID=ubuntu\n' > "$T/os-release"
+  export MC_SETUP_SYSTEMD_DIR="$T/systemd" MC_SETUP_OS_RELEASE="$T/os-release"
   cat >> "$T/repo/src/common/setup.sh" <<'EOF'
 run_server_setup() { echo "PROBE NO_BACKUP=$NO_BACKUP SETUP_API_SERVER=$SETUP_API_SERVER VANILLA=$VANILLA EULA=$EULA"; [ -z "${PROBE_FAIL:-}" ] || return 3; }
 run_optional_setup() { :; }
