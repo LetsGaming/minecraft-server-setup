@@ -27,14 +27,14 @@ Run it as a normal user with `sudo` rights, not as root. Setup installs whatever
 Which route runs:
 
 - If `variables.json` already exists, or there is no terminal (for example a script or a pipe), the **Power-user** route runs. With no `variables.json` and no terminal, setup creates the file from the example and stops with instructions, as before.
-- Otherwise you choose between Default and Guided on the first screen, with Default preselected.
-- `--default` and `--guided` pick a route directly. `--default` without a terminal also needs `--agree-eula`, because the EULA is never accepted silently. `--guided` needs a terminal.
+- Otherwise you choose between Default and Guided on the first screen (a plain-text prompt where "Quick setup (recommended)" is the Default route and "Guided setup" is the Guided route), with Default preselected.
+- `--default` and `--guided` pick a route directly. `--default` without a terminal also needs `--agree-eula`, because the EULA is never accepted silently. `--guided` needs a terminal. Both flags need that there is no `variables.json` yet and stop with a message if one exists. A plain `bash main.sh` reuses an existing `variables.json` (the Power-user route), which is also how a failed install is retried.
 - Default and Guided both finish by writing a `variables.json`, so the next run uses the Power-user route with the same choices. If an install fails, that file stays: run again to retry, or delete it to start over.
 - Setup never overwrites an existing instance. If the name `server` is taken, the Default route uses the next free name (`server-2`, `server-3`, ...) and tells you.
 
 ## Reaching your server from outside your network
 
-Setup does not configure your router and cannot tell whether it is configured. At the end it prints this notice with the actual port and the machine's local address.
+Setup does not configure your router and cannot tell whether it is configured. At the end of the Default and Guided routes it prints this notice with the actual port and the machine's local address. The Power-user route does not print it: there the port is `JAVA.SERVER.PORT` (25565 by default).
 
 - **Friends on the same network** join with the machine's local address and the server port.
 - **Friends elsewhere** need two things: your router must forward the server's TCP port to this machine, and they need your public address or a dynamic-DNS name. The port is 25565 unless that port was already in use, in which case setup picks the next free one and prints it. Look for "port forwarding" in your router's settings, then test the public address from outside your home network.
@@ -146,10 +146,10 @@ Both mods are optional on the client, and the suite never installs XaeroPlus. Wh
 | `minimap/common.cfg` | `register_minimap_status_effects` | `false` |
 | `world-map/common.cfg` | `register_status_effects` | `false` |
 
-Only these lines are touched; a missing file is created containing only the key line. They are checked again after mod updates, and `manage.sh doctor` reports a missing or changed key. To apply them again by hand:
+Each line is written only when its mod is present: the minimap line when the Minimap jar is in `mods/`, the world-map line when the World Map jar is, and the `lib` line when either is. Only these lines are touched; a missing file is created containing only the key line. They are checked again after mod updates, and `manage.sh doctor` reports a missing or changed key. To apply them again by hand:
 
 ```bash
-bash <scripts>/misc/xaero_config.sh apply <server_dir>
+bash <target>/scripts/<instance>/misc/xaero_config.sh apply <server_dir>
 ```
 
 Restart the server afterwards for the change to take effect.
@@ -168,13 +168,13 @@ For modpack setup, also configure:
 ### Setup
 
 ```bash
-# First time: one command, setup installs what is missing and asks what it needs
+# First time, as the user who will own the server: setup installs what is missing and asks what it needs
 bash main.sh
 
-# Validate everything first (Power-user route, recommended)
+# Read-only check of config, tools and disk space (separate from the three routes)
 sudo -u <user> bash main.sh --check
 
-# Modpack server (Power-user route; the Guided route can also set one up)
+# Power-user route: run setup from your own variables.json (modpack server; use sudo -u <user> to run it as another user)
 sudo -u <user> bash main.sh
 
 # Vanilla/Fabric server
