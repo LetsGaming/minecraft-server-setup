@@ -14,6 +14,7 @@ setup() {
 #!/bin/bash
 echo "jq $*" >> "$SHIM_LOG"
 [ -z "${JQ_SHIM_FAIL:-}" ] || exit 1
+[ -z "${JQ_SHIM_SLEEP:-}" ] || { : > "$JQ_SHIM_SLEEP"; sleep 3; }
 exec "$REAL_JQ" "$@"
 SHIM
   chmod +x "$T/bin/jq"
@@ -168,6 +169,61 @@ test_atomic_write_leaves_no_partial_file_on_failure() {
   assert_nonzero "$rc" "failure reported"
   assert_missing "$T/out/v.json" "no output"
   assert_eq "" "$(ls -A "$T/out")" "no temp files left"
+}
+
+# Starts config_write (or config_write_curseforge) in the background while a jq shim stalls
+# it, sends the signal, and waits for the process to end.
+interrupt_write() { # signal function out_path
+  local sig="$1" fn="$2" out="$3" pid i
+  set -m
+  (
+    export JQ_SHIM_SLEEP="$T/jq.started"
+    source "$REPO/src/wizard/manifest.sh"
+    source "$REPO/src/wizard/config_writer.sh"
+    declare -A ANSWERS=([INSTANCE_NAME]=a [curseforge_pack]=1 [curseforge_key]=k)
+    "$fn" "$out"
+  ) < /dev/null > /dev/null 2>&1 &
+  pid=$!
+  set +m
+  for ((i = 0; i < 100; i++)); do
+    [ -e "$T/jq.started" ] && break
+    sleep 0.1
+  done
+  kill -s "$sig" "$pid" 2> /dev/null
+  wait "$pid" 2> /dev/null
+  return 0
+}
+
+test_interrupt_mid_write_removes_every_temp_file() {
+  need_jq interrupt || return 0
+  local sig fn
+  for sig in INT TERM; do
+    for fn in config_write config_write_curseforge; do
+      (
+        setup
+        interrupt_write "$sig" "$fn" "$T/out/v.json"
+        assert_exists "$T/jq.started" "$fn was stalled mid-write ($sig)"
+        assert_missing "$T/out/v.json" "no output after $sig in $fn"
+        assert_eq "" "$(ls -A "$T/out")" "no temp files after $sig in $fn"
+      )
+    done
+  done
+}
+
+test_previous_traps_are_restored_after_a_write() {
+  need_jq traps || return 0
+  setup
+  local out
+  out="$(
+    source "$REPO/src/wizard/manifest.sh"
+    source "$REPO/src/wizard/config_writer.sh"
+    declare -A ANSWERS=([INSTANCE_NAME]=a)
+    trap 'echo mine' INT
+    config_write "$T/out/v.json" > /dev/null 2>&1
+    trap -p INT
+    trap -p TERM
+  )"
+  assert_eq "trap -- 'echo mine' SIGINT" "$out" "INT handler restored, TERM left unset"
 }
 
 test_refuses_to_overwrite() {

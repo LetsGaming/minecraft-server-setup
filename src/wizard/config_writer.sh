@@ -33,6 +33,40 @@ _cw_has_tag() { # list tag
   case " ${1//[,\"]/ } " in *" $2 "*) return 0 ;; *) return 1 ;; esac
 }
 
+# Interrupt guard: removes every temp file of the running write on INT or TERM, then lets
+# the previously installed handler (or the default action) see the signal.
+_CW_TMP=""
+_CW_OLD_INT=""
+_CW_OLD_TERM=""
+_CW_OLD_UMASK=""
+
+_cw_cleanup_temps() {
+  rm -f -- "$_CW_TMP" "${_CW_ASSIGN:-}"
+  _CW_TMP=""
+  unset _CW_ASSIGN
+}
+
+_cw_guard_begin() {
+  _CW_OLD_INT="$(trap -p INT)"
+  _CW_OLD_TERM="$(trap -p TERM)"
+  trap '_cw_on_signal INT' INT
+  trap '_cw_on_signal TERM' TERM
+}
+
+_cw_guard_end() {
+  trap - INT TERM
+  [ -z "$_CW_OLD_INT" ] || eval "$_CW_OLD_INT"
+  [ -z "$_CW_OLD_TERM" ] || eval "$_CW_OLD_TERM"
+}
+
+_cw_on_signal() { # signal
+  _cw_cleanup_temps
+  [ -z "$_CW_OLD_UMASK" ] || umask "$_CW_OLD_UMASK"
+  _cw_guard_end
+  kill -s "$1" "$BASHPID"
+  case "$1" in INT) exit 130 ;; *) exit 143 ;; esac
+}
+
 _cw_check_target() { # out_path
   if [ -e "$1" ] || [ -L "$1" ]; then
     echo "Refusing to overwrite existing file: $1" >&2
@@ -43,7 +77,7 @@ _cw_check_target() { # out_path
 
 config_write() { # out_path
   local out="$1" example="${SCRIPT_DIR:-.}/variables.example.json"
-  local dir tmp key type value kind old_umask rc=0
+  local dir key type value kind old_umask rc=0
   local -A types=() generated=(
     [JAVA.SERVER.PORT]=number
     [JAVA.SERVER.VANILLA.MODS.EXCLUDE]=list
@@ -55,8 +89,10 @@ config_write() { # out_path
 
   old_umask="$(umask)"
   umask 077
-  tmp="$(mktemp "$dir/.variables.json.XXXXXX")" || { umask "$old_umask"; return 1; }
-  _CW_ASSIGN="$(mktemp "$dir/.variables.assign.XXXXXX")" || { rm -f "$tmp"; umask "$old_umask"; return 1; }
+  _CW_OLD_UMASK="$old_umask"
+  _cw_guard_begin
+  _CW_TMP="$(mktemp "$dir/.variables.json.XXXXXX")" || { _cw_guard_end; umask "$old_umask"; return 1; }
+  _CW_ASSIGN="$(mktemp "$dir/.variables.assign.XXXXXX")" || { _cw_cleanup_temps; _cw_guard_end; umask "$old_umask"; return 1; }
 
   while IFS=$'\t' read -r key type; do types["$key"]="$type"; done < <(_cw_types)
 
@@ -91,8 +127,8 @@ config_write() { # out_path
     if [ "${ANSWERS[API_SERVER.ENABLED]-}" = true ]; then
       value="$(_cw_rand_hex 32)"
       if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
-        rm -f "$_CW_ASSIGN" "$tmp"
-        unset _CW_ASSIGN
+        _cw_cleanup_temps
+        _cw_guard_end
         umask "$old_umask"
         echo "Could not generate an API key." >&2
         return 1
@@ -111,32 +147,38 @@ config_write() { # out_path
       else $v end;
     reduce ($ans | split("\n")[] | select(length > 0) | split("\t")) as $r
       (.; setpath($r[0] | split("."); conv($r[1]; $r[2:] | join("\t"))))
-  ' "$example" > "$tmp" && jq -e . "$tmp" > /dev/null || rc=1
+  ' "$example" > "$_CW_TMP" && jq -e . "$_CW_TMP" > /dev/null || rc=1
 
   rm -f "$_CW_ASSIGN"
   unset _CW_ASSIGN
   if [ "$rc" -eq 0 ]; then
-    mv "$tmp" "$out" || rc=1
+    mv "$_CW_TMP" "$out" || rc=1
   fi
-  [ "$rc" -eq 0 ] || { rm -f "$tmp"; echo "Could not write $out" >&2; }
+  [ "$rc" -eq 0 ] || { _cw_cleanup_temps; echo "Could not write $out" >&2; }
+  _CW_TMP=""
+  _cw_guard_end
   umask "$old_umask"
   return "$rc"
 }
 
 config_write_curseforge() { # out_path
-  local out="$1" dir tmp rc=0 old_umask
+  local out="$1" dir rc=0 old_umask
   [ -n "${ANSWERS[curseforge_pack]-}" ] || [ -n "${ANSWERS[curseforge_key]-}" ] || return 0
   _cw_check_target "$out" || return 1
   dir="$(dirname "$out")"
   old_umask="$(umask)"
   umask 077
-  tmp="$(mktemp "$dir/.curseforge.json.XXXXXX")" || { umask "$old_umask"; return 1; }
+  _CW_OLD_UMASK="$old_umask"
+  _cw_guard_begin
+  _CW_TMP="$(mktemp "$dir/.curseforge.json.XXXXXX")" || { _cw_guard_end; umask "$old_umask"; return 1; }
   CW_PACK="${ANSWERS[curseforge_pack]-}" CW_KEY="${ANSWERS[curseforge_key]-}" \
-    jq -n '{pack_id: $ENV.CW_PACK, api_key: $ENV.CW_KEY}' > "$tmp" && jq -e . "$tmp" > /dev/null || rc=1
+    jq -n '{pack_id: $ENV.CW_PACK, api_key: $ENV.CW_KEY}' > "$_CW_TMP" && jq -e . "$_CW_TMP" > /dev/null || rc=1
   if [ "$rc" -eq 0 ]; then
-    mv "$tmp" "$out" || rc=1
+    mv "$_CW_TMP" "$out" || rc=1
   fi
-  [ "$rc" -eq 0 ] || { rm -f "$tmp"; echo "Could not write $out" >&2; }
+  [ "$rc" -eq 0 ] || { _cw_cleanup_temps; echo "Could not write $out" >&2; }
+  _CW_TMP=""
+  _cw_guard_end
   umask "$old_umask"
   return "$rc"
 }
