@@ -11,6 +11,8 @@ const GROUPS = ["performance", "utility", "optional"];
 const DEFAULT_GROUPS = ["performance", "utility"];
 const DEFAULT_LOOKBACK = 3;
 const LOADER = "fabric";
+const REQUEST_TIMEOUT_MS = 15000;
+const TIMEOUT_CODES = new Set(["ECONNABORTED", "ETIMEDOUT"]);
 
 function parseSlugs(text) {
   return String(text)
@@ -45,20 +47,40 @@ async function fetchModVersions(slug, get) {
   }
 }
 
+function asTimeoutError(err) {
+  if (TIMEOUT_CODES.has(err?.code) || /timeout/i.test(err?.message || "")) {
+    return new Error("A request timed out; check your internet connection and try again.");
+  }
+  return err;
+}
+
 /**
- * @param {{ slugs: string[], lookback?: number, deps?: { fetchManifest?: Function, get?: Function } }} opts
+ * @param {{ slugs: string[], lookback?: number, version?: string, deps?: { fetchManifest?: Function, get?: Function } }} opts
  * @returns {Promise<{ minecraft: string, notices: Array<{severity: string, text: string}>, dropped: string[] }>}
  */
-async function resolveDefaultVersion({ slugs, lookback = DEFAULT_LOOKBACK, deps = {} }) {
-  const getManifest = deps.fetchManifest || fetchManifest;
-  const get = deps.get || ((url) => axios.get(url));
+async function resolveDefaultVersion(opts) {
+  try {
+    return await resolveVersion(opts);
+  } catch (err) {
+    throw asTimeoutError(err);
+  }
+}
 
-  const manifest = await getManifest();
-  const candidates = manifest.versions
-    .filter((v) => v.type === "release")
-    .slice(0, lookback)
-    .map((v) => v.id);
-  if (candidates.length === 0) throw new Error("The Mojang manifest lists no release versions.");
+async function resolveVersion({ slugs, lookback = DEFAULT_LOOKBACK, version, deps = {} }) {
+  const getManifest = deps.fetchManifest || (() => fetchManifest({ timeout: REQUEST_TIMEOUT_MS }));
+  const get = deps.get || ((url) => axios.get(url, { timeout: REQUEST_TIMEOUT_MS }));
+
+  let candidates;
+  if (version) {
+    candidates = [version];
+  } else {
+    const manifest = await getManifest();
+    candidates = manifest.versions
+      .filter((v) => v.type === "release")
+      .slice(0, lookback)
+      .map((v) => v.id);
+    if (candidates.length === 0) throw new Error("The Mojang manifest lists no release versions.");
+  }
 
   const fabricGames = (await get(FABRIC_GAME_URL)).data || [];
   const fabricStable = new Set(fabricGames.filter((g) => g.stable).map((g) => g.version));
@@ -74,13 +96,24 @@ async function resolveDefaultVersion({ slugs, lookback = DEFAULT_LOOKBACK, deps 
 
   const usable = evaluated.filter((c) => c.fabric);
   if (usable.length === 0) {
-    throw new Error(`Fabric has no stable loader for any of: ${candidates.join(", ")}.`);
+    throw new Error(
+      version
+        ? `Fabric has no stable loader for Minecraft ${version}.`
+        : `Fabric has no stable loader for any of: ${candidates.join(", ")}.`,
+    );
   }
 
   let chosen = usable.find((c) => c.missing.length === 0);
   const notices = [];
   let dropped = [];
-  if (!chosen) {
+  if (!chosen && version) {
+    chosen = usable[0];
+    dropped = chosen.missing;
+    notices.push({
+      severity: "adjusted",
+      text: `These mods have no build for Minecraft ${version} and are excluded: ${dropped.join(", ")}.`,
+    });
+  } else if (!chosen) {
     chosen = usable.reduce((best, c) => (c.missing.length < best.missing.length ? c : best));
     dropped = chosen.missing;
     notices.push({
@@ -119,6 +152,9 @@ function parseArgs(argv) {
       if (!Number.isInteger(opts.lookback) || opts.lookback < 1) {
         throw new Error(`--lookback must be a positive whole number, got "${raw}".`);
       }
+    } else if (arg === "--version") {
+      opts.version = value().trim();
+      if (!opts.version) throw new Error("--version needs a value.");
     } else {
       throw new Error(`Unknown argument ${arg}.`);
     }
@@ -129,7 +165,7 @@ function parseArgs(argv) {
 async function main(argv) {
   const opts = parseArgs(argv);
   const slugs = readGroupSlugs(opts.groups);
-  const result = await resolveDefaultVersion({ slugs, lookback: opts.lookback });
+  const result = await resolveDefaultVersion({ slugs, lookback: opts.lookback, version: opts.version });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 

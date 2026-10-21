@@ -11,7 +11,15 @@ setup() {
   mkdir -p "$T/repo/src/setup/download/json" "$T/bin" "$T/home" "$T/state"
   cp "$REPO/variables.example.json" "$T/repo/"
   cp "$HERE"/shims/{ss,ip,whiptail} "$T/bin/"
-  printf '#!/bin/bash\n[ "$1" = -v ] && { echo v20.1.0; exit 0; }\nif [ -n "${NODE_SHIM_RC:-}" ]; then exit "$NODE_SHIM_RC"; fi\nprintf "%%s\\n" "$NODE_SHIM_OUT"\n' > "$T/bin/node"
+  cat > "$T/bin/node" <<'SHIM'
+#!/bin/bash
+[ "$1" = -v ] && { echo v20.1.0; exit 0; }
+echo "node $*" >> "${SHIM_LOG:-/dev/null}"
+[ -z "${NODE_SHIM_ERR:-}" ] || echo "$NODE_SHIM_ERR" >&2
+if [ -n "${NODE_SHIM_RC:-}" ]; then exit "$NODE_SHIM_RC"; fi
+printf '%s
+' "$NODE_SHIM_OUT"
+SHIM
   chmod +x "$T/bin"/*
   printf 'MemAvailable:    8388608 kB\n' > "$T/meminfo"
   : > "$T/replies"
@@ -31,7 +39,7 @@ EOF
   export SS_SHIM_LISTEN="" IP_SHIM_SRC="192.168.1.50"
   export NODE_SHIM_OUT='{"minecraft":"1.21.4","notices":[],"dropped":[]}'
   export TERM=xterm MC_SETUP_FORCE_TTY=1 MC_SETUP_TERM_SIZE="40 120"
-  unset NODE_SHIM_RC WHIPTAIL_SHIM_REPLIES DRIVE_FINAL DRIVE_PRE
+  unset NODE_SHIM_RC NODE_SHIM_ERR VERBOSE WHIPTAIL_SHIM_REPLIES DRIVE_FINAL DRIVE_PRE
   EULA=false
   : > "$SHIM_LOG"
 }
@@ -168,6 +176,32 @@ test_existing_variables_json_is_never_overwritten() {
   out="$(drive guided $'y\ny\n')"
   assert_contains "$out" "rc=1" "guided is guarded as well"
   assert_file_content "$T/repo/variables.json" '{"keep":"me"}' "file still untouched"
+}
+
+test_resolver_failure_shows_the_resolver_message() {
+  setup
+  export NODE_SHIM_RC=1 NODE_SHIM_ERR="resolve_default_version: A request timed out; check your internet connection and try again."
+  local out
+  out="$(drive default $'y
+y
+')"
+  assert_contains "$out" "A request timed out" "resolver message is shown"
+  assert_contains "$out" "rc=1" "exit 1"
+  assert_missing "$T/repo/variables.json" "no config"
+}
+
+test_verbose_shows_resolver_stderr_on_success() {
+  setup
+  export NODE_SHIM_ERR="resolver chatter"
+  local out
+  out="$(drive default $'y
+y
+')"
+  assert_not_contains "$out" "resolver chatter" "quiet by default"
+  out="$(VERBOSE=true drive default $'y
+y
+')"
+  assert_contains "$out" "resolver chatter" "shown with VERBOSE=true"
 }
 
 test_resolver_failure_aborts_before_changes() {

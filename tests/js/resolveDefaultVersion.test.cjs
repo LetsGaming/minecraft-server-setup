@@ -181,3 +181,42 @@ test("a bad --lookback exits 1", () => {
   assert.equal(r.code, 1);
   assert.match(r.stderr, /--lookback/);
 });
+
+test("a request timeout is a one-line error, not a no-build result", async () => {
+  const d = deps({ releases: ["26.3"], fabric: ["26.3"], mods: { a: ["26.3"] } });
+  d.get = async () => {
+    throw Object.assign(new Error("timeout of 15000ms exceeded"), { code: "ECONNABORTED" });
+  };
+  await assert.rejects(resolveDefaultVersion({ slugs: ["a"], deps: d }), (err) => {
+    assert.match(err.message, /timed out/);
+    assert.equal(err.message.includes("\n"), false);
+    return true;
+  });
+});
+
+test("--version limits the candidates to that version", async () => {
+  const d = deps({ releases: ["26.3", "26.2"], fabric: ["26.3", "26.2"], mods: { a: ["26.3", "26.2"] } });
+  const result = await resolveDefaultVersion({ slugs: ["a"], version: "26.2", deps: d });
+  assert.deepEqual(result, { minecraft: "26.2", notices: [], dropped: [] });
+});
+
+test("--version drops mods without a build and says so", async () => {
+  const d = deps({ releases: ["26.3"], fabric: ["26.3", "26.2"], mods: { a: ["26.3", "26.2"], b: ["26.3"] } });
+  const result = await resolveDefaultVersion({ slugs: ["a", "b"], version: "26.2", deps: d });
+  assert.equal(result.minecraft, "26.2");
+  assert.deepEqual(result.dropped, ["b"]);
+  assert.equal(result.notices.length, 1);
+  assert.match(result.notices[0].text, /\bb\b/);
+});
+
+test("--version without a Fabric loader fails", async () => {
+  const d = deps({ releases: ["26.3"], fabric: ["26.3"], mods: { a: ["26.3"] } });
+  await assert.rejects(resolveDefaultVersion({ slugs: ["a"], version: "1.2.3", deps: d }), /no stable loader for Minecraft 1\.2\.3/);
+});
+
+test("the CLI accepts --version", () => {
+  const table = cliTable({ releases: ["26.3"], fabric: ["26.3", "26.2"], games: ["26.3", "26.2"] });
+  const r = runCli(table, ["--version", "26.2"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout).minecraft, "26.2");
+});

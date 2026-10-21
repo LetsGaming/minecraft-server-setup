@@ -75,12 +75,20 @@ _wizard_nothing_changed() {
 }
 
 # Prints the resolver's JSON, or exits 1 without having changed anything.
-_wizard_resolve_version() {
-  local out
-  if ! out="$(node "$SCRIPT_DIR/src/setup/download/resolve_default_version.js" 2>/dev/null)" || ! jq -e '.minecraft' <<< "$out" > /dev/null 2>&1; then
+_wizard_resolve_version() { # [resolver args...]
+  local out err_file err
+  err_file="$(mktemp)"
+  if ! out="$(node "$SCRIPT_DIR/src/setup/download/resolve_default_version.js" "$@" 2> "$err_file")" || ! jq -e '.minecraft' <<< "$out" > /dev/null 2>&1; then
+    err="$(cat "$err_file")"
+    rm -f "$err_file"
     ui_notice error "Could not check which Minecraft version works with the default mods; check your internet connection and run again." >&2
+    [ -z "$err" ] || echo "$err" >&2
     exit 1
   fi
+  if [ "${VERBOSE:-false}" = true ] && [ -s "$err_file" ]; then
+    cat "$err_file" >&2
+  fi
+  rm -f "$err_file"
   printf '%s' "$out"
 }
 

@@ -12,7 +12,15 @@ setup() {
   mkdir -p "$T/repo/src/setup/download/json" "$T/bin" "$T/home" "$T/state"
   cp "$REPO/variables.example.json" "$T/repo/"
   cp "$HERE"/shims/{ss,ip,whiptail} "$T/bin/"
-  printf '#!/bin/bash\n[ "$1" = -v ] && { echo v20.1.0; exit 0; }\nif [ -n "${NODE_SHIM_RC:-}" ]; then exit "$NODE_SHIM_RC"; fi\nprintf "%%s\\n" "$NODE_SHIM_OUT"\n' > "$T/bin/node"
+  cat > "$T/bin/node" <<'SHIM'
+#!/bin/bash
+[ "$1" = -v ] && { echo v20.1.0; exit 0; }
+echo "node $*" >> "${SHIM_LOG:-/dev/null}"
+[ -z "${NODE_SHIM_ERR:-}" ] || echo "$NODE_SHIM_ERR" >&2
+if [ -n "${NODE_SHIM_RC:-}" ]; then exit "$NODE_SHIM_RC"; fi
+printf '%s
+' "$NODE_SHIM_OUT"
+SHIM
   chmod +x "$T/bin"/*
   printf 'MemAvailable:    8388608 kB\n' > "$T/meminfo"
 
@@ -30,7 +38,7 @@ EOF
   export NODE_SHIM_OUT='{"minecraft":"1.21.4","notices":[],"dropped":[]}'
   export TERM=xterm MC_SETUP_FORCE_TTY=1 MC_SETUP_TERM_SIZE="40 120"
   export WHIPTAIL_SHIM_REPLIES="$T/replies"
-  unset NODE_SHIM_RC
+  unset NODE_SHIM_RC NODE_SHIM_ERR VERBOSE
   EULA=false
   : > "$SHIM_LOG"
   : > "$T/replies"
