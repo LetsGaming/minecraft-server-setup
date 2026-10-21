@@ -58,8 +58,7 @@ _wt_dims() { # text [list_rows]
 _wt_run() {
   local out rc=0
   out="$(whiptail --output-fd 3 "$@" 3>&1 1>&2)" || rc=$?
-  if [ "$rc" -eq 0 ] && [ -n "$out" ]; then printf '%s
-' "$out"; fi
+  if [ "$rc" -eq 0 ] && [ -n "$out" ]; then printf '%s\n' "$out"; fi
   return "$rc"
 }
 
