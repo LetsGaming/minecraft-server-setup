@@ -3,7 +3,7 @@ set -e
 
 ask_yes_no() {
   while true; do
-    read -r -p "$1 [Y/n]: " yn || { echo; return 1; }
+    read -p "$1 [Y/n]: " yn
     case $yn in
       [Yy]*|"") return 0 ;;
       [Nn]*) return 1 ;;

@@ -59,13 +59,26 @@ summary_print() {
   echo
 }
 
+# Like ask_yes_no, but a failed read (end of input) is a no.
+_summary_confirm() { # question
+  local answer=""
+  while true; do
+    read -r -p "$1 [Y/n]: " answer || { echo; return 1; }
+    case "$answer" in
+      [Yy]* | "") return 0 ;;
+      [Nn]*) return 1 ;;
+      *) echo "Please answer yes or no." ;;
+    esac
+  done
+}
+
 summary_render() {
   summary_print
 
   if ! ui_is_interactive && [ "${EULA:-false}" = true ]; then
     return 0
   fi
-  ask_yes_no "Continue with this setup?"
+  _summary_confirm "Continue with this setup?"
 }
 
 eula_confirm() {
