@@ -1,8 +1,8 @@
 #!/bin/bash
 # SS_SHIM_LISTEN="25565 [::]:25566" reports those listeners for `ss -ltnH` (a bare
 # number means 0.0.0.0:<port>); without it, defers to the real ss.
-[[ -n "${SHIM_LOG:-}" ]] && echo "ss $*" >> "$SHIM_LOG"
 if [[ -n "${SS_SHIM_LISTEN+x}" ]]; then
+  [[ -n "${SHIM_LOG:-}" ]] && echo "ss $*" >> "$SHIM_LOG"
   for entry in $SS_SHIM_LISTEN; do
     if [[ "$entry" == \[* ]]; then
       local_addr="$entry"; peer="[::]:*"

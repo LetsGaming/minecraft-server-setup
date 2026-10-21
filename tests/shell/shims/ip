@@ -1,8 +1,8 @@
 #!/bin/bash
 # IP_SHIM_SRC=<addr> answers `ip route get` with that source address (empty value
 # means no route); without it, defers to the real ip.
-[[ -n "${SHIM_LOG:-}" ]] && echo "ip $*" >> "$SHIM_LOG"
 if [[ -n "${IP_SHIM_SRC+x}" ]]; then
+  [[ -n "${SHIM_LOG:-}" ]] && echo "ip $*" >> "$SHIM_LOG"
   if [[ -n "$IP_SHIM_SRC" && "$*" == *route* ]]; then
     printf '1.1.1.1 via 192.168.1.1 dev eth0 src %s uid 1000\n    cache\n' "$IP_SHIM_SRC"
   fi

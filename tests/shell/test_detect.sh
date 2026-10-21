@@ -4,7 +4,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 source "$HERE/lib/assert.sh"
 source "$REPO/src/common/detect.sh"
-PATH="$HERE/shims:$PATH"
+SHIM_BIN="$(mktemp -d)"
+cp "$HERE/shims/ss" "$HERE/shims/ip" "$SHIM_BIN/"
+chmod +x "$SHIM_BIN/ss" "$SHIM_BIN/ip"
+trap 'rm -rf "$SHIM_BIN"' EXIT
+PATH="$SHIM_BIN:$PATH"
 
 new_tmp() { mktemp -d; }
 rc_of() { local rc=0; "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
