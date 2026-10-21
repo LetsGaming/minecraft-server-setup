@@ -27,6 +27,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- **One-command setup with three routes.** `bash main.sh` now works straight after `git clone`: the Default route uses safe defaults and almost no questions, the Guided route is a whiptail wizard with Back and Cancel and a plain-language explanation per step, and the Power-user route keeps the existing `variables.json` and flags. Both new routes end by writing `variables.json`. The README opens with a quick start, the three routes and a notice about reaching the server from outside the home network.
+- **A prerequisite stage** installs only the tools that are missing before anything asks a question, and checks the Node version: an installed Node 18 or newer is used, otherwise the distribution's package when it is 18 or newer, otherwise Node 22 from NodeSource, which needs `--allow-nodesource`.
+- **Safe defaults with loud corrections.** Memory is derived from the available RAM, the server port is 25565 or the next free one, and an instance name already in use gets a free one. Each change is shown as an `ADJUSTED:` or `WARNING:` block and repeated on the summary and final screens, which also print the port and the machine's local address.
+- **The Default route picks a Minecraft version that works with the default mods.** It looks back at most three releases and, if some mods have no build, leaves those out. New optional keys: `JAVA.SERVER.PORT` (default 25565, written to `server-port`) and `JAVA.SERVER.VANILLA.MODS.EXCLUDE` (mod slugs left out of the install).
+- **Xaero's Minimap and World Map stay optional on the client.** Setup writes three config lines under `config/xaero/` so players without the mods can join, re-applies them after mod updates, and `manage.sh doctor` reports a missing or changed line. `misc/xaero_config.sh apply <server_dir>` re-applies them by hand.
+- New options `--default`, `--guided` and `--allow-nodesource`.
+
 - Setup now installs `jq`, so webhook notifications work without a manual install, and `--check` also verifies `jq`, `unzip`, `cron` and `setfacl`.
 - **`manage.sh doctor [instance]`** checks an installed instance without changing anything: the unit is enabled and running with crash-loop limits, the backup (and restart) cron jobs exist, backup usage and free disk space are within bounds, the wrapper's sudoers file parses, and the wrapper answers and accepts the configured API key. `--test-webhook` also sends one test notification and reports whether the endpoint accepted it. Run it as an admin with sudo.
 - **The `storage_warning` and `server_stop` webhook events now fire.** `storage_warning` is sent when backups are still over `MAX_STORAGE_GB` after cleanup has evicted everything it may; `server_stop` when `shutdown.sh` (and so `manage.sh stop` or the wrapper's stop action) has stopped the server. The README lists every event and when it is sent.
@@ -46,6 +53,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- On the Power-user route the prerequisites are now installed before any prompt.
+- `server-port` is now always written to `server.properties`, from `JAVA.SERVER.PORT` or 25565.
+- Setup no longer needs `npm install` first; it installs Node and its packages itself.
+- A failed or rolled-back install keeps `variables.json` and says so.
 - **One setup script.** `main-vanilla.sh` is gone: run `main.sh --vanilla` for a vanilla/Fabric server (`npm run setup:vanilla` does the same). `npm run check:vanilla` is removed because `--check` is the same for both.
 - With `API_SERVER.ENABLED` set to true, setup deploys the API wrapper without asking; it still asks when it is false, and `--api-server` still works.
 - The documented Bash minimum is now 4.3 (the argument parser already needed it).
@@ -62,6 +73,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Setup no longer calls `node` before it is installed, and a missing or too old Node now gives a clear message instead of a hidden error.
+- The README no longer contradicts itself on the API port default (3000 when `API_SERVER.PORT` is left out), and its configuration example is valid JSON.
 - Version-update webhooks (`update_complete`, `update_failed`) were not sent when `NOTIFICATIONS.WEBHOOK_EVENTS` was empty, although an empty list means every event.
 
 - **A migration no longer stops the Minecraft server just to replace its scripts.** The running server has none of them open (backups, updates and the prune run as their own processes, and `start.sh` is only read at start), so it is now stopped only to move its instance folder to the new layout, or with the new `--restart`. Instead the migration takes the operation lock, so it never swaps the scripts under a running upgrade, prune, restore or mod change; when one holds the lock it stops before changing anything. A changed `start.sh` is pointed out as applying at the next start (`migrate.sh`).

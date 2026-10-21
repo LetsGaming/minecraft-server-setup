@@ -15,3 +15,13 @@ Terms specific to this project that are easy to misread.
 **Forced chunk.** A chunk kept loaded with `/forceload`, stored per dimension in `data/chunks.dat`. The prune never deletes one.
 
 **Prune backup.** The archive named to `prune-chunks.js --apply` with `--backup=<archive>`. The script checks that the file exists, has content, lies in the backups folder and is recent; the upgrade job passes the archive it made.
+
+**Route.** One of the three ways `main.sh` runs setup: Default (safe defaults, almost no questions), Guided (a whiptail wizard) or Power-user (your own `variables.json` and flags, no wizard). It is chosen from the situation or forced with `--default` or `--guided`.
+
+**Step manifest.** The data table in `src/wizard/` that lists every wizard question: the `variables.json` key it fills, its text, widget, default, validators and the routes it appears in. Adding a setting means adding an entry, not a new screen.
+
+**Correction.** A value setup changed on its own for safety, such as a smaller heap, a different port or a new instance name. Each one is shown as a block marked `ADJUSTED:` or `WARNING:` and listed again on the summary and final screens.
+
+**Safe heap.** The Java memory size the wizard picks from the memory available (the lower of `MemAvailable` and the cgroup limit): it reserves the larger of 1 GB or 25% of it for the system and gives the server the rest, capped at 8 GB, with a floor of 1 GB.
+
+**Prerequisite stage.** The first part of `main.sh`, before any question or any use of Node: it installs only the missing system tools (and Node 18 or newer by the policy in the README), plus `whiptail` on the Guided route.
