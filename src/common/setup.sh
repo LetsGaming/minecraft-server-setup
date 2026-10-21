@@ -115,6 +115,21 @@ run_server_setup() {
   if [ "$VANILLA" = true ]; then run_vanilla_setup; else run_modpack_setup; fi
 }
 
+run_post_mod_config() {
+  local instance_dir="$MAIN_DIR/$TARGET_DIR_NAME/instances/$INSTANCE_NAME" jar found=false
+  shopt -s nullglob nocaseglob
+  for jar in "$instance_dir"/mods/xaerominimap*.jar "$instance_dir"/mods/xaeroworldmap*.jar; do
+    [[ -f "$jar" ]] && found=true
+  done
+  shopt -u nullglob nocaseglob
+  [[ "$found" = true ]] || return 0
+
+  log "Patching Xaero config keys..."
+  if ! run_or_echo "bash \"$SCRIPT_DIR/src/scripts/misc/xaero_config.sh\" apply \"$instance_dir\""; then
+    warn "Could not patch the Xaero config keys; run 'xaero_config.sh check' on the instance later."
+  fi
+}
+
 run_server_cleanup() {
   if [ "$VANILLA" = true ]; then run_vanilla_cleanup; else run_modpack_cleanup; fi
 }

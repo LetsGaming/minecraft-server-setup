@@ -90,6 +90,7 @@ trap '_rollback_if_needed' EXIT
 trap '_rollback_if_needed; exit 130' INT
 
 run_server_setup
+run_post_mod_config
 run_optional_setup
 # Mark success before cleanup/start so those failures don't trigger rollback
 _SETUP_SUCCESS=true
