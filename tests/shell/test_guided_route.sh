@@ -140,15 +140,38 @@ test_guided_fabric_latest_uses_the_resolver() {
   assert_contains "$out" "26.3 was skipped" "notice shown as a correction"
 }
 
-test_guided_fabric_specific_version_is_used_as_given() {
+test_guided_fabric_specific_version_is_checked_with_the_resolver() {
   setup
-  export NODE_SHIM_RC=1
-  printf '%s\n' "0|my-world" "0|fabric" "0|1.20.4" "0|4G" "0|10" > "$T/replies"
-  printf '%s\n' "$TAIL_REPLIES" >> "$T/replies"
+  export NODE_SHIM_OUT='{"minecraft":"1.20.4","notices":[{"severity":"adjusted","text":"These mods have no build for Minecraft 1.20.4 and are excluded: foo."}],"dropped":["foo"]}'
+  printf '%s
+' "0|my-world" "0|fabric" "0|1.20.4" "0|4G" "0|10" > "$T/replies"
+  printf '%s
+' "$TAIL_REPLIES" >> "$T/replies"
   local out
-  out="$(drive $'y\ny\n')"
-  assert_contains "$out" "rc=0" "no resolver call"
+  out="$(drive $'y
+y
+')"
+  assert_contains "$out" "rc=0" "finishes"
+  assert_logged "resolve_default_version.js --version 1.20.4" "resolver gets the typed version"
   assert_eq '"1.20.4"' "$(cfg .JAVA.SERVER.VANILLA.VERSION)" "typed version kept"
+  assert_eq '["foo"]' "$(cfg .JAVA.SERVER.VANILLA.MODS.EXCLUDE)" "unsupported mods excluded"
+  assert_contains "$out" "no build for Minecraft 1.20.4" "notice shown as a correction"
+}
+
+test_guided_fabric_unsupported_typed_version_aborts_before_changes() {
+  setup
+  export NODE_SHIM_RC=1 NODE_SHIM_ERR="resolve_default_version: Fabric has no stable loader for Minecraft 1.2.3."
+  printf '%s
+' "0|my-world" "0|fabric" "0|1.2.3" "0|4G" "0|10" > "$T/replies"
+  printf '%s
+' "$TAIL_REPLIES" >> "$T/replies"
+  local out
+  out="$(drive $'y
+y
+')"
+  assert_contains "$out" "no stable loader for Minecraft 1.2.3" "resolver message shown"
+  assert_contains "$out" "rc=1" "exit 1"
+  assert_missing "$T/repo/variables.json" "no config"
 }
 
 test_guided_resolver_failure_aborts_before_changes() {

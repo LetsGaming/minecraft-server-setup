@@ -169,15 +169,16 @@ _wizard_confirm_and_write() {
 # corrections. Call it directly, not in $(...).
 RESOLVED_MINECRAFT=""
 RESOLVED_DROPPED=""
-_wizard_resolve_default_version() {
-  local resolved notice
-  local -a notices=()
-  resolved="$(_wizard_resolve_version)"
+_wizard_resolve_default_version() { # [typed version]
+  local resolved notice typed="${1:-}"
+  local -a notices=() args=()
+  [ -z "$typed" ] || args=(--version "$typed")
+  resolved="$(_wizard_resolve_version "${args[@]}")"
   RESOLVED_MINECRAFT="$(jq -r '.minecraft' <<< "$resolved" | tr -d '\r')"
   RESOLVED_DROPPED="$(jq -r '(.dropped // []) | join(",")' <<< "$resolved" | tr -d '\r')"
   mapfile -t notices < <(jq -r '(.notices // [])[] | if type == "object" then .text else . end' <<< "$resolved" | tr -d '\r')
   for notice in "${notices[@]}"; do
-    correction_add adjusted "Minecraft version" "latest" "$RESOLVED_MINECRAFT" "$notice"
+    correction_add adjusted "Minecraft version" "${typed:-latest}" "$RESOLVED_MINECRAFT" "$notice"
   done
 }
 
@@ -255,6 +256,13 @@ run_guided_route() {
   case "${ANSWERS[server_kind]-}:${typed_version,,}" in
     fabric:latest | fabric:)
       _wizard_resolve_default_version
+      ANSWERS[JAVA.SERVER.VANILLA.VERSION]="$RESOLVED_MINECRAFT"
+      if [ -n "$RESOLVED_DROPPED" ]; then
+        ANSWERS[JAVA.SERVER.VANILLA.MODS.EXCLUDE]="$RESOLVED_DROPPED"
+      fi
+      ;;
+    fabric:*)
+      _wizard_resolve_default_version "$typed_version"
       ANSWERS[JAVA.SERVER.VANILLA.VERSION]="$RESOLVED_MINECRAFT"
       if [ -n "$RESOLVED_DROPPED" ]; then
         ANSWERS[JAVA.SERVER.VANILLA.MODS.EXCLUDE]="$RESOLVED_DROPPED"
