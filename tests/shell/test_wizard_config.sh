@@ -88,7 +88,17 @@ test_answers_override_by_path() {
   assert_eq '"latest"' "$(get "$T/out/m.json" .JAVA.SERVER.VANILLA.VERSION)" "modpack ignores version"
   assert_not_contains "$(cat "$T/out/m.json")" 'cfkey' "curseforge key not in variables.json"
   write "$T/out/p.json" JAVA.SERVER.PORT=25565
-  assert_eq 'null' "$(get "$T/out/p.json" .JAVA.SERVER.PORT)" "default port not written"
+  assert_eq '25565' "$(get "$T/out/p.json" .JAVA.SERVER.PORT)" "default port stays the example value"
+  assert_eq '"number"' "$(get "$T/out/p.json" '.JAVA.SERVER.PORT|type')" "default port is a number"
+}
+
+test_empty_answers_yield_example_with_placeholders_blanked() {
+  need_jq empty_answers || return 0
+  setup
+  write "$T/out/v.json"
+  local expected
+  expected="$(jq -cS '.NOTIFICATIONS.WEBHOOK_URL = "" | .API_SERVER.API_KEY = "" | .SERVER_CONTROL.RCON_PASSWORD = ""' "$REPO/variables.example.json")"
+  assert_eq "$expected" "$(jq -cS . "$T/out/v.json")" "example with blanked placeholders"
 }
 
 test_numbers_and_booleans_typed() {
@@ -124,6 +134,20 @@ test_generated_api_key_is_64_hex_and_not_in_process_args() {
   write "$T/out/y.json" API_SERVER.ENABLED=true API_SERVER.API_KEY=0123456789abcdef0123456789abcdef0123456789abcdef
   assert_not_logged 0123456789abcdef0123456789abcdef "answered key absent from jq argv"
   assert_eq '"0123456789abcdef0123456789abcdef0123456789abcdef"' "$(get "$T/out/y.json" .API_SERVER.API_KEY)" "answered key kept"
+}
+
+test_api_key_generation_failure_fails_the_write() {
+  need_jq key_failure || return 0
+  setup
+  printf '#!/bin/bash
+exit 1
+' > "$T/bin/od"
+  chmod +x "$T/bin/od"
+  local rc=0
+  write "$T/out/v.json" API_SERVER.ENABLED=true 2> /dev/null || rc=$?
+  assert_nonzero "$rc" "write fails"
+  assert_missing "$T/out/v.json" "no output"
+  assert_eq "" "$(ls -A "$T/out")" "no temp files left"
 }
 
 test_file_mode_is_600() {

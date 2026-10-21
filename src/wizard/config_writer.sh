@@ -62,6 +62,7 @@ config_write() { # out_path
 
   kind="${ANSWERS[server_kind]-}"
   for key in "${!ANSWERS[@]}"; do
+    [ "${#ANSWERS[@]}" -gt 0 ] || break
     case "$_CW_PSEUDO_IDS" in *" $key "*) continue ;; esac
     value="${ANSWERS[$key]}"
     type="${types[$key]-${generated[$key]-string}}"
@@ -87,7 +88,16 @@ config_write() { # out_path
   [ -n "${ANSWERS[SERVER_CONTROL.RCON_PASSWORD]+x}" ] || _cw_emit SERVER_CONTROL.RCON_PASSWORD string ""
   if [ -z "${ANSWERS[API_SERVER.API_KEY]-}" ]; then
     if [ "${ANSWERS[API_SERVER.ENABLED]-}" = true ]; then
-      _cw_emit API_SERVER.API_KEY string "$(_cw_rand_hex 32)"
+      value="$(_cw_rand_hex 32)"
+      if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+        rm -f "$_CW_ASSIGN" "$tmp"
+        unset _CW_ASSIGN
+        umask "$old_umask"
+        echo "Could not generate an API key." >&2
+        return 1
+      fi
+      _cw_emit API_SERVER.API_KEY string "$value"
+      value=""
     else
       _cw_emit API_SERVER.API_KEY string ""
     fi
