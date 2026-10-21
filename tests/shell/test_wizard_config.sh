@@ -32,6 +32,7 @@ write() {
     source "$REPO/src/wizard/manifest.sh"
     source "$REPO/src/wizard/config_writer.sh"
     declare -A ANSWERS=()
+    set -u
     local kv
     for kv in "$@"; do ANSWERS["${kv%%=*}"]="${kv#*=}"; done
     config_write "$out"
@@ -96,6 +97,7 @@ test_empty_answers_yield_example_with_placeholders_blanked() {
   need_jq empty_answers || return 0
   setup
   write "$T/out/v.json"
+  assert_eq "1" "$(grep -B1 -F '"${!ANSWERS[@]}"' "$REPO/src/wizard/config_writer.sh" | grep -cF '"${#ANSWERS[@]}" -gt 0')" "key loop sits behind the empty-array guard"
   local expected
   expected="$(jq -cS '.NOTIFICATIONS.WEBHOOK_URL = "" | .API_SERVER.API_KEY = "" | .SERVER_CONTROL.RCON_PASSWORD = ""' "$REPO/variables.example.json")"
   assert_eq "$expected" "$(jq -cS . "$T/out/v.json")" "example with blanked placeholders"

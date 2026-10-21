@@ -61,16 +61,17 @@ config_write() { # out_path
   while IFS=$'\t' read -r key type; do types["$key"]="$type"; done < <(_cw_types)
 
   kind="${ANSWERS[server_kind]-}"
-  for key in "${!ANSWERS[@]}"; do
-    [ "${#ANSWERS[@]}" -gt 0 ] || break
-    case "$_CW_PSEUDO_IDS" in *" $key "*) continue ;; esac
-    value="${ANSWERS[$key]}"
-    type="${types[$key]-${generated[$key]-string}}"
-    [ "$kind" = modpack ] && [ "$key" = JAVA.SERVER.VANILLA.VERSION ] && continue
-    [ "$key" = JAVA.SERVER.PORT ] && [ "$value" = 25565 ] && continue
-    if [ -z "$value" ] && [ "$type" != string ] && [ "$type" != list ]; then continue; fi
-    _cw_emit "$key" "$type" "$value"
-  done
+  if [ "${#ANSWERS[@]}" -gt 0 ]; then
+    for key in "${!ANSWERS[@]}"; do
+      case "$_CW_PSEUDO_IDS" in *" $key "*) continue ;; esac
+      value="${ANSWERS[$key]}"
+      type="${types[$key]-${generated[$key]-string}}"
+      [ "$kind" = modpack ] && [ "$key" = JAVA.SERVER.VANILLA.VERSION ] && continue
+      [ "$key" = JAVA.SERVER.PORT ] && [ "$value" = 25565 ] && continue
+      if [ -z "$value" ] && [ "$type" != string ] && [ "$type" != list ]; then continue; fi
+      _cw_emit "$key" "$type" "$value"
+    done
+  fi
 
   case "$kind" in
     fabric) _cw_emit JAVA.SERVER.VANILLA.USE_FABRIC bool true ;;
@@ -97,7 +98,6 @@ config_write() { # out_path
         return 1
       fi
       _cw_emit API_SERVER.API_KEY string "$value"
-      value=""
     else
       _cw_emit API_SERVER.API_KEY string ""
     fi
