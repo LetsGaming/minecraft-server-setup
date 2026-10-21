@@ -146,7 +146,7 @@ Both mods are optional on the client, and the suite never installs XaeroPlus. Wh
 | `minimap/common.cfg` | `register_minimap_status_effects` | `false` |
 | `world-map/common.cfg` | `register_status_effects` | `false` |
 
-Each line is written only when its mod is present: the minimap line when the Minimap jar is in `mods/`, the world-map line when the World Map jar is, and the `lib` line when either is. Only these lines are touched; a missing file is created containing only the key line. They are checked again after mod updates, and `manage.sh doctor` reports a missing or changed key. To apply them again by hand:
+Each line is written only when its mod is present: the minimap line when the Minimap jar is in `mods/`, the world-map line when the World Map jar is, and the `lib` line when either is. Only these lines are touched; a missing file is created containing only the key line. Setup creates each file with only its one line and the mods fill in their other defaults on first start; this has not been verified against every Xaero version, and `manage.sh doctor` shows if a line is missing or changed. They are checked again after mod updates, and `manage.sh doctor` reports a missing or changed key. To apply them again by hand:
 
 ```bash
 bash <target>/scripts/<instance>/misc/xaero_config.sh apply <server_dir>
