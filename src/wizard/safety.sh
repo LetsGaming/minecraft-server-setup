@@ -17,7 +17,7 @@ CHOSEN_SERVER_PORT=""
 CHOSEN_RCON_PORT=""
 CHOSEN_INSTANCE_NAME=""
 
-_is_uint() { [[ "${1:-}" =~ ^[0-9]+$ ]]; }
+_is_uint() { [[ "${1:-}" =~ ^[0-9]{1,9}$ ]]; }
 
 safe_heap_mb() { # available_mb
   local available=0 reserve heap
@@ -97,8 +97,8 @@ choose_rcon_port() {
     return 0
   fi
   CHOSEN_RCON_PORT="$(detect_next_free_port $(( port + 1 )))"
-  correction_add warning "RCON port" "$port" "$CHOSEN_RCON_PORT" \
-    "port $port is already in use, so port $CHOSEN_RCON_PORT is used instead"
+  correction_add warning "Remote console port (RCON)" "$port" "$CHOSEN_RCON_PORT" \
+    "this is the port used to send commands to the server; port $port is already in use, so port $CHOSEN_RCON_PORT is used instead"
 }
 
 choose_instance_name() { # base target_dir_name

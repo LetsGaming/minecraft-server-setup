@@ -15,9 +15,8 @@ trap 'rm -rf "$SHIM_BIN" "$MEM_DIR"' EXIT
 PATH="$SHIM_BIN:$PATH"
 
 set_available_mb() {
-  local d; d="$(mktemp -d)"
-  printf 'MemAvailable: %d kB\n' $(( $1 * 1024 )) > "$d/meminfo"
-  export MC_SETUP_MEMINFO="$d/meminfo" MC_SETUP_CGROUP_MEMMAX="$d/absent"
+  printf 'MemAvailable: %d kB\n' $(( $1 * 1024 )) > "$MEM_DIR/meminfo"
+  export MC_SETUP_MEMINFO="$MEM_DIR/meminfo" MC_SETUP_CGROUP_MEMMAX="$MEM_DIR/absent"
 }
 
 setup_each() { corrections_reset; unset SS_SHIM_LISTEN; }
@@ -78,6 +77,14 @@ test_heap_non_numeric_request_uses_safe_heap_silently() {
   assert_contains "$(corrections_render)" "abc" "text as typed"
   choose_heap "4;x"
   assert_eq "6000" "$CHOSEN_HEAP_MB" "injection-like text"
+}
+
+test_heap_overlong_request_is_invalid() {
+  setup_each; set_available_mb 8000
+  choose_heap 99999999999999999999
+  assert_eq "6000" "$CHOSEN_HEAP_MB" "safe heap"
+  assert_eq "1" "$(corrections_count)" "one correction"
+  assert_eq "1024" "$(safe_heap_mb 99999999999999999999)" "helper treats as 0"
 }
 
 test_public_helpers_survive_bad_input() {
@@ -142,6 +149,8 @@ test_port_busy_picks_next_and_warns_with_port_number() {
   assert_contains "$out" "25566" "server port number"
   assert_contains "$out" "forward on the router" "router hint"
   assert_contains "$out" "25577" "rcon port number"
+  assert_contains "$out" "Remote console port (RCON)" "rcon subject"
+  assert_contains "$out" "send commands to the server" "rcon plain wording"
 }
 
 test_name_collision_picks_next_and_corrects() (
