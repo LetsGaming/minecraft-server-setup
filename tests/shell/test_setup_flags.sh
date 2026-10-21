@@ -71,17 +71,30 @@ test_main_declares_the_vanilla_flag_and_the_old_script_is_gone() {
   assert_missing "$REPO/main-vanilla.sh" "main-vanilla.sh is removed"
 }
 
-test_install_script_installs_jq_with_the_other_packages() {
+test_install_script_installs_every_prerequisite() {
   setup
   export SHIM_LOG="$T/shim.log"; : > "$SHIM_LOG"
-  printf '#!/bin/bash\necho "sudo $*" >> "$SHIM_LOG"\nexit 0\n' > "$T/bin/sudo"
-  printf '#!/bin/bash\nexit 0\n' > "$T/bin/npm"
-  chmod +x "$T/bin/sudo" "$T/bin/npm"
-  # PATH holds only the shims, so every tool counts as missing.
+  printf '#!/bin/bash
+echo "sudo $*" >> "$SHIM_LOG"
+exit 0
+' > "$T/bin/sudo"
+  printf '#!/bin/bash
+exit 0
+' > "$T/bin/npm"
+  printf '#!/bin/bash
+printf "nodejs:\n  Candidate: 20.1.0\n"
+' > "$T/bin/apt-cache"
+  chmod +x "$T/bin/sudo" "$T/bin/npm" "$T/bin/apt-cache"
+  # PATH holds only the shims, so every tool except npm counts as missing.
   PATH="$T/bin" "$BASH" "$REPO/src/setup/download/download_packages.sh" > /dev/null 2>&1
-  assert_logged "sudo apt install -y jq" "jq is installed"
-  assert_logged "sudo apt install -y unzip" "unzip is installed"
-  assert_logged "sudo apt install -y acl" "acl is installed"
+  local cmd pkg
+  source "$REPO/src/common/prereqs.sh"
+  for cmd in "${!PREREQ_COMMANDS[@]}"; do
+    pkg="${PREREQ_COMMANDS[$cmd]}"
+    [[ "$pkg" == nodejs || "$pkg" == npm ]] && continue
+    assert_logged "sudo apt install -y $pkg" "$pkg is installed"
+  done
+  assert_logged "sudo apt install -y nodejs npm" "node is installed from the distribution"
 }
 
 test_preflight_reports_each_required_tool() {
