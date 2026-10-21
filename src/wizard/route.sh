@@ -47,7 +47,7 @@ select_route() {
 WIZARD_TARGET_DIR_NAME=""
 
 _wizard_target_dir_name() {
-  WIZARD_TARGET_DIR_NAME="$(jq -r '.TARGET_DIR_NAME // "minecraft-server"' "$SCRIPT_DIR/variables.example.json" | tr -d '\r')"
+  WIZARD_TARGET_DIR_NAME="$(wizard_target_dir_name)"
 }
 
 _wizard_guard_config() {

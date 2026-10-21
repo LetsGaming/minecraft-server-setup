@@ -47,10 +47,15 @@ validate_instance_name() { # value
   return 1
 }
 
+wizard_target_dir_name() {
+  local name
+  name="$(jq -r '.TARGET_DIR_NAME // "minecraft-server"' "${SCRIPT_DIR:-.}/variables.example.json" 2> /dev/null | tr -d '\r')" || name=""
+  echo "${name:-minecraft-server}"
+}
+
 validate_instance_unused() { # value
   local target
-  target="$(jq -r '.TARGET_DIR_NAME // "minecraft-server"' "${SCRIPT_DIR:-.}/variables.example.json" 2>/dev/null | tr -d '\r')" || target=""
-  [ -n "$target" ] || target=minecraft-server
+  target="$(wizard_target_dir_name)"
   if detect_instance_exists "$1" "$target"; then
     echo "A server named '$1' already exists on this machine. Pick a different name; the existing server is not touched."
     return 1

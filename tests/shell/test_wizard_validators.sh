@@ -107,6 +107,16 @@ test_run_validators() {
   assert_contains "$(run_list 11 validate_int_range:1:10)" "from 1 to 10" "args reach the validator"
 }
 
+test_target_dir_name_is_shared_and_defaults() {
+  setup
+  local out
+  out="$(source "$REPO/src/wizard/validators.sh"; SCRIPT_DIR="$T" wizard_target_dir_name)"
+  assert_eq "minecraft-server" "$out" "default without an example file"
+  printf '{"TARGET_DIR_NAME":"my-dir"}\n' > "$T/variables.example.json"
+  out="$(source "$REPO/src/wizard/validators.sh"; SCRIPT_DIR="$T" wizard_target_dir_name)"
+  assert_eq "my-dir" "$out" "read from the example file"
+}
+
 test_validators_are_safe_under_set_e() {
   local out
   out="$(bash -c 'set -e; source "$1/src/common/detect.sh"; source "$1/src/wizard/validators.sh"; if validate_port 0 > /dev/null; then :; fi; echo survived' _ "$REPO")"
