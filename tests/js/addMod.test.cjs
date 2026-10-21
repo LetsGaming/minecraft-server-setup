@@ -197,3 +197,76 @@ test(
     assert.equal(fs.readFileSync(path.join(inst.mods, "fabric-api-1.0.jar"), "utf8"), "FAPI");
   }),
 );
+
+function xaeroTable(slug) {
+  const cdn = `https://cdn.modrinth.com/data/AANobbMI/versions/${slug}`;
+  return {
+    [`${API}/project/${slug}`]: { json: { id: "AANobbMI", slug } },
+    [`${API}/project/AANobbMI/version`]: {
+      json: [
+        {
+          id: "ver1",
+          name: `${slug} 1.0`,
+          date_published: "2026-01-01T00:00:00Z",
+          game_versions: ["1.21.4"],
+          loaders: ["fabric"],
+          dependencies: [],
+          files: [{ primary: true, url: `${cdn}/${slug}-1.0.jar`, filename: `${slug}-1.0.jar` }],
+        },
+      ],
+    },
+    [`${cdn}/${slug}-1.0.jar`]: { bodyBase64: b64("JARBYTES"), headers: {} },
+  };
+}
+
+function installXaeroStub(inst, exitCode = 0) {
+  const dir = path.join(inst.scripts, "misc");
+  fs.mkdirSync(dir, { recursive: true });
+  const log = path.join(inst.root, "xaero.log");
+  fs.writeFileSync(
+    path.join(dir, "xaero_config.sh"),
+    `#!/bin/bash\necho "$@" >> "${log.split(path.sep).join("/")}"\necho "stub says no" >&2\nexit ${exitCode}\n`,
+  );
+  return log;
+}
+
+test(
+  "runs_xaero_apply_after_adding_a_xaero_mod",
+  withInstance((inst) => {
+    const log = installXaeroStub(inst);
+    inst.writeManifest({ gameVersion: "1.21.4", modLoader: "fabric", mods: {} });
+    inst.stub(xaeroTable("xaeros-minimap"));
+    const res = inst.run("add-mod.js", ["xaeros-minimap", "--json"]);
+    assert.equal(res.code, 0, res.stderr);
+    assert.deepEqual(lastJson(res.stdout), { ok: true, slug: "xaeros-minimap" });
+    const calls = fs.readFileSync(log, "utf8").trim().split("\n");
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /^apply /);
+  }),
+);
+
+test(
+  "does_not_run_for_other_mods",
+  withInstance((inst) => {
+    const log = installXaeroStub(inst);
+    inst.writeManifest({ gameVersion: "1.21.4", modLoader: "fabric", mods: {} });
+    inst.stub(sodiumTable());
+    const res = inst.run("add-mod.js", ["sodium", "--json"]);
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(fs.existsSync(log), false);
+  }),
+);
+
+test(
+  "failure_is_logged_but_does_not_change_exit_code_or_json",
+  withInstance((inst) => {
+    installXaeroStub(inst, 1);
+    inst.writeManifest({ gameVersion: "1.21.4", modLoader: "fabric", mods: {} });
+    inst.stub(xaeroTable("xaeros-minimap"));
+    const res = inst.run("add-mod.js", ["xaeros-minimap", "--json"]);
+    assert.equal(res.code, 0, res.stderr);
+    assert.equal(res.stdout.trim().split("\n").length, 1);
+    assert.deepEqual(lastJson(res.stdout), { ok: true, slug: "xaeros-minimap" });
+    assert.match(res.stderr, /Could not apply the Xaero config: stub says no/);
+  }),
+);

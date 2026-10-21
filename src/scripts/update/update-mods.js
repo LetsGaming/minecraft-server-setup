@@ -7,6 +7,7 @@ const { detectInstalledJars } = require("./lib/jars");
 const { createJsonMode } = require("./lib/json-mode");
 const { safeFilenameFromUrl, downloadToTemp } = require("./lib/download");
 const { writeManifest } = require("./lib/manifest");
+const { isXaeroSlug, applyXaeroConfig } = require("./lib/xaero");
 
 // Usage:
 //   node update-mods.js [mcVersion] [--mcVersion=<ver>] [--migrate]
@@ -269,6 +270,10 @@ async function runUpdates({ mcVersion = null, only = null } = {}) {
       console.error(`Failed to update ${mod.slug}: ${err.message}`);
       failed.push({ slug: mod.slug, error: err.message });
     }
+  }
+
+  if (updated.some((u) => isXaeroSlug(u.slug))) {
+    await applyXaeroConfig(variablesPath, serverPath);
   }
 
   console.log("Mod updates completed.");
