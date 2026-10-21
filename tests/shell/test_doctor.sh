@@ -146,4 +146,42 @@ test_test_webhook_without_a_url_is_skipped() {
   assert_rc 0 "$RC" "not a failure"
 }
 
+xaero_jars() {
+  mkdir -p "$T/server/mods"
+  : > "$T/server/mods/xaerominimap-fabric-1.jar"
+  : > "$T/server/mods/xaeroworldmap-fabric-1.jar"
+}
+
+test_doctor_xaero_skip_without_jars() {
+  setup
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "no failures"
+  assert_contains "$OUT" "[SKIP] xaero-config: no Xaero mod installed" "nothing to check"
+}
+
+test_doctor_xaero_drift_warns_with_fix_command() {
+  setup; xaero_jars
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a warning does not fail the run"
+  assert_contains "$OUT" "[WARN] xaero-config: " "reported as a warning"
+  assert_contains "$OUT" "everyone_tracks_everyone" "names the key"
+  assert_contains "$OUT" "xaero_config.sh apply $T/server" "names the fix command"
+}
+
+test_doctor_xaero_ok_when_in_sync() {
+  setup; xaero_jars
+  bash "$T/scripts/misc/xaero_config.sh" apply "$T/server"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "no failures"
+  assert_contains "$OUT" "[OK] xaero-config" "keys are in sync"
+}
+
+test_doctor_xaero_script_missing_skips() {
+  setup; xaero_jars
+  rm "$T/scripts/misc/xaero_config.sh"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "no failures"
+  assert_contains "$OUT" "[SKIP] xaero-config: xaero_config.sh not installed (run migrate.sh)" "older install"
+}
+
 run_tests
