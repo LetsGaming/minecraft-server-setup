@@ -180,6 +180,11 @@ function loadVariables() {
     }
   }
 
+  const excluded = javaConfig.SERVER.VANILLA?.MODS?.EXCLUDE;
+  if (excluded !== undefined && (!Array.isArray(excluded) || excluded.some((slug) => typeof slug !== "string"))) {
+    throw new Error("JAVA.SERVER.VANILLA.MODS.EXCLUDE must be an array of mod slugs.");
+  }
+
   // ── JAVA_ARGS_CONFIG ──
   const javaArgsConfig = javaConfig.JAVA_ARGS_CONFIG;
   if (!javaArgsConfig) {

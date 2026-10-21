@@ -128,3 +128,21 @@ test("JAVA.SERVER.PORT is optional and must be a whole number from 1 to 65535", 
     );
   }
 });
+
+function withExclude(exclude) {
+  const vanilla = { MODS: exclude === undefined ? {} : { EXCLUDE: exclude } };
+  return { ...FULL, JAVA: { ...FULL.JAVA, SERVER: { ...FULL.JAVA.SERVER, VANILLA: vanilla } } };
+}
+
+test("JAVA.SERVER.VANILLA.MODS.EXCLUDE is optional and must be an array of slugs", () => {
+  for (const ok of [undefined, [], ["a", "b"]]) {
+    assert.doesNotThrow(() => load(withExclude(ok)), `EXCLUDE=${JSON.stringify(ok)}`);
+  }
+  for (const bad of ["a", [1], ["a", null], null, {}]) {
+    assert.throws(
+      () => load(withExclude(bad)),
+      /^Error: JAVA\.SERVER\.VANILLA\.MODS\.EXCLUDE must be an array of mod slugs\.$/,
+      `EXCLUDE=${JSON.stringify(bad)}`,
+    );
+  }
+});

@@ -131,8 +131,9 @@ async function installFabricServer(versionId) {
 }
 
 async function installMods(versionId) {
-  const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS } =
+  const { PERFORMANCE_MODS, UTILITY_MODS, OPTIONAL_MODS, EXCLUDE } =
     JAVA.SERVER.VANILLA.MODS;
+  const exclude = Array.isArray(EXCLUDE) ? EXCLUDE : [];
   const modsDir = path.join(outputDir, "mods");
   if (!fs.existsSync(modsDir)) fs.mkdirSync(modsDir, { recursive: true });
 
@@ -155,12 +156,12 @@ async function installMods(versionId) {
     }
 
     console.log(`Installing ${name} mods...`);
-    await spawnModDownloader(modFile, modsDir, versionId);
+    await spawnModDownloader(modFile, modsDir, versionId, exclude);
   }
 }
 
 
-async function spawnModDownloader(modsFilePath, modsDir, versionId) {
+async function spawnModDownloader(modsFilePath, modsDir, versionId, exclude = []) {
   const modDownloader = path.resolve(
     __dirname,
     "..",
@@ -179,6 +180,7 @@ async function spawnModDownloader(modsFilePath, modsDir, versionId) {
         `--downloadDir=${modsDir}`,
         `--mcVersion=${versionId}`,
         `--modLoader=fabric`,
+        ...(exclude.length ? ["--exclude", exclude.join(",")] : []),
       ],
       { stdio: "inherit" }
     );

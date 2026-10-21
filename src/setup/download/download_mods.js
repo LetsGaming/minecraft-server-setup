@@ -85,6 +85,12 @@ function getModLoaderFromArgs(args) {
   return arg ? arg.split("=")[1].toLowerCase() : null;
 }
 
+function getExcludedSlugsFromArgs(args) {
+  const i = args.indexOf("--exclude");
+  if (i === -1 || !args[i + 1]) return new Set();
+  return new Set(args[i + 1].split(",").map((s) => s.trim()).filter(Boolean));
+}
+
 // ==== Validation ====
 
 function validateSetup(mcVersion, loader, ids) {
@@ -195,7 +201,13 @@ function selectCompatibleVersion(versions, mcVersion, loader) {
 (async () => {
   const args = process.argv.slice(2);
   const downloadDir = getDownloadDirFromArgs(args);
-  const modSlugs = getModSlugsFromArgs(args) || getModSlugsFromJson();
+  const excluded = getExcludedSlugsFromArgs(args);
+  const requested = getModSlugsFromArgs(args) || getModSlugsFromJson();
+  const modSlugs = requested.filter((slug) => !excluded.has(slug));
+  if (modSlugs.length === 0 && requested.length > 0) {
+    console.log("Every requested mod is on the exclude list. Nothing to download.");
+    return;
+  }
 
   // Properly await async version/loader resolution
   let minecraftVersion = getMinecraftVersionFromArgs(args);
