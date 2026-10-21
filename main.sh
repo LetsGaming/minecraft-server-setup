@@ -11,6 +11,15 @@ source "$(dirname "$0")/src/common/flags.sh"
 source "$(dirname "$0")/src/common/setup.sh"
 source "$(dirname "$0")/src/common/ui.sh"
 source "$(dirname "$0")/src/common/prereqs.sh"
+source "$(dirname "$0")/src/common/corrections.sh"
+source "$(dirname "$0")/src/common/detect.sh"
+source "$(dirname "$0")/src/wizard/validators.sh"
+source "$(dirname "$0")/src/wizard/whiptail.sh"
+source "$(dirname "$0")/src/wizard/manifest.sh"
+source "$(dirname "$0")/src/wizard/engine.sh"
+source "$(dirname "$0")/src/wizard/config_writer.sh"
+source "$(dirname "$0")/src/wizard/safety.sh"
+source "$(dirname "$0")/src/wizard/summary.sh"
 source "$(dirname "$0")/src/wizard/route.sh"
 
 # Define available flags
@@ -72,6 +81,7 @@ if [[ "$DRY_RUN" != true ]]; then snapshot_setup_state; fi
 _rollback_if_needed() {
   if [[ "$_SETUP_SUCCESS" != true && "$DRY_RUN" != true ]]; then
     run_rollback
+    failure_screen
   fi
 }
 trap '_rollback_if_needed' EXIT
@@ -83,3 +93,7 @@ run_optional_setup
 _SETUP_SUCCESS=true
 run_server_cleanup
 maybe_start_server
+
+if [ "$ROUTE" != power ]; then
+  final_screen
+fi

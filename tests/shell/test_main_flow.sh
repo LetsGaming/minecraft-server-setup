@@ -69,16 +69,17 @@ test_existing_flags_still_parse() {
   assert_eq "true true true true true true true true true true true true true" "$out" "every flag sets its variable"
 }
 
-test_guided_route_installs_then_stops_at_the_wizard_stub() {
+test_guided_route_reaches_the_wizard_after_prerequisites() {
   setup
   printf '#!/bin/bash
-[ "$1" = -v ] && echo v20.1.0
-exit 0
+[ "$1" = -v ] && { echo v20.1.0; exit 0; }
+exit 1
 ' > "$T/bin/node"; chmod +x "$T/bin/node"
   local out
   out="$(MC_SETUP_FORCE_TTY=1 run_main --guided --dry-run)"
-  assert_contains "$out" "not available yet" "wizard stub speaks"
+  assert_contains "$out" "check your internet connection" "wizard runs and stops before any change"
   assert_contains "$out" "rc=1" "exits 1"
+  assert_missing "$T/repo/variables.json" "no config written"
 }
 
 run_tests
