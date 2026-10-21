@@ -173,6 +173,13 @@ function loadVariables() {
     throw new Error(`JAVA.SERVER.DIFFICULTY must be one of: ${VALID_DIFFICULTIES.join(", ")}`);
   }
 
+  if (javaConfig.SERVER.PORT !== undefined) {
+    const port = javaConfig.SERVER.PORT;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new Error("JAVA.SERVER.PORT must be a valid port number (1-65535).");
+    }
+  }
+
   // ── JAVA_ARGS_CONFIG ──
   const javaArgsConfig = javaConfig.JAVA_ARGS_CONFIG;
   if (!javaArgsConfig) {
