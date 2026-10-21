@@ -106,6 +106,35 @@ test_disabled_jars_are_ignored() {
   assert_missing "$S/config" "a jar under mods/disabled does not count"
 }
 
+test_both_naming_schemes_are_recognised() {
+  local minimap world
+  for minimap in xaerominimap-fabric-26.3-26.6.1.jar Xaeros_Minimap_25.2.10_Fabric_1.21.jar; do
+    setup
+    : > "$S/mods/$minimap"
+    apply
+    assert_exists "$S/$MINI" "$minimap: minimap file written"
+    assert_exists "$S/$LIB" "$minimap: lib file written"
+    assert_missing "$S/$MAP" "$minimap: does not count as the world map"
+  done
+  for world in xaeroworldmap-fabric-26.3-1.47.1.jar XaerosWorldMap_1.39.12_Fabric_1.21.jar; do
+    setup
+    : > "$S/mods/$world"
+    apply
+    assert_exists "$S/$MAP" "$world: world map file written"
+    assert_exists "$S/$LIB" "$world: lib file written"
+    assert_missing "$S/$MINI" "$world: does not count as the minimap"
+  done
+}
+
+test_disabled_dir_is_ignored_for_old_names_too() {
+  setup
+  mkdir -p "$S/mods/disabled"
+  : > "$S/mods/disabled/Xaeros_Minimap_25.2.10_Fabric_1.21.jar"
+  : > "$S/mods/disabled/XaerosWorldMap_1.39.12_Fabric_1.21.jar"
+  apply
+  assert_missing "$S/config" "disabled old-name jars do not count"
+}
+
 test_check_reports_drift_and_exit_1() {
   setup; both_jars
   mkdir -p "$S/config/xaero/lib" "$S/config/xaero/minimap" "$S/config/xaero/world-map"
@@ -161,6 +190,12 @@ test_post_mod_config_runs_script_only_with_xaero_jar() {
   assert_contains "$out" "rc=0" "no Xaero jar: returns 0"
   out="$(XJAR=XaeroMinimap-fabric-26.3-26.6.1.jar post_mod 0)"
   assert_contains "$(cat "$T/calls")" "stub apply $T/main/target/instances/inst" "Xaero jar: apply called with the instance dir"
+  rm -f "$T/calls"
+  out="$(XJAR=Xaeros_Minimap_25.2.10_Fabric_1.21.jar post_mod 0)"
+  assert_contains "$(cat "$T/calls")" "stub apply" "old minimap name: apply called"
+  rm -f "$T/calls"
+  out="$(XJAR=XaerosWorldMap_1.39.12_Fabric_1.21.jar post_mod 0)"
+  assert_contains "$(cat "$T/calls")" "stub apply" "old world map name: apply called"
 }
 
 test_post_mod_config_failure_only_warns() {

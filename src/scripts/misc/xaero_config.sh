@@ -10,17 +10,29 @@
 
 set -u
 
-# path (under the server dir) | key | value | jar prefixes that make the key apply
+# path (under the server dir) | key | value | mods that make the key apply
 KEYS=(
-  "config/xaero/lib/common.cfg|everyone_tracks_everyone|true|xaerominimap xaeroworldmap"
-  "config/xaero/minimap/common.cfg|register_minimap_status_effects|false|xaerominimap"
-  "config/xaero/world-map/common.cfg|register_status_effects|false|xaeroworldmap"
+  "config/xaero/lib/common.cfg|everyone_tracks_everyone|true|minimap worldmap"
+  "config/xaero/minimap/common.cfg|register_minimap_status_effects|false|minimap"
+  "config/xaero/world-map/common.cfg|register_status_effects|false|worldmap"
 )
 
-has_jar() { # server_dir prefix
-  local f
+# Older builds are named Xaeros_Minimap...jar and XaerosWorldMap...jar, current ones
+# xaerominimap-fabric-...jar and xaeroworldmap-fabric-...jar. Only mods/ itself is searched,
+# so mods/disabled/ is ignored.
+jar_glob() { # mod
+  case "$1" in
+    minimap) echo '*xaero*minimap*.jar' ;;
+    worldmap) echo '*xaero*world*map*.jar' ;;
+  esac
+}
+
+has_jar() { # server_dir mod
+  local f pattern
+  pattern="$(jar_glob "$2")"
   shopt -s nullglob nocaseglob
-  for f in "$1/mods/$2"*.jar; do
+  # shellcheck disable=SC2231
+  for f in "$1"/mods/$pattern; do
     if [[ -f "$f" ]]; then shopt -u nullglob nocaseglob; return 0; fi
   done
   shopt -u nullglob nocaseglob

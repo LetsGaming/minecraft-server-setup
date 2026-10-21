@@ -176,6 +176,16 @@ test_doctor_xaero_ok_when_in_sync() {
   assert_contains "$OUT" "[OK] xaero-config" "keys are in sync"
 }
 
+test_doctor_xaero_check_failure_is_a_warning_with_its_text() {
+  setup; xaero_jars
+  printf '#!/bin/bash\necho "cannot read the config folder" >&2\nexit 2\n' > "$T/scripts/misc/xaero_config.sh"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a warning does not fail the run"
+  assert_contains "$OUT" "[WARN] xaero-config: " "reported as a warning"
+  assert_contains "$OUT" "cannot read the config folder" "shows the error text"
+  assert_not_contains "$OUT" "no Xaero mod installed" "not reported as no mod"
+}
+
 test_doctor_xaero_script_missing_skips() {
   setup; xaero_jars
   rm "$T/scripts/misc/xaero_config.sh"
