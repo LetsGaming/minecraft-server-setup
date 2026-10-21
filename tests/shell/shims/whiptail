@@ -1,0 +1,35 @@
+#!/bin/bash
+# WHIPTAIL_SHIM_REPLIES=<file> of "rc|text" lines answers calls in order (text goes to
+# the --output-fd descriptor, default stderr; a literal \n becomes a newline); without
+# it, defers to the real whiptail.
+if [[ -n "${WHIPTAIL_SHIM_REPLIES:-}" ]]; then
+  [[ -n "${SHIM_LOG:-}" ]] && echo "whiptail $*" >> "$SHIM_LOG"
+  fd=2
+  args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    [[ "${args[i]}" == --output-fd ]] && fd="${args[i+1]}"
+  done
+  state_dir="${SHIM_STATE:-${TMPDIR:-/tmp}}"
+  counter="$state_dir/whiptail.count"
+  n=0
+  [[ -f "$counter" ]] && n="$(<"$counter")"
+  n=$((n + 1))
+  echo "$n" > "$counter"
+  line="$(sed -n "${n}p" "$WHIPTAIL_SHIM_REPLIES")"
+  if [[ -z "$line" ]]; then
+    echo "whiptail shim: no reply for call $n" >&2
+    exit 255
+  fi
+  rc="${line%%|*}"
+  text="${line#*|}"
+  printf '%b' "$text" >&"$fd"
+  exit "$rc"
+fi
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+clean_path=""
+IFS=: read -ra parts <<< "$PATH"
+for p in "${parts[@]}"; do
+  [[ "$p" == "$self_dir" ]] || clean_path="${clean_path:+$clean_path:}$p"
+done
+real="$(PATH="$clean_path" command -v whiptail)" || { echo "whiptail: not found" >&2; exit 127; }
+exec "$real" "$@"
