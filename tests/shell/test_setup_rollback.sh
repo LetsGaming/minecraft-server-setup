@@ -94,6 +94,26 @@ test_without_a_snapshot_nothing_is_deleted() {
   assert_exists "$MAIN_DIR/mc/instances/first" "an unarmed rollback deletes nothing"
 }
 
+test_rollback_keeps_variables_json() {
+  setup
+  local config="$SCRIPT_DIR/variables.json" before
+  before="$(cat "$config")"
+  mkdir -p "$MAIN_DIR/mc/instances/first"
+  run_rollback_after '
+    mkdir -p "$MAIN_DIR/mc/instances/second" "$MAIN_DIR/mc/scripts/second"
+    touch "$SYSTEMD_UNIT_DIR/second.service"
+    echo "0 * * * * x" > "$CRONTAB_FILE"
+    echo secret > "$SCRIPT_DIR/src/scripts/common/variables.txt"
+  '
+  assert_exists "$config" "variables.json survives a rollback"
+  assert_file_content "$config" "$before" "variables.json is unchanged"
+  assert_missing "$MAIN_DIR/mc/instances/second" "the rollback itself ran"
+
+  setup
+  ( stubs; source "$REPO/src/common/setup.sh"; run_rollback ) > "$T/out" 2>&1
+  assert_exists "$SCRIPT_DIR/variables.json" "variables.json survives an unarmed rollback"
+}
+
 # TARGET_DIR_NAME validation is covered in tests/js/loadVariables.test.cjs.
 
 run_tests
