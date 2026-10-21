@@ -73,7 +73,7 @@ validate_free_port() { # value
 
 validate_min_disk_gb() { # path gb
   local free
-  free="$(detect_disk_free_gb "$1")"
+  free="$(detect_disk_free_gb "$1")" || free=0
   if [ "$free" -ge "$2" ]; then
     return 0
   fi

@@ -54,6 +54,7 @@ if [ "$CHECK_ONLY" = true ]; then
   exit $?
 fi
 
+check_platform
 select_route
 
 # Nothing below may call node before the prerequisite stage has made it available.

@@ -90,6 +90,22 @@ test_disk_free_walks_up_to_existing_parent() {
   rm -rf "$d"
 }
 
+test_disk_free_fails_when_it_cannot_be_determined() {
+  local out rc=0
+  out="$(df() { return 1; }; detect_disk_free_gb /tmp)" || rc=$?
+  assert_eq "1" "$rc" "fails"
+  assert_eq "" "$out" "prints nothing"
+}
+
+test_os_id_like() {
+  local d; d="$(new_tmp)"
+  printf 'ID=linuxmint
+ID_LIKE="ubuntu debian"
+' > "$d/os"
+  assert_eq "ubuntu debian" "$(MC_SETUP_OS_RELEASE="$d/os" detect_os_id_like)" "id_like without quotes"
+  rm -rf "$d"
+}
+
 test_os_release_fields() {
   local d; d="$(new_tmp)"
   printf 'NAME="Ubuntu"\nVERSION_ID="22.04"\nID=ubuntu\n' > "$d/os"

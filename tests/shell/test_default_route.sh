@@ -22,6 +22,7 @@ for f in common/ui common/corrections common/detect common/prompts wizard/valida
   wizard/manifest wizard/engine wizard/config_writer wizard/safety wizard/summary wizard/route; do
   source "$REPO/src/\$f.sh"
 done
+eval "\${DRIVE_PRE:-}"
 run_wizard "\$1"
 if [ -n "\${DRIVE_FINAL:-}" ]; then final_screen; fi
 EOF
@@ -30,7 +31,7 @@ EOF
   export SS_SHIM_LISTEN="" IP_SHIM_SRC="192.168.1.50"
   export NODE_SHIM_OUT='{"minecraft":"1.21.4","notices":[],"dropped":[]}'
   export TERM=xterm MC_SETUP_FORCE_TTY=1 MC_SETUP_TERM_SIZE="40 120"
-  unset NODE_SHIM_RC WHIPTAIL_SHIM_REPLIES DRIVE_FINAL
+  unset NODE_SHIM_RC WHIPTAIL_SHIM_REPLIES DRIVE_FINAL DRIVE_PRE
   EULA=false
   : > "$SHIM_LOG"
 }
@@ -71,6 +72,32 @@ test_default_route_excludes_dropped_mods() {
   out="$(drive default $'y\ny\n')"
   assert_eq '["foo","bar"]' "$(cfg .JAVA.SERVER.VANILLA.MODS.EXCLUDE)" "dropped mods are excluded"
   assert_contains "$out" "26.3 was skipped" "resolver notice is shown on the summary"
+}
+
+test_low_disk_refuses_before_anything_is_written() {
+  setup
+  export DRIVE_PRE='detect_disk_free_gb() { echo 2; }'
+  local out route
+  for route in default guided; do
+    out="$(drive "$route" $'y
+y
+')"
+    assert_contains "$out" "rc=1" "$route: exits 1"
+    assert_contains "$out" "Only 2 GB is free" "$route: says how much is free"
+    assert_contains "$out" "at least 5 GB" "$route: says how much is needed"
+    assert_missing "$T/repo/variables.json" "$route: no config written"
+  done
+}
+
+test_unknown_disk_space_only_warns() {
+  setup
+  export DRIVE_PRE='detect_disk_free_gb() { return 1; }'
+  local out
+  out="$(drive default $'y
+y
+')"
+  assert_contains "$out" "rc=0" "route continues"
+  assert_contains "$out" "Could not check the free disk space" "warns"
 }
 
 test_default_route_declined_changes_nothing() {

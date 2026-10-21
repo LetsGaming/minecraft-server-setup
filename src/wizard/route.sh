@@ -2,6 +2,7 @@
 set -e
 
 ROUTE=""
+WIZARD_MIN_FREE_GB=5
 
 _route_prompt() {
   local choice
@@ -52,6 +53,18 @@ _wizard_target_dir_name() {
 _wizard_guard_config() {
   if [ -e "$SCRIPT_DIR/variables.json" ] || [ -L "$SCRIPT_DIR/variables.json" ]; then
     ui_notice error "variables.json already exists; delete it or rename it to run the setup again, or run without --default/--guided to use it." >&2
+    exit 1
+  fi
+}
+
+_wizard_check_disk() {
+  local free
+  if ! free="$(detect_disk_free_gb "$HOME")"; then
+    ui_notice warning "Could not check the free disk space in $HOME; make sure at least $WIZARD_MIN_FREE_GB GB is free."
+    return 0
+  fi
+  if [ "$free" -lt "$WIZARD_MIN_FREE_GB" ]; then
+    ui_notice error "Only $free GB is free in $HOME, but at least $WIZARD_MIN_FREE_GB GB is needed for a server. Free up space and run again. Nothing was changed." >&2
     exit 1
   fi
 }
@@ -163,6 +176,7 @@ _wizard_resolve_default_version() {
 run_default_route() {
   local minecraft dropped
   _wizard_guard_config
+  _wizard_check_disk
   _wizard_target_dir_name
   corrections_reset
   declare -gA ANSWERS=()
@@ -214,6 +228,7 @@ run_guided_route() {
     run_default_route
     return 0
   fi
+  _wizard_check_disk
   corrections_reset
   engine_run guided || rc=$?
   case "$rc" in

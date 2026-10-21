@@ -25,7 +25,8 @@ detect_disk_free_gb() { # path
     dir="$(dirname "$dir")"
   done
   kb="$(df -Pk "$dir" | awk 'NR==2 {print $4}')"
-  echo $(( ${kb:-0} / 1048576 ))
+  [[ "$kb" =~ ^[0-9]+$ ]] || return 1
+  echo $(( kb / 1048576 ))
 }
 
 _detect_os_field() { # key
@@ -36,6 +37,7 @@ _detect_os_field() { # key
 }
 
 detect_os_id() { _detect_os_field ID; }
+detect_os_id_like() { _detect_os_field ID_LIKE; }
 detect_os_version_id() { _detect_os_field VERSION_ID; }
 
 detect_port_free() { # port

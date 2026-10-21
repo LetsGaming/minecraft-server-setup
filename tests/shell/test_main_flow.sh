@@ -82,4 +82,53 @@ exit 1
   assert_missing "$T/repo/variables.json" "no config written"
 }
 
+# Prints the output of a main.sh run that must stop at the platform check.
+assert_platform_refused() { # label
+  local out
+  out="$(run_main --default --agree-eula)"
+  assert_contains "$out" "rc=1" "$1: exits 1"
+  assert_contains "$out" "supports Debian and Ubuntu with systemd" "$1: says what is supported"
+  assert_contains "$out" "Nothing was changed" "$1: says nothing changed"
+  assert_not_logged "apt" "$1: nothing is installed"
+  assert_missing "$T/repo/variables.json" "$1: nothing written"
+  PLATFORM_OUT="$out"
+}
+
+test_platform_without_apt_is_refused() {
+  setup
+  if PATH="/usr/bin:/bin" command -v apt-get > /dev/null 2>&1; then
+    skip "missing apt-get" "this host has a real apt-get on the base PATH"
+    return 0
+  fi
+  rm -f "$T/bin/apt-get"
+  assert_platform_refused "no apt"
+  assert_contains "$PLATFORM_OUT" "apt-get" "names the missing package manager"
+}
+
+test_platform_without_systemd_is_refused() {
+  setup
+  export MC_SETUP_SYSTEMD_DIR="$T/no-systemd"
+  assert_platform_refused "no systemd"
+  assert_contains "$PLATFORM_OUT" "systemd" "names systemd"
+}
+
+test_platform_non_debian_is_refused() {
+  setup
+  printf 'ID=fedora
+ID_LIKE="rhel centos"
+' > "$T/os-release"
+  assert_platform_refused "fedora"
+  assert_contains "$PLATFORM_OUT" "Debian-family" "names the missing OS family"
+}
+
+test_platform_debian_derivative_is_accepted() {
+  setup
+  printf 'ID=linuxmint
+ID_LIKE="ubuntu debian"
+' > "$T/os-release"
+  local out
+  out="$(run_main --default --agree-eula)"
+  assert_not_contains "$out" "supports Debian and Ubuntu" "derivative passes the platform check"
+}
+
 run_tests
