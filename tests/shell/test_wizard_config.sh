@@ -14,7 +14,7 @@ setup() {
 #!/bin/bash
 echo "jq $*" >> "$SHIM_LOG"
 [ -z "${JQ_SHIM_FAIL:-}" ] || exit 1
-[ -z "${JQ_SHIM_SLEEP:-}" ] || { : > "$JQ_SHIM_SLEEP"; sleep 3; }
+[ -z "${JQ_SHIM_SLEEP:-}" ] || { echo "$$" > "$JQ_SHIM_SLEEP"; for ((i = 0; i < 600; i++)); do [ -e "$JQ_SHIM_SLEEP.release" ] && break; sleep 0.1; done; }
 exec "$REAL_JQ" "$@"
 SHIM
   chmod +x "$T/bin/jq"
@@ -171,31 +171,67 @@ test_atomic_write_leaves_no_partial_file_on_failure() {
   assert_eq "" "$(ls -A "$T/out")" "no temp files left"
 }
 
+signals_unreliable() { # test-label
+  case "$(uname -o 2> /dev/null)" in
+    Msys | Cygwin)
+      skip "$1" "signals are unreliable under MSYS/Cygwin; covered on Linux CI"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Background jobs of a non-interactive shell (or of a backgrounded test run) inherit an
+# ignored SIGINT that bash cannot undo, so the job is started through a tiny exec wrapper
+# that restores the default dispositions.
+sig_exec() {
+  if command -v perl > /dev/null 2>&1; then
+    perl -e '$SIG{INT} = "DEFAULT"; $SIG{TERM} = "DEFAULT"; exec @ARGV' -- "$@"
+  else
+    "$@"
+  fi
+}
+
+# Polls for a marker file (up to ~60 s), signals the whole process group, waits for the
+# process to end (up to ~60 s) and
+# force-kills what is left. Sets SIGNAL_STATUS.
+signal_when_started() { # signal pid marker
+  local sig="$1" pid="$2" marker="$3" i
+  for ((i = 0; i < 600; i++)); do
+    [ -e "$marker" ] && break
+    sleep 0.1
+  done
+  kill -s "$sig" -- "-$pid" 2> /dev/null
+  for ((i = 0; i < 600; i++)); do
+    kill -0 "$pid" 2> /dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2> /dev/null; then kill -9 -- "-$pid" "$pid" 2> /dev/null; fi
+  SIGNAL_STATUS=0
+  wait "$pid" 2> /dev/null || SIGNAL_STATUS=$?
+}
+
 # Starts config_write (or config_write_curseforge) in the background while a jq shim stalls
 # it, sends the signal, and waits for the process to end.
 interrupt_write() { # signal function out_path
-  local sig="$1" fn="$2" out="$3" pid i
+  local sig="$1" fn="$2" out="$3" pid
+  cat > "$T/write.sh" <<EOS
+source "$REPO/src/wizard/manifest.sh"
+source "$REPO/src/wizard/config_writer.sh"
+declare -A ANSWERS=([INSTANCE_NAME]=a [curseforge_pack]=1 [curseforge_key]=k)
+[ -z "\${WITH_EXIT_TRAP:-}" ] || trap 'echo ran > "$T/exit.marker"' EXIT
+"$fn" "$out"
+EOS
   set -m
-  (
-    export JQ_SHIM_SLEEP="$T/jq.started"
-    source "$REPO/src/wizard/manifest.sh"
-    source "$REPO/src/wizard/config_writer.sh"
-    declare -A ANSWERS=([INSTANCE_NAME]=a [curseforge_pack]=1 [curseforge_key]=k)
-    [ -z "${WITH_EXIT_TRAP:-}" ] || trap 'echo ran > "$T/exit.marker"' EXIT
-    "$fn" "$out"
-  ) < /dev/null > /dev/null 2>&1 &
+  JQ_SHIM_SLEEP="$T/jq.started" sig_exec bash "$T/write.sh" < /dev/null > /dev/null 2>&1 &
   pid=$!
   set +m
-  for ((i = 0; i < 100; i++)); do
-    [ -e "$T/jq.started" ] && break
-    sleep 0.1
-  done
-  kill -s "$sig" "$pid" 2> /dev/null
-  wait "$pid" 2> /dev/null
+  signal_when_started "$sig" "$pid" "$T/jq.started"
   return 0
 }
 
 test_interrupt_mid_write_removes_every_temp_file() {
+  ! signals_unreliable interrupt_mid_write_removes_every_temp_file || return 0
   need_jq interrupt || return 0
   local sig fn
   for sig in INT TERM; do
@@ -215,16 +251,53 @@ test_previous_traps_are_restored_after_a_write() {
   need_jq traps || return 0
   setup
   local out
-  out="$(
-    source "$REPO/src/wizard/manifest.sh"
-    source "$REPO/src/wizard/config_writer.sh"
-    declare -A ANSWERS=([INSTANCE_NAME]=a)
-    trap 'echo mine' INT
-    config_write "$T/out/v.json" > /dev/null 2>&1
-    trap -p INT
-    trap -p TERM
-  )"
+  cat > "$T/traps.sh" <<EOS
+source "$REPO/src/wizard/manifest.sh"
+source "$REPO/src/wizard/config_writer.sh"
+declare -A ANSWERS=([INSTANCE_NAME]=a)
+trap 'echo mine' INT
+config_write "$T/out/v.json" > /dev/null 2>&1
+trap -p INT
+trap -p TERM
+EOS
+  out="$(sig_exec bash "$T/traps.sh")"
   assert_eq "trap -- 'echo mine' SIGINT" "$out" "INT handler restored, TERM left unset"
+}
+
+test_signal_handler_removes_temp_files_without_delivering_a_signal() {
+  setup
+  echo secret > "$T/out/.variables.assign.x"
+  echo '{}' > "$T/out/.variables.json.x"
+  echo '{}' > "$T/out/keep.json"
+  cat > "$T/handler.sh" <<EOS
+source "$REPO/src/wizard/manifest.sh"
+source "$REPO/src/wizard/config_writer.sh"
+_CW_TMP="$T/out/.variables.json.x"
+_CW_ASSIGN="$T/out/.variables.assign.x"
+_cw_on_signal TERM
+EOS
+  sig_exec bash "$T/handler.sh" > /dev/null 2>&1
+  assert_eq "keep.json" "$(ls -A "$T/out")" "only unrelated files are left"
+}
+
+test_route_handler_removes_only_files_this_run_created() {
+  setup
+  mkdir -p "$T/repo"
+  echo old > "$T/repo/old.json"
+  echo new > "$T/repo/new.json"
+  echo cfg > "$T/repo/variables.json"
+  cat > "$T/handler.sh" <<EOS
+source "$REPO/src/wizard/manifest.sh"
+source "$REPO/src/wizard/config_writer.sh"
+source "$REPO/src/wizard/route.sh"
+_WZ_CF_FILE="$T/repo/new.json"
+_WZ_CFG_FILE="$T/repo/variables.json"
+_wizard_on_write_signal TERM
+EOS
+  sig_exec bash "$T/handler.sh" > /dev/null 2>&1
+  assert_missing "$T/repo/new.json" "the key file of this run is removed"
+  assert_missing "$T/repo/variables.json" "the config of this run is removed"
+  assert_exists "$T/repo/old.json" "other files are kept"
 }
 
 test_exit_trap_is_kept_after_a_write() {
@@ -247,6 +320,7 @@ test_exit_trap_is_kept_after_a_write() {
 }
 
 test_exit_trap_still_runs_after_an_interrupted_write() {
+  ! signals_unreliable exit_trap_still_runs_after_an_interrupted_write || return 0
   need_jq exit-trap || return 0
   local sig fn
   for sig in INT TERM; do

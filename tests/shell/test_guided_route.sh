@@ -168,21 +168,55 @@ test_help_texts_use_plain_language() {
   fi
 }
 
+signals_unreliable() { # test-label
+  case "$(uname -o 2> /dev/null)" in
+    Msys | Cygwin)
+      skip "$1" "signals are unreliable under MSYS/Cygwin; covered on Linux CI"
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Background jobs of a non-interactive shell (or of a backgrounded test run) inherit an
+# ignored SIGINT that bash cannot undo, so the job is started through a tiny exec wrapper
+# that restores the default dispositions.
+sig_exec() {
+  if command -v perl > /dev/null 2>&1; then
+    perl -e '$SIG{INT} = "DEFAULT"; $SIG{TERM} = "DEFAULT"; exec @ARGV' -- "$@"
+  else
+    "$@"
+  fi
+}
+
+# Polls for a marker file (up to ~60 s), signals the whole process group, waits for the
+# process to end (up to ~60 s) and
+# force-kills what is left. Sets SIGNAL_STATUS.
+signal_when_started() { # signal pid marker
+  local sig="$1" pid="$2" marker="$3" i
+  for ((i = 0; i < 600; i++)); do
+    [ -e "$marker" ] && break
+    sleep 0.1
+  done
+  kill -s "$sig" -- "-$pid" 2> /dev/null
+  for ((i = 0; i < 600; i++)); do
+    kill -0 "$pid" 2> /dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2> /dev/null; then kill -9 -- "-$pid" "$pid" 2> /dev/null; fi
+  SIGNAL_STATUS=0
+  wait "$pid" 2> /dev/null || SIGNAL_STATUS=$?
+}
+
 # Starts the guided drive in its own process group, waits for the marker file, signals the
 # whole group and sets SIGNAL_STATUS to the driver's wait status.
 run_and_signal() { # signal marker stdin-file
-  local pid i
+  local pid
   set -m
-  PATH="$T/bin:$PATH" EULA=false bash "$T/drive.sh" guided < "$3" > "$T/out" 2>&1 &
+  PATH="$T/bin:$PATH" EULA=false sig_exec bash "$T/drive.sh" guided < "$3" > "$T/out" 2>&1 &
   pid=$!
   set +m
-  for ((i = 0; i < 100; i++)); do
-    [ -e "$2" ] && break
-    sleep 0.1
-  done
-  kill -s "$1" -- "-$pid" 2> /dev/null
-  SIGNAL_STATUS=0
-  wait "$pid" 2> /dev/null || SIGNAL_STATUS=$?
+  signal_when_started "$1" "$pid" "$2"
 }
 
 # A jq that stalls the config merge (the only call with --rawfile) once JQ_SHIM_SLEEP names a marker.
@@ -192,7 +226,7 @@ install_stalling_jq() {
   cat > "$T/bin/jq" <<'EOF'
 #!/bin/bash
 case " $* " in
-  *" --rawfile "*) if [ -n "${JQ_SHIM_SLEEP:-}" ]; then echo "$$" > "$JQ_SHIM_SLEEP"; sleep 5; fi ;;
+  *" --rawfile "*) if [ -n "${JQ_SHIM_SLEEP:-}" ]; then echo "$$" > "$JQ_SHIM_SLEEP"; for ((i = 0; i < 600; i++)); do [ -e "$JQ_SHIM_SLEEP.release" ] && break; sleep 0.1; done; fi ;;
 esac
 exec "$REAL_JQ" "$@"
 EOF
@@ -200,6 +234,7 @@ EOF
 }
 
 test_ctrl_c_mid_wizard_leaves_no_variables_json() {
+  ! signals_unreliable ctrl_c_mid_wizard_leaves_no_variables_json || return 0
   setup
   printf '%s\n' "0|my-world" "block|" > "$T/replies"
   : > "$T/stdin"
@@ -212,6 +247,7 @@ test_ctrl_c_mid_wizard_leaves_no_variables_json() {
 }
 
 test_interrupt_during_the_write_removes_what_this_run_created() {
+  ! signals_unreliable interrupt_during_the_write_removes_what_this_run_created || return 0
   local sig status
   for sig in INT TERM; do
     (
@@ -235,6 +271,7 @@ test_interrupt_during_the_write_removes_what_this_run_created() {
 }
 
 test_interrupt_keeps_a_curseforge_file_from_an_earlier_run() {
+  ! signals_unreliable interrupt_keeps_a_curseforge_file_from_an_earlier_run || return 0
   local sig
   for sig in INT TERM; do
     (

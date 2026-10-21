@@ -2,7 +2,7 @@
 # WHIPTAIL_SHIM_REPLIES=<file> of "rc|text" lines answers calls in order (text goes to
 # the --output-fd descriptor, default stderr; a literal \n becomes a newline); without
 # it, defers to the real whiptail. A "block|" line writes its pid to whiptail.blocked in the state dir and
-# waits, standing in for a user who is still reading a screen.
+# waits until whiptail.release exists (60 s cap), standing in for a user who is still reading a screen.
 if [[ -n "${WHIPTAIL_SHIM_REPLIES:-}" ]]; then
   [[ -n "${SHIM_LOG:-}" ]] && echo "whiptail $*" >> "$SHIM_LOG"
   fd=2
@@ -24,7 +24,7 @@ if [[ -n "${WHIPTAIL_SHIM_REPLIES:-}" ]]; then
   rc="${line%%|*}"
   if [[ "$rc" == block ]]; then
     echo "$$" > "$state_dir/whiptail.blocked"
-    sleep 5
+    for ((i = 0; i < 600; i++)); do [[ -e "$state_dir/whiptail.release" ]] && break; sleep 0.1; done
     exit 255
   fi
   text="${line#*|}"
