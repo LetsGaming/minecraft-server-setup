@@ -42,6 +42,26 @@ test_port_free_detects_ipv4_and_ipv6_listeners() {
   unset SS_SHIM_LISTEN
 }
 
+test_port_free_falls_back_to_a_connect_probe_without_ss() {
+  if ! command -v node > /dev/null 2>&1; then
+    skip "connect probe" "node is needed to open a test listener"
+    return 0
+  fi
+  local d port pid rc_busy rc_free
+  d="$(new_tmp)"
+  node -e 'const s=require("net").createServer().listen(0,"127.0.0.1",()=>{require("fs").writeFileSync(process.argv[1],String(s.address().port))});setTimeout(()=>{},20000)' "$d/port" &
+  pid=$!
+  for _ in $(seq 1 50); do [ -s "$d/port" ] && break; sleep 0.1; done
+  port="$(cat "$d/port")"
+  rc_busy="$(PATH="$d" rc_of detect_port_free "$port")"
+  kill "$pid" 2> /dev/null || true
+  wait "$pid" 2> /dev/null || true
+  rc_free="$(PATH="$d" rc_of detect_port_free "$port")"
+  assert_rc 1 "$rc_busy" "listening port is busy without ss"
+  assert_rc 0 "$rc_free" "refused connection means free"
+  rm -rf "$d"
+}
+
 test_next_free_port_skips_busy() {
   export SS_SHIM_LISTEN="25565 [::]:25566"
   assert_eq "25567" "$(detect_next_free_port 25565)" "skips both busy ports"

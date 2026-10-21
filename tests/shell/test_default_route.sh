@@ -376,7 +376,7 @@ main_setup() {
   local tool
   printf '#!/bin/bash\n[ "$1" = -v ] && exit 0\nexec "$@"\n' > "$T/bin/sudo"
   printf '#!/bin/bash\n[ "$1" = update ] && exit 0\nexit 100\n' > "$T/bin/apt"
-  for tool in curl screen unzip cron rsync zstd setfacl npm systemctl service; do printf '#!/bin/bash\nexit 0\n' > "$T/bin/$tool"; done
+  for tool in curl screen unzip cron rsync zstd setfacl ss npm systemctl service; do printf '#!/bin/bash\nexit 0\n' > "$T/bin/$tool"; done
   printf '#!/bin/bash\nprintf "nodejs:\n  Candidate: 20.1.0\n"\n' > "$T/bin/apt-cache"
   chmod +x "$T/bin"/*
   cat >> "$T/repo/src/common/setup.sh" <<'EOF'

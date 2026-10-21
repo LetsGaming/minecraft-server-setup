@@ -13,11 +13,12 @@ declare -gA PREREQ_COMMANDS=(
   [rsync]=rsync
   [zstd]=zstd
   [setfacl]=acl
+  [ss]=iproute2
   [node]=nodejs
   [npm]=npm
 )
 # Associative arrays have no stable order; this keeps install order and output deterministic.
-PREREQ_ORDER=(curl screen unzip cron jq rsync zstd setfacl node npm)
+PREREQ_ORDER=(curl screen unzip cron jq rsync zstd setfacl ss node npm)
 
 _prereq_run() {
   if declare -F run_or_echo > /dev/null; then

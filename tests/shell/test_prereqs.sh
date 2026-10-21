@@ -43,7 +43,7 @@ in_env() {
 
 
 test_installs_only_missing_packages() {
-  new_env apt sudo systemctl screen unzip cron jq rsync zstd setfacl node npm
+  new_env apt sudo systemctl screen unzip cron jq rsync zstd setfacl ss node npm
   shim_node v20.1.0
   in_env ensure_prerequisites power > /dev/null
   assert_logged "sudo apt install -y curl" "curl is installed"
@@ -52,8 +52,15 @@ test_installs_only_missing_packages() {
   assert_not_logged "apt install -y nodejs" "node is left alone"
 }
 
+test_ss_is_installed_with_the_other_prerequisites() {
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl node npm
+  shim_node v20.1.0
+  in_env ensure_prerequisites power > /dev/null
+  assert_logged "sudo apt install -y iproute2" "ss comes from iproute2"
+}
+
 test_whiptail_only_for_guided() {
-  new_env curl screen unzip cron jq rsync zstd setfacl node npm
+  new_env curl screen unzip cron jq rsync zstd setfacl ss node npm
   assert_eq "" "$(in_env prereqs_missing default | grep -v '^rc=')" "default needs no whiptail"
   assert_eq "" "$(in_env prereqs_missing power | grep -v '^rc=')" "power needs no whiptail"
   assert_eq "whiptail" "$(in_env prereqs_missing guided | grep -v '^rc=')" "guided adds whiptail"
@@ -87,7 +94,7 @@ test_node_action_nodesource_when_candidate_12() {
 }
 
 test_nodesource_refused_without_flag() {
-  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl npm
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl ss npm
   shim_candidate 12.22.9
   local out
   out="$(in_env ensure_prerequisites power)"
@@ -100,7 +107,7 @@ test_nodesource_refused_without_flag() {
 }
 
 test_nodesource_allowed_with_flag() {
-  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl npm
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl ss npm
   shim_candidate 12.22.9
   local out
   out="$(ALLOW_NODESOURCE=true in_env ensure_prerequisites power)"
@@ -111,7 +118,7 @@ test_nodesource_allowed_with_flag() {
 }
 
 test_no_system_upgrade_by_default() {
-  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl node npm
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl ss node npm
   shim_node v20.1.0
   in_env ensure_prerequisites power > /dev/null
   assert_logged "sudo apt update" "package list is refreshed"
@@ -121,7 +128,7 @@ test_no_system_upgrade_by_default() {
 }
 
 test_dry_run_installs_nothing() {
-  new_env sudo systemctl screen unzip cron jq rsync zstd setfacl node npm
+  new_env sudo systemctl screen unzip cron jq rsync zstd setfacl ss node npm
   shim_node v20.1.0
   local out
   out="$(DRY_RUN=true in_env ensure_prerequisites power)"
@@ -131,7 +138,7 @@ test_dry_run_installs_nothing() {
 }
 
 test_second_call_is_a_no_op() {
-  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl node npm
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl ss node npm
   shim_node v20.1.0
   local out
   out="$( ( PATH="$BIN"; source "$REPO/src/common/prereqs.sh"; ensure_prerequisites power > /dev/null; : > "$SHIM_LOG"; ensure_prerequisites power ) 2>&1 )"
@@ -140,7 +147,7 @@ test_second_call_is_a_no_op() {
 }
 
 test_node_action_is_decided_after_apt_update() {
-  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl npm
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl ss npm
   cat > "$BIN/apt-cache" << 'SHIM'
 #!/bin/bash
 updated=false
@@ -163,14 +170,14 @@ SHIM
 }
 
 test_distro_action_installs_nodejs_and_npm() {
-  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl ss
   shim_candidate 20.11.0
   in_env ensure_prerequisites power > /dev/null
   assert_logged "sudo apt install -y nodejs npm" "node and npm come from the distribution"
 }
 
 test_npm_ci_runs_in_the_repo_root() {
-  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl node
+  new_env apt sudo systemctl curl screen unzip cron jq rsync zstd setfacl ss node
   shim_node v20.1.0
   mkdir -p "$T/root"
   printf '#!/bin/bash\necho "npm $* in $PWD" >> "$SHIM_LOG"\n' > "$BIN/npm"
@@ -181,7 +188,7 @@ test_npm_ci_runs_in_the_repo_root() {
 }
 
 test_failed_nodesource_download_leaves_no_temp_script() {
-  new_env apt sudo systemctl screen unzip cron jq rsync zstd setfacl npm
+  new_env apt sudo systemctl screen unzip cron jq rsync zstd setfacl ss npm
   shim_candidate 12.22.9
   printf '#!/bin/bash\necho "curl $*" >> "$SHIM_LOG"\n: > "${@: -1}"\nexit 22\n' > "$BIN/curl"
   chmod +x "$BIN/curl"

@@ -14,7 +14,7 @@ setup() {
   printf '#!/bin/bash\n[ "$1" = -v ] && exit 0\nexec "$@"\n' > "$T/bin/sudo"
   printf '#!/bin/bash\necho "apt $*" >> "$SHIM_LOG"\n[ "$1" = update ] && exit 0\nexit 100\n' > "$T/bin/apt"
   local tool
-  for tool in curl screen unzip cron jq rsync zstd setfacl npm; do
+  for tool in curl screen unzip cron jq rsync zstd setfacl ss npm; do
     printf '#!/bin/bash
 exit 0
 ' > "$T/bin/$tool"

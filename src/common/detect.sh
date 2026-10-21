@@ -42,6 +42,10 @@ detect_os_version_id() { _detect_os_field VERSION_ID; }
 
 detect_port_free() { # port
   local port="$1"
+  if ! command -v ss > /dev/null 2>&1; then
+    ! (exec 3<> "/dev/tcp/127.0.0.1/$port") 2> /dev/null
+    return
+  fi
   ! ss -ltnH 2>/dev/null | awk -v p="$port" '{n = split($4, a, ":"); if (a[n] == p) found = 1} END {exit !found}'
 }
 
