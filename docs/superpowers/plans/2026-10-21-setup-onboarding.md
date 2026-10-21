@@ -173,7 +173,19 @@
 - [ ] **Step 2:** Implement.
 - [ ] **Step 3: Commit:** `feat: add wizard config writer`.
 
-**Wave 3 verification:** `bash tests/shell/run.sh test_wizard_validators.sh test_wizard_whiptail.sh test_wizard_engine.sh test_wizard_config.sh`.
+### Task 8b: Server port setting
+
+**Why:** setup never writes `server-port` (verified in `set_server_properties.js`), so a chosen port had no way into the server.
+
+**Files:** Modify `variables.example.json`, `src/setup/common/loadVariables.js`, `src/setup/variables/set_server_properties.js`; Test `tests/js/loadVariables.test.cjs`, `tests/js/serverProperties.test.cjs` (extend).
+
+**Interfaces:** new optional key `JAVA.SERVER.PORT` (integer 1 to 65535, default 25565 when absent). `loadVariables` rejects a non-integer or out-of-range value with the message `JAVA.SERVER.PORT must be a valid port number (1-65535).`. `set_server_properties.js` writes `server-port=<port>` through `applyProperties`. The wizard's `config_write` sets `JAVA.SERVER.PORT` only when the chosen port is not 25565.
+
+- [ ] **Step 1: tests:** `loadVariables` accepts 25566, rejects 0, 70000 and "25565" (string); `set_server_properties` writes `server-port=25566` when set and `server-port=25565` when absent.
+- [ ] **Step 2:** Implement; add `"PORT": 25565` to `variables.example.json` under `JAVA.SERVER`.
+- [ ] **Step 3: Commit:** `feat: add a server port setting`.
+
+**Wave 3 verification:** `bash tests/shell/run.sh test_wizard_validators.sh test_wizard_whiptail.sh test_wizard_engine.sh test_wizard_config.sh` and `node --test tests/js/loadVariables.test.cjs tests/js/serverProperties.test.cjs`.
 
 ## Wave 4: Safety rules, version resolution and the two routes (spec sections 4, 7, 9, 10)
 
@@ -195,19 +207,21 @@
 
 **Files:** Create `src/setup/download/resolve_default_version.js`; Test `tests/js/resolveDefaultVersion.test.cjs` (use `tests/js/axiosStub.cjs`).
 
-**Interfaces:** CLI `node resolve_default_version.js [--groups performance,utility] [--lookback 3]` prints one JSON object on stdout: `{"minecraft": "<version>", "notices": [{"severity":"adjusted","text":"..."}], "dropped": ["<slug>"]}`; exit 1 with a message on network failure. Uses the Mojang manifest helpers in `download_utils.js` and `pickVersion` in `src/scripts/update/lib/versions.js`; mod slugs come from `src/vanilla/download/{performance,utility}_mods.txt` (handle CRLF).
+**Interfaces:** CLI `node resolve_default_version.js [--groups performance,utility] [--lookback 3]` prints one JSON object on stdout: `{"minecraft": "<version>", "notices": [{"severity":"adjusted","text":"..."}], "dropped": ["<slug>"]}`; exit 1 with a message on network failure. Uses the Mojang manifest helpers in `download_utils.js` and `pickVersion` in `src/scripts/update/lib/versions.js`; mod slugs come from `src/vanilla/download/{performance,utility}_mods.txt` (handle CRLF). When no version in range supports every mod, it returns the newest version supported by the most mods and lists the rest in `dropped`.
+- New optional config key `JAVA.SERVER.VANILLA.MODS.EXCLUDE` (array of mod slugs, default none): `loadVariables.js` validates it as an array of strings; `download_server.js` passes it to `download_mods.js` as `--exclude <comma list>`; `download_mods.js` skips those slugs (including as dependencies it would otherwise add only for them is out of scope: it only skips the listed slugs). Without this key an unavailable mod fails the whole install (download failure exits 1 and triggers rollback), so "dropped" mods need a way to be excluded.
 
-- [ ] **Step 1: tests:** `latest_when_all_mods_support_it` (no notices, empty `dropped`), `falls_back_to_older_version_when_a_mod_lacks_a_build` (notice names the mod and both versions), `drops_mods_when_no_version_in_range_works` (newest release, `dropped` lists them), `network_failure_exits_1`, `crlf_slug_files_are_read`.
+- [ ] **Step 1: tests:** `latest_when_all_mods_support_it` (no notices, empty `dropped`), `falls_back_to_older_version_when_a_mod_lacks_a_build` (notice names the mod and both versions), `drops_mods_when_no_version_in_range_works` (newest-supported version, `dropped` lists the rest), `network_failure_exits_1`, `crlf_slug_files_are_read`; `loadVariables` accepts `["a","b"]` and rejects `"a"` and `[1]` for `EXCLUDE`; `download_mods` with `--exclude sodium` does not request `sodium` (extend `tests/js/setupDownloads.test.cjs`).
 - [ ] **Step 2:** Implement. Reuse, do not copy, `pickVersion` and the manifest fetch.
-- [ ] **Step 3: Commit:** `feat: resolve the newest minecraft version the default mods support`.
+- [ ] **Step 3: Commit:** `feat: resolve the newest minecraft version the default mods support`; `feat: add a mod exclude list for the vanilla and fabric setup`.
 
 ### Task 11: Default route
 
 **Files:** Modify `src/wizard/route.sh` (add `run_wizard`, `run_default_route`), Create `src/wizard/summary.sh` (summary and final screen); Test `tests/shell/test_default_route.sh`.
 
 **Interfaces:**
-- `run_default_route` gathers answers without questions: name via `choose_instance_name server`, port via `choose_server_port`, heap via `choose_heap ""`, version via the Task 10 CLI (its notices become corrections, its `dropped` mods are removed from the groups written to config), Fabric on, performance and utility groups on, optional off, backups and service on, API wrapper off; then `summary_render` (what will be installed, plain text, all corrections), the explicit EULA step (`eula_confirm`: shows `https://aka.ms/MinecraftEULA`, asks yes/no; with `--agree-eula` the answer is yes without asking), then `config_write variables.json`, then `wizard_apply_flags` (sets `NO_START=false NO_SERVICE=false NO_BACKUP=false SETUP_API_SERVER=false EULA=<answer> ACCEPT_ALL=true`).
+- `run_default_route` gathers answers without questions: name via `choose_instance_name server`, port via `choose_server_port` (written as `JAVA.SERVER.PORT` only when not 25565), heap via `choose_heap ""`, version via the Task 10 CLI (its notices become corrections, its `dropped` slugs are written to `JAVA.SERVER.VANILLA.MODS.EXCLUDE`), Fabric on, performance and utility groups on, optional off, backups and service on, API wrapper off; then `summary_render` (what will be installed, plain text, all corrections), the explicit EULA step (`eula_confirm`: shows `https://aka.ms/MinecraftEULA`, asks yes/no; with `--agree-eula` the answer is yes without asking), then `config_write variables.json`, then `wizard_apply_flags` (sets `NO_START=false NO_SERVICE=false NO_BACKUP=false SETUP_API_SERVER=false EULA=<answer> ACCEPT_ALL=true`).
 - `run_wizard <route>`: default calls `run_default_route`; guided calls `engine_run guided`, then the same safety rules on the answers, `summary_render`, EULA step, `config_write`, `wizard_apply_flags`. If `engine_available` is false at start, or the engine returns 12, print a notice and run the Default route; Cancel (11) exits 0 with "nothing was changed". Declining the summary confirmation exits 0 with nothing changed.
+- The failure message is printed by the `_rollback_if_needed` trap in `main.sh` after `run_rollback`.
 - `final_screen` prints: where the server lives, how to join locally (`detect_local_ip` and the chosen port), the networking notice (spec section 9: same-network friends use local address and port; outside friends need the router to forward that TCP port to this machine and a public address or dynamic DNS name; the tool did not configure the router), the corrections again, and on failure "Your answers are saved in variables.json. Run again to retry, or delete it to start over."
 
 - [ ] **Step 1: tests** (detectors and Node CLI shimmed): `test_default_route_writes_expected_config` (name `server`, version from the CLI, port absent when 25565 is free, performance and utility mods present), `test_default_route_declined_changes_nothing` (no file, exit 0), `test_eula_requires_explicit_yes` (without `--agree-eula` and answer no: no `variables.json`), `test_busy_port_and_low_ram_corrections_listed_on_summary`, `test_name_collision_uses_next_name`, `test_cancelled_guided_changes_nothing`, `test_guided_falls_back_to_default_when_whiptail_unavailable`, `test_final_screen_shows_port_and_forwarding_notice` (contains the actual chosen port and the words `router` and `forward`), `test_failure_screen_keeps_variables_json`.
