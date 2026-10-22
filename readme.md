@@ -1,6 +1,43 @@
 # Minecraft Server Setup
 
-Automated Minecraft server setup and management with backup rotation, mod updates, RCON support, webhook notifications, and multi-instance management.
+## What is this
+
+This tool turns a fresh Ubuntu or Debian computer into a Minecraft server that your friends can join. It installs what the server needs, sets the server up, starts it automatically when the machine boots and makes regular backups. You do not need to know how to edit configuration files or how much memory to give the server: the tool looks at your machine and picks safe values.
+
+Beyond setup it manages the server afterwards: backup rotation, mod updates, RCON support, webhook notifications and multi-instance management.
+
+## Quick start
+
+```bash
+git clone https://github.com/LetsGaming/minecraft-server-setup.git
+cd minecraft-server-setup
+bash main.sh
+```
+
+Run it as a normal user with `sudo` rights, not as root. Setup installs whatever is missing, asks a few questions (or uses safe defaults), and then sets up the server, the systemd service and the backups. Anything it changes for safety (for example a smaller memory size or a different port) is shown in a clearly marked block and repeated before you confirm.
+
+## How setup works: three routes
+
+| Route | For | What happens |
+|---|---|---|
+| **Default** | Anyone who just wants a server | Almost no questions. Setup checks your machine, picks safe values, shows a summary of everything it will do and everything it changed, asks you to confirm and to accept the Minecraft EULA, then installs. The result is a Fabric server on a Minecraft version that works with the default mods, with backups on. |
+| **Guided** | Someone who wants to choose | A step-by-step menu (whiptail, with Back and Cancel) that explains each choice: server type, version, name, memory, backups, restart schedule, webhook and API wrapper. Safe values are prefilled and the same corrections apply. |
+| **Power-user** | Admins and automation | No wizard. Setup reads your own `variables.json` and the command-line flags below. |
+
+Which route runs:
+
+- If `variables.json` already exists, or there is no terminal (for example a script or a pipe), the **Power-user** route runs. With no `variables.json` and no terminal, setup creates the file from the example and stops with instructions, as before.
+- Otherwise you choose between Default and Guided on the first screen (a plain-text prompt where "Quick setup (recommended)" is the Default route and "Guided setup" is the Guided route), with Default preselected.
+- `--default` and `--guided` pick a route directly. `--default` without a terminal also needs `--agree-eula`, because the EULA is never accepted silently. `--guided` needs a terminal. Both flags need that there is no `variables.json` yet and stop with a message if one exists. A plain `bash main.sh` reuses an existing `variables.json` (the Power-user route), which is also how a failed install is retried.
+- Default and Guided both finish by writing a `variables.json`, so the next run uses the Power-user route with the same choices. If an install fails, that file stays: run again to retry, or delete it to start over.
+- Setup never overwrites an existing instance. If the name `server` is taken, the Default route uses the next free name (`server-2`, `server-3`, ...) and tells you.
+
+## Reaching your server from outside your network
+
+Setup does not configure your router and cannot tell whether it is configured. At the end of the Default and Guided routes it prints this notice with the actual port and the machine's local address. The Power-user route does not print it: there the port is `JAVA.SERVER.PORT` (25565 by default).
+
+- **Friends on the same network** join with the machine's local address and the server port.
+- **Friends elsewhere** need two things: your router must forward the server's TCP port to this machine, and they need your public address or a dynamic-DNS name. The port is 25565 unless that port was already in use, in which case setup picks the next free one and prints it. Look for "port forwarding" in your router's settings, then test the public address from outside your home network.
 
 ## Features
 
@@ -23,32 +60,28 @@ Automated Minecraft server setup and management with backup rotation, mod update
 
 - **OS:** Linux with systemd and cron (Ubuntu/Debian recommended)
 - **Bash:** 4.3+
-- **Node.js:** 18+
-- **Tools:** `curl`, `screen`, `unzip`, `node`, `npm`, `cron`, `rsync`, `zstd`, `jq` and `acl` (`setfacl`) are installed automatically via `download_packages.sh`, which uses `apt`
+- **Tools:** setup installs only what is missing, with `apt`, before it asks anything: `curl`, `screen`, `unzip`, `cron`, `rsync`, `zstd`, `jq`, `acl` (`setfacl`), Node.js with `npm`, and `whiptail` on the Guided route only. It runs `npm ci --omit=dev` for you, so there is no `npm install` step. It does not upgrade the system unless you set `MC_SETUP_UPGRADE_SYSTEM=true`.
+- **Node.js 18+:** setup applies this policy. An installed Node 18 or newer is used as is. Otherwise, if the distribution's own `nodejs` package is 18 or newer, that package is installed. Otherwise (for example Ubuntu 22.04 or Debian 11) Node 22 would come from the NodeSource apt repository, which is a third-party repository, so setup only does that when you pass `--allow-nodesource`. Without the flag it stops and prints the manual commands.
 - **Preflight:** `main.sh --check` verifies `screen`, `rsync`, `zstd`, `tar`, `curl`, `jq`, `unzip`, `cron` and `setfacl` are on the PATH, plus `variables.json`, Node.js, `node_modules`, disk space and the optional CurseForge, RCON, webhook and API settings. `jq` builds the webhook payloads; without it notifications are skipped with a message
 - **Install location:** setup writes to `$HOME/<TARGET_DIR_NAME>/`: `instances/<instance>/` (the server), `scripts/<instance>/` (the runtime scripts), `services/api-server/` (the optional wrapper) and, unless `BACKUPS.BACKUPS_PATH` is set, `backups/<instance>/`
 
 ## Installation
 
-```bash
-git clone https://github.com/LetsGaming/minecraft-server-setup.git
-cd minecraft-server-setup
-npm install
-```
-
-The API wrapper is not in this repository: setup downloads it only when you enable it (see [minecraft-bot API Wrapper](#minecraft-bot-api-wrapper)).
+Follow the [Quick start](#quick-start). The API wrapper is not in this repository: setup downloads it only when you enable it (see [minecraft-bot API Wrapper](#minecraft-bot-api-wrapper)).
 
 ## Configuration
 
-Copy [`variables.example.json`](./variables.example.json) to `variables.json` and edit it. All settings are in one file (if it is missing, the first setup or `--check` run creates the copy and stops so you can edit it). `variables.json` is git-ignored because it holds your RCON password, API key and webhook URL; edit only your copy:
+Copy [`variables.example.json`](./variables.example.json) to `variables.json` and edit it. All settings are in one file (if it is missing, the first setup or `--check` run creates the copy and stops so you can edit it). `variables.json` is git-ignored because it holds your RCON password, API key and webhook URL; edit only your copy.
 
-```jsonc
+`variables.json` must be strict JSON: no comments and no trailing commas. A single mistake makes setup stop with a parse error. This is an excerpt that shows the main blocks; start from the full example file.
+
+```json
 {
-  "INSTANCE_NAME": "survival",       // Used for systemd, screen, directories
+  "INSTANCE_NAME": "survival",
   "TARGET_DIR_NAME": "minecraft-server",
 
   "SERVER_CONTROL": {
-    "USE_RCON": false,                // true = use RCON, false = use screen
+    "USE_RCON": false,
     "RCON_PORT": 25575,
     "RCON_PASSWORD": "your-password",
     "RCON_HOST": "localhost"
@@ -62,21 +95,64 @@ Copy [`variables.example.json`](./variables.example.json) to `variables.json` an
   "RESTART_SCHEDULE": {
     "ENABLED": false,
     "INTERVAL_HOURS": 12,
-    "SKIP_IF_EMPTY": true,            // Skip warning if no players online
-    "WARN_SECONDS": 30                // At least 5. INTERVAL_HOURS must divide 24 (1, 2, 3, 4, 6, 8, 12, 24) or be a multiple of 24
+    "SKIP_IF_EMPTY": true,
+    "WARN_SECONDS": 30
   },
 
   "API_SERVER": {
-    "ENABLED": false,                 // true = set up the minecraft-bot API wrapper
-    "PORT": 3000,                     // Port the wrapper listens on
-    "API_KEY": ""                     // Shared secret, at least 32 characters (openssl rand -hex 32). Must match apiKey in the bot's config.json
-    "SERVICE_USER": ""                // Optional: run the wrapper as its own unprivileged user (docs/service-user.md)
+    "ENABLED": false,
+    "PORT": 3000,
+    "API_KEY": "",
+    "SERVICE_USER": ""
   },
 
-  "BACKUPS": { ... },
-  "JAVA": { ... }
+  "JAVA": {
+    "SERVER": {
+      "PORT": 25565,
+      "VANILLA": {
+        "MODS": {
+          "EXCLUDE": []
+        }
+      }
+    }
+  }
 }
 ```
+
+What the keys mean:
+
+| Key | Meaning |
+|---|---|
+| `INSTANCE_NAME` | Used for the systemd unit, the screen session and the directories |
+| `SERVER_CONTROL.USE_RCON` | `true` sends commands over RCON, `false` uses screen |
+| `RESTART_SCHEDULE.SKIP_IF_EMPTY` | Skip the warning if no players are online |
+| `RESTART_SCHEDULE.WARN_SECONDS` | At least 5. `INTERVAL_HOURS` must divide 24 (1, 2, 3, 4, 6, 8, 12, 24) or be a multiple of 24 |
+| `API_SERVER.ENABLED` | `true` sets up the minecraft-bot API wrapper |
+| `API_SERVER.PORT` | Port the wrapper listens on. Defaults to 3000 when the key is left out; `variables.example.json` sets 3030 |
+| `API_SERVER.API_KEY` | Shared secret, at least 32 characters (`openssl rand -hex 32`). Must match `apiKey` in the bot's `config.json` |
+| `API_SERVER.SERVICE_USER` | Optional: run the wrapper as its own unprivileged user ([docs/service-user.md](docs/service-user.md)) |
+| `JAVA.SERVER.PORT` | Port the Minecraft server listens on, written to `server-port` in `server.properties`. Optional, default 25565 |
+| `JAVA.SERVER.VANILLA.MODS.EXCLUDE` | Optional list of mod slugs left out of the install, for example `["c2me-fabric"]`. Without it, one mod that has no build for your Minecraft version fails the whole install. The Default route fills it in when it has to drop a mod |
+
+`BACKUPS` and the rest of `JAVA` (Java arguments, difficulty, MOTD and so on) are in the example file.
+
+### Xaero's Minimap and World Map
+
+Both mods are optional on the client, and the suite never installs XaeroPlus. When a Xaero mod is in the server's `mods/` folder, setup writes three config lines under `config/xaero/` so players who do not have the mods can still join:
+
+| File | Key | Value |
+|---|---|---|
+| `lib/common.cfg` | `everyone_tracks_everyone` | `true` |
+| `minimap/common.cfg` | `register_minimap_status_effects` | `false` |
+| `world-map/common.cfg` | `register_status_effects` | `false` |
+
+Each line is written only when its mod is present: the minimap line when the Minimap jar is in `mods/`, the world-map line when the World Map jar is, and the `lib` line when either is. Only these lines are touched; a missing file is created containing only the key line. Setup creates each file with only its one line and the mods fill in their other defaults on first start; this has not been verified against every Xaero version, and `manage.sh doctor` shows if a line is missing or changed. They are checked again after mod updates, and `manage.sh doctor` reports a missing or changed key. To apply them again by hand:
+
+```bash
+bash <target>/scripts/<instance>/misc/xaero_config.sh apply <server_dir>
+```
+
+Restart the server afterwards for the change to take effect.
 
 For modpack setup, also configure:
 - [`curseforge_variables.json`](./src/setup/download/json/curseforge_variables.example.json) — API key and pack ID. This file is git-ignored (it holds your API key). Copy the template first:
@@ -92,10 +168,13 @@ For modpack setup, also configure:
 ### Setup
 
 ```bash
-# Validate everything first (recommended)
+# First time, as the user who will own the server: setup installs what is missing and asks what it needs
+bash main.sh
+
+# Read-only check of config, tools and disk space (separate from the three routes)
 sudo -u <user> bash main.sh --check
 
-# Modpack server
+# Power-user route: run setup from your own variables.json (modpack server; use sudo -u <user> to run it as another user)
 sudo -u <user> bash main.sh
 
 # Vanilla/Fabric server
@@ -123,6 +202,9 @@ Options (`--help` lists them):
 | `--api-server` | Set up the minecraft-bot API wrapper service |
 | `--vanilla` | Set up a vanilla/Fabric server instead of a modpack |
 | `--y` | Skip the prompts and take the defaults. This **accepts the EULA** |
+| `--default` | Run the Default route: safe defaults, almost no questions. Without a terminal it needs `--agree-eula` |
+| `--guided` | Run the Guided route: the whiptail wizard. Needs a terminal |
+| `--allow-nodesource` | Allow adding the third-party NodeSource apt repository to install Node 22 when no Node 18+ is available from the system |
 
 ### Runtime Scripts
 
@@ -306,7 +388,7 @@ In the bot's `config.json`, add `apiUrl` and `apiKey` to the server entry:
 
 ### Firewall
 
-The port defaults to 3000 (`variables.example.json` sets 3030). Allow inbound TCP on the configured port from the bot VM's IP only:
+The port is `API_SERVER.PORT`, and 3000 when that key is left out (`variables.example.json` sets 3030; the examples here use 3000). Allow inbound TCP on the configured port from the bot VM's IP only:
 
 ```bash
 ufw allow from <BOT_IP> to any port 3000 proto tcp

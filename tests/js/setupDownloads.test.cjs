@@ -181,7 +181,7 @@ function setupTree(dir, table) {
   const stub = path.join(dir, "stub.json");
   fs.writeFileSync(stub, JSON.stringify(table));
   const out = path.join(dir, "mods-out");
-  const run = (slugs) => {
+  const run = (slugs, extraArgs = [], logFile = null) => {
     fs.writeFileSync(path.join(dir, "slugs.txt"), slugs.join("\n"));
     const res = spawnSync(
       process.execPath,
@@ -191,8 +191,9 @@ function setupTree(dir, table) {
         `--modSlugsFile=${path.join(dir, "slugs.txt")}`,
         "--mcVersion=1.21.5",
         "--modLoader=fabric",
+        ...extraArgs,
       ],
-      { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: `--require ${STUB.split(path.sep).join("/")}`, AXIOS_STUB_FILE: stub } },
+      { encoding: "utf8", env: { ...process.env, NODE_OPTIONS: `--require ${STUB.split(path.sep).join("/")}`, AXIOS_STUB_FILE: stub, ...(logFile ? { AXIOS_STUB_LOG: logFile } : {}) } },
     );
     return { code: res.status, out: res.stdout + res.stderr };
   };
@@ -281,6 +282,32 @@ test(
     assert.equal(r.code, 1);
     assert.match(r.out, /FAILED DEP/);
     assert.equal(fs.existsSync(path.join(t.out, "sodium.jar")), true);
+  }),
+);
+
+test(
+  "--exclude skips exactly the listed slugs and never requests them",
+  scratch(async (dir) => {
+    const log = path.join(dir, "requests.log");
+    const t = setupTree(dir, {
+      [`${API}/project/lithium/version`]: { json: [build("v1", { primary: true, url: `${CDN}/lithium.jar`, hashes: { sha512: sha512("JAR") } })] },
+      [`${CDN}/lithium.jar`]: { bodyBase64: b64("JAR"), headers: {} },
+    });
+    const r = t.run(["sodium", "lithium"], ["--exclude", "sodium"], log);
+    assert.equal(r.code, 0, r.out);
+    const requests = fs.readFileSync(log, "utf8");
+    assert.doesNotMatch(requests, /sodium/);
+    assert.match(requests, /project\/lithium\/version/);
+    assert.equal(fs.existsSync(path.join(t.out, "lithium.jar")), true);
+  }),
+);
+
+test(
+  "--exclude covering every requested mod is a clean no-op",
+  scratch(async (dir) => {
+    const t = setupTree(dir, {});
+    const r = t.run(["sodium"], ["--exclude", "sodium,other"]);
+    assert.equal(r.code, 0, r.out);
   }),
 );
 

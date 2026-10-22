@@ -71,17 +71,37 @@ test_main_declares_the_vanilla_flag_and_the_old_script_is_gone() {
   assert_missing "$REPO/main-vanilla.sh" "main-vanilla.sh is removed"
 }
 
-test_install_script_installs_jq_with_the_other_packages() {
+test_install_script_installs_every_prerequisite() {
   setup
   export SHIM_LOG="$T/shim.log"; : > "$SHIM_LOG"
   printf '#!/bin/bash\necho "sudo $*" >> "$SHIM_LOG"\nexit 0\n' > "$T/bin/sudo"
   printf '#!/bin/bash\nexit 0\n' > "$T/bin/npm"
-  chmod +x "$T/bin/sudo" "$T/bin/npm"
-  # PATH holds only the shims, so every tool counts as missing.
+  printf '#!/bin/bash\nprintf "nodejs:\\n  Candidate: 20.1.0\\n"\n' > "$T/bin/apt-cache"
+  chmod +x "$T/bin/sudo" "$T/bin/npm" "$T/bin/apt-cache"
+  # PATH holds only the shims, so every tool except npm counts as missing.
   PATH="$T/bin" "$BASH" "$REPO/src/setup/download/download_packages.sh" > /dev/null 2>&1
-  assert_logged "sudo apt install -y jq" "jq is installed"
-  assert_logged "sudo apt install -y unzip" "unzip is installed"
-  assert_logged "sudo apt install -y acl" "acl is installed"
+  local cmd pkg
+  source "$REPO/src/common/prereqs.sh"
+  for cmd in "${!PREREQ_COMMANDS[@]}"; do
+    pkg="${PREREQ_COMMANDS[$cmd]}"
+    [[ "$pkg" == nodejs || "$pkg" == npm ]] && continue
+    assert_logged "sudo apt install -y $pkg" "$pkg is installed"
+  done
+  assert_logged "sudo apt install -y nodejs npm" "node is installed from the distribution"
+}
+
+test_ask_yes_no_is_unchanged_for_the_power_user_route() {
+  local out
+  out="$( ( source "$REPO/src/common/prompts.sh"; ask_yes_no "Q?" && echo YES || echo NO ) <<< "" 2>&1 )"
+  assert_contains "$out" "YES" "an empty answer is yes"
+  out="$( ( source "$REPO/src/common/prompts.sh"; ask_yes_no "Q?" && echo YES || echo NO ) < /dev/null 2>&1 )"
+  assert_contains "$out" "YES" "end of input in an && list is yes, as before"
+  out="$( ( source "$REPO/src/common/prompts.sh"; source "$REPO/src/common/flags.sh"
+    api_server_enabled_in_config() { return 0; }
+    NO_START=false EULA=false NO_SERVICE=false NO_BACKUP=false SETUP_API_SERVER=false ACCEPT_ALL=false
+    prompt_for_flags
+    echo "service=$NO_SERVICE backup=$NO_BACKUP eula=$EULA" ) < /dev/null 2>&1 )"
+  assert_contains "$out" "service=false backup=false eula=true" "prompt_for_flags at end of input is unchanged"
 }
 
 test_preflight_reports_each_required_tool() {

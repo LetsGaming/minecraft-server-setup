@@ -61,7 +61,8 @@
       "DIFFICULTY": "normal",
       "PVP": false,
       "FLIGHT_ENABLED": true,
-      "ALLOW_CRACKED": false
+      "ALLOW_CRACKED": false,
+      "PORT": 25565
     },
     "JAVA_ARGS_CONFIG": {
       "minMemory": "12G",

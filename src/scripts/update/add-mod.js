@@ -47,6 +47,7 @@ const { loadVariables } = require("./lib/variables");
 const { createJsonMode } = require("./lib/json-mode");
 const { safeFilenameFromUrl, downloadVerified, fileMatchesHash } = require("./lib/download");
 const { pickVersion } = require("./lib/versions");
+const { isXaeroSlug, applyXaeroConfig } = require("./lib/xaero");
 
 const cliArgs = parseArgs({
   flags: { slug: null, mcVersion: null, modLoader: null, versionId: null },
@@ -293,6 +294,9 @@ async function installMod(
   writeVersionsFile(downloadedVersions);
 
   console.log(`${indent}Registered "${canonicalSlug}" in downloaded_versions.json.`);
+  if (isXaeroSlug(canonicalSlug)) {
+    await applyXaeroConfig(variablesPath, path.dirname(modsDir));
+  }
 
   return version;
 }

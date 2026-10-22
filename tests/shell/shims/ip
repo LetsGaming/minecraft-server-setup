@@ -1,0 +1,18 @@
+#!/bin/bash
+# IP_SHIM_SRC=<addr> answers `ip route get` with that source address (empty value
+# means no route); without it, defers to the real ip.
+if [[ -n "${IP_SHIM_SRC+x}" ]]; then
+  [[ -n "${SHIM_LOG:-}" ]] && echo "ip $*" >> "$SHIM_LOG"
+  if [[ -n "$IP_SHIM_SRC" && "$*" == *route* ]]; then
+    printf '1.1.1.1 via 192.168.1.1 dev eth0 src %s uid 1000\n    cache\n' "$IP_SHIM_SRC"
+  fi
+  exit 0
+fi
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+clean_path=""
+IFS=: read -ra parts <<< "$PATH"
+for p in "${parts[@]}"; do
+  [[ "$p" == "$self_dir" ]] || clean_path="${clean_path:+$clean_path:}$p"
+done
+real="$(PATH="$clean_path" command -v ip)" || { echo "ip: not found" >&2; exit 127; }
+exec "$real" "$@"

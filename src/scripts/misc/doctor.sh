@@ -205,12 +205,40 @@ check_webhook() {
   fi
 }
 
+check_xaero_config() {
+  local script="$SCRIPT_DIR/xaero_config.sh" out line problems="" ok=0 rc=0 errfile err=""
+  if [[ ! -f "$script" ]]; then
+    report SKIP xaero-config "xaero_config.sh not installed (run migrate.sh)"
+    return
+  fi
+  errfile="$(mktemp)"
+  out="$(bash "$script" check "$SERVER_PATH" 2> "$errfile")" || rc=$?
+  err="$(tr '\n' ' ' < "$errfile")"
+  rm -f "$errfile"
+  while IFS= read -r line; do
+    case "$line" in
+      OK[[:space:]]*) ok=$((ok + 1)) ;;
+      DRIFT[[:space:]]* | MISSING[[:space:]]*) problems+="${problems:+; }${line%% (found*}" ;;
+    esac
+  done <<< "$out"
+  if [[ -n "$problems" ]]; then
+    report WARN xaero-config "$problems; run: bash $script apply $SERVER_PATH"
+  elif [[ $rc -ne 0 ]]; then
+    report WARN xaero-config "xaero_config.sh check failed (exit $rc): ${err:-no error text}"
+  elif [[ $ok -gt 0 ]]; then
+    report OK xaero-config "the Xaero keys are set"
+  else
+    report SKIP xaero-config "no Xaero mod installed"
+  fi
+}
+
 echo "Doctor: $INSTANCE_NAME"
 check_service
 check_cron
 check_storage
 check_sudoers
 check_wrapper
+check_xaero_config
 check_webhook
 
 echo "Summary: $N_OK ok, $N_WARN warnings, $N_FAIL failed, $N_SKIP skipped"

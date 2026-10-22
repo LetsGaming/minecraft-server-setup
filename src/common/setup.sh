@@ -115,6 +115,22 @@ run_server_setup() {
   if [ "$VANILLA" = true ]; then run_vanilla_setup; else run_modpack_setup; fi
 }
 
+run_post_mod_config() {
+  local instance_dir="$MAIN_DIR/$TARGET_DIR_NAME/instances/$INSTANCE_NAME" jar found=false globs
+  globs=$(shopt -p nullglob nocaseglob || true)
+  shopt -s nullglob nocaseglob
+  for jar in "$instance_dir"/mods/*xaero*minimap*.jar "$instance_dir"/mods/*xaero*world*map*.jar; do
+    [[ -f "$jar" ]] && found=true
+  done
+  eval "$globs"
+  [[ "$found" = true ]] || return 0
+
+  log "Patching Xaero config keys..."
+  if ! run_or_echo "bash \"$SCRIPT_DIR/src/scripts/misc/xaero_config.sh\" apply \"$instance_dir\""; then
+    warn "Could not patch the Xaero config keys; run 'xaero_config.sh check' on the instance later."
+  fi
+}
+
 run_server_cleanup() {
   if [ "$VANILLA" = true ]; then run_vanilla_cleanup; else run_modpack_cleanup; fi
 }
@@ -257,7 +273,7 @@ run_rollback() {
   if [[ "$_ROLLBACK_ARMED" != true ]]; then
     warn "Nothing was recorded before the failure — leaving everything in place."
     warn "You may need to clean up manually."
-    return
+    return 0
   fi
 
   local base="$MAIN_DIR/$TARGET_DIR_NAME"

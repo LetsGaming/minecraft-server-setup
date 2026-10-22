@@ -96,3 +96,53 @@ test("the restart interval must divide 24 or be whole days", () => {
     assert.throws(() => load({ ...BASE, RESTART_SCHEDULE: { INTERVAL_HOURS: hours } }), /SERVER/, `INTERVAL_HOURS=${hours}`);
   }
 });
+
+const FULL = {
+  ...BASE,
+  JAVA: {
+    SERVER: {
+      MAX_PLAYERS: 10, MOTD: "m", WHITELIST: false, SEED: "", DIFFICULTY: "normal",
+      PVP: false, FLIGHT_ENABLED: true, ALLOW_CRACKED: false,
+    },
+    JAVA_ARGS_CONFIG: {
+      minMemory: "1M", maxMemory: "1M", metaspaceLimit: "64M", garbageCollector: "zgc",
+      zgc: { uncommitDelay: "1h", uncommitDelayOnIdle: "30m", heapReservePercent: 5, concurrentGCThreads: 2, softMaxHeapSize: "1M" },
+    },
+  },
+};
+
+function withPort(port) {
+  return { ...FULL, JAVA: { ...FULL.JAVA, SERVER: { ...FULL.JAVA.SERVER, PORT: port } } };
+}
+
+test("JAVA.SERVER.PORT is optional and must be a whole number from 1 to 65535", () => {
+  assert.doesNotThrow(() => load(FULL));
+  for (const ok of [1, 25565, 25566, 65535]) {
+    assert.doesNotThrow(() => load(withPort(ok)), `PORT=${ok}`);
+  }
+  for (const bad of [0, -1, 70000, 65536, 25565.5, "25565", null, true]) {
+    assert.throws(
+      () => load(withPort(bad)),
+      /^Error: JAVA\.SERVER\.PORT must be a valid port number \(1-65535\)\.$/,
+      `PORT=${JSON.stringify(bad)}`,
+    );
+  }
+});
+
+function withExclude(exclude) {
+  const vanilla = { MODS: exclude === undefined ? {} : { EXCLUDE: exclude } };
+  return { ...FULL, JAVA: { ...FULL.JAVA, SERVER: { ...FULL.JAVA.SERVER, VANILLA: vanilla } } };
+}
+
+test("JAVA.SERVER.VANILLA.MODS.EXCLUDE is optional and must be an array of slugs", () => {
+  for (const ok of [undefined, [], ["a", "b"]]) {
+    assert.doesNotThrow(() => load(withExclude(ok)), `EXCLUDE=${JSON.stringify(ok)}`);
+  }
+  for (const bad of ["a", [1], ["a", null], null, {}]) {
+    assert.throws(
+      () => load(withExclude(bad)),
+      /^Error: JAVA\.SERVER\.VANILLA\.MODS\.EXCLUDE must be an array of mod slugs\.$/,
+      `EXCLUDE=${JSON.stringify(bad)}`,
+    );
+  }
+});

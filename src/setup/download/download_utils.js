@@ -229,9 +229,9 @@ function isAlreadyDownloaded(type, modID, fileID) {
 
 let _manifestCache = null;
 
-async function fetchManifest() {
+async function fetchManifest(config = {}) {
   if (_manifestCache) return _manifestCache;
-  const resp = await axios.get(MANIFEST_URL);
+  const resp = await axios.get(MANIFEST_URL, config);
   _manifestCache = resp.data;
   return _manifestCache;
 }

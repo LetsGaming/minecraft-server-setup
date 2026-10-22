@@ -19,6 +19,7 @@ const {
       PVP,
       FLIGHT_ENABLED,
       ALLOW_CRACKED,
+      PORT,
     },
   },
 } = vars;
@@ -70,6 +71,7 @@ function updateServerProperties() {
     pvp: PVP,
     "allow-flight": FLIGHT_ENABLED,
     "online-mode": !ALLOW_CRACKED,
+    "server-port": PORT === undefined ? 25565 : PORT,
   };
 
   // Add RCON settings if enabled
