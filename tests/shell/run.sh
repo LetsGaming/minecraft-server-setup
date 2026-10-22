@@ -1,6 +1,8 @@
 #!/bin/bash
 # Runs every tests/shell/test_*.sh, then the node tests in tests/js, and
-# reports a combined result.
+# reports a combined result with the number of cases that skipped themselves,
+# so a green run on a host without flock, rsync or zstd is not mistaken for
+# full coverage.
 # Usage: bash tests/shell/run.sh [test_file.sh ...]
 set -u
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
@@ -13,9 +15,19 @@ if [[ ${#files[@]} -eq 0 ]]; then
 fi
 
 failed=0
+total_pass=0
+total_fail=0
+total_skip=0
 for f in "${files[@]}"; do
   echo "== $f"
-  bash "$f" || failed=1
+  out="$(bash "$f" 2>&1)" || failed=1
+  printf '%s\n' "$out"
+  result="$(printf '%s\n' "$out" | grep '^RESULT pass=' | tail -n1)"
+  if [[ "$result" =~ pass=([0-9]+)\ fail=([0-9]+)\ skip=([0-9]+) ]]; then
+    total_pass=$((total_pass + BASH_REMATCH[1]))
+    total_fail=$((total_fail + BASH_REMATCH[2]))
+    total_skip=$((total_skip + BASH_REMATCH[3]))
+  fi
 done
 
 if [[ "$run_js" == true ]]; then
@@ -27,5 +39,6 @@ if [[ "$run_js" == true ]]; then
   fi
 fi
 
+echo "SHELL TOTAL pass=$total_pass fail=$total_fail skip=$total_skip"
 if [[ $failed -ne 0 ]]; then echo "SHELL TESTS FAILED"; exit 1; fi
 echo "SHELL TESTS PASSED"

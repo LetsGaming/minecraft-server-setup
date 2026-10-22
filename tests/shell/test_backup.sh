@@ -17,9 +17,9 @@ test_hourly_backup_creates_valid_archive() {
   assert_rc 0 "$RC" "hourly backup exits 0"
   local a; a="$(first_archive "$T/backups/hourly")"
   assert_exists "$a" "archive written to hourly/"
-  assert_eq "0" "$(gzip -t "$a" 2>/dev/null; echo $?)" "archive is intact"
-  assert_contains "$("$REAL_TAR" -tzf "$a")" "world/level.dat" "archive holds the world"
-  assert_contains "$("$REAL_TAR" -tzf "$a")" ".live_dotfile" "archive holds dotfiles"
+  assert_eq "0" "$(archive_ok "$a"; echo $?)" "archive is intact"
+  assert_contains "$(archive_list "$a")" "world/level.dat" "archive holds the world"
+  assert_contains "$(archive_list "$a")" ".live_dotfile" "archive holds dotfiles"
   assert_missing "$T/backups/hourly/tmp_backup" "temp dir removed after success"
 }
 
@@ -40,7 +40,7 @@ test_archive_carries_the_wrapper_config_from_services() {
   run_in_layout "$BACKUP" --archive weekly
   assert_rc 0 "$RC" "archive backup exits 0"
   assert_contains "$OUT" "✓ api-server-config.json" "the config is staged"
-  assert_contains "$("$REAL_TAR" -tzf "$(first_archive "$T/backups/archives/weekly")")" \
+  assert_contains "$(archive_list "$(first_archive "$T/backups/archives/weekly")")" \
     ".mc-meta/api-server-config.json" "the archive holds the config"
 }
 
@@ -59,7 +59,7 @@ test_a_leftover_metadata_folder_is_not_backed_up() {
   echo 'RCON_PASSWORD="hunter2"' > "$T/server/.mc-meta/variables.txt"
   run_script "$BACKUP"
   assert_rc 0 "$RC" "hourly backup exits 0"
-  assert_not_contains "$("$REAL_TAR" -tzf "$(first_archive "$T/backups/hourly")")" ".mc-meta" "the folder is left out"
+  assert_not_contains "$(archive_list "$(first_archive "$T/backups/hourly")")" ".mc-meta" "the folder is left out"
 }
 
 test_dry_run_writes_nothing() {
@@ -145,7 +145,7 @@ test_stale_temp_dir_from_a_killed_run_is_discarded() {
   echo stale > "$T/backups/hourly/tmp_backup/deleted_since.txt"
   run_script "$BACKUP"
   assert_rc 0 "$RC" "backup exits 0"
-  assert_not_contains "$("$REAL_TAR" -tzf "$(first_archive "$T/backups/hourly")")" "deleted_since.txt" "stale file not carried into the archive"
+  assert_not_contains "$(archive_list "$(first_archive "$T/backups/hourly")")" "deleted_since.txt" "stale file not carried into the archive"
 }
 
 test_busy_lock_skips_the_run() {

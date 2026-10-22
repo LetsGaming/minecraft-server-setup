@@ -1,13 +1,33 @@
 #!/bin/bash
-# cp-based stand-in: rsync [opts] SRC... DEST. Excludes are ignored.
-#   RSYNC_SHIM_FAIL=1  exit 23
+# cp-based stand-in: rsync [opts] SRC... DEST.
+#   MC_TEST_REAL_TOOLS=1   runs the real rsync when the host has one
+#   RSYNC_SHIM_FAIL=1      exit 23
+#   RSYNC_SHIM_EXIT=<n>    exit <n> after copying (24: some files vanished)
+# Emulated: --delete (the destination is emptied first), anchored excludes
+# (--exclude=/name), "*.ext" excludes and "dir/*" excludes. Other options are
+# ignored.
 echo "rsync $*" >> "$SHIM_LOG"
 [[ "${RSYNC_SHIM_FAIL:-}" == 1 ]] && exit 23
+if [[ "${MC_TEST_REAL_TOOLS:-}" == 1 && -n "${REAL_RSYNC:-}" ]]; then
+  exec "$REAL_RSYNC" "$@"
+fi
 paths=()
+excludes=()
+delete=false
 for a in "$@"; do
-  [[ "$a" == -* ]] || paths+=("$a")
+  case "$a" in
+    --delete) delete=true ;;
+    --exclude=*) excludes+=("${a#--exclude=}") ;;
+    --exclude-from=*) mapfile -t -O "${#excludes[@]}" excludes < "${a#--exclude-from=}" ;;
+    --) ;;
+    -*) ;;
+    *) paths+=("$a") ;;
+  esac
 done
 dest="${paths[${#paths[@]}-1]}"
+if $delete && [[ -d "$dest" ]]; then
+  find "$dest" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+fi
 mkdir -p "$dest"
 for ((i = 0; i < ${#paths[@]} - 1; i++)); do
   src="${paths[$i]}"
@@ -17,3 +37,13 @@ for ((i = 0; i < ${#paths[@]} - 1; i++)); do
     cp -a "$src" "$dest/"
   fi
 done
+for pat in "${excludes[@]}"; do
+  [[ -n "$pat" ]] || continue
+  case "$pat" in
+    /*) rm -rf -- "$dest/${pat#/}" ;;
+    */\*) find "$dest" -type d -name "${pat%/*}" -exec sh -c 'find "$1" -mindepth 1 -delete' _ {} \; ;;
+    *) find "$dest" -name "$pat" -exec rm -rf -- {} + 2>/dev/null ;;
+  esac
+done
+[[ -n "${RSYNC_SHIM_EXIT:-}" ]] && exit "$RSYNC_SHIM_EXIT"
+exit 0

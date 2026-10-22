@@ -1,26 +1,52 @@
 #!/bin/bash
 # Stand-in for zstd that uses gzip as the container, so tests do not need the
-# real binary. Supports: -t FILE | -d FILE -c | compress stdin -o FILE.
-#   ZSTD_SHIM_FAIL_TEST=1  makes -t fail
+# real binary. Supports: -t FILE | -d FILE -c | -dc [FILE] | compress stdin
+# [-o FILE]. The level and -T value are logged as "zstd-level N" and
+# "zstd-threads N".
+#   MC_TEST_REAL_TOOLS=1        runs the real zstd when the host has one
+#   ZSTD_SHIM_FAIL_TEST=1       makes -t fail
+#   ZSTD_SHIM_FAIL_DECOMPRESS=1 makes decompression fail after some output
+#   ZSTD_SHIM_ENOSPC=1          compression writes a partial file and exits 1
+#   ZSTD_SHIM_STALL=<file>      compression waits until <file> exists
 echo "zstd $*" >> "$SHIM_LOG"
 echo "zstd-umask $(umask)" >> "$SHIM_LOG"
-test_mode=false; decompress=false; out=""; in=""
+test_mode=false; decompress=false; out=""; in=""; level=""; threads=""
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   case "${args[$i]}" in
     -t) test_mode=true ;;
     -d) decompress=true ;;
+    -dc|-cd) decompress=true ;;
     -o) i=$((i + 1)); out="${args[$i]}" ;;
-    -c|-T*|-N|-[0-9]|-[0-9][0-9]|-q|-f) ;;
+    -T*) threads="${args[$i]#-T}" ;;
+    -[0-9]|-[0-9][0-9]) level="${args[$i]#-}" ;;
+    -c|-N|-q|-f|--check|--no-progress) ;;
     -*) ;;
     *) in="${args[$i]}" ;;
   esac
 done
+[[ -n "$level" ]] && echo "zstd-level $level" >> "$SHIM_LOG"
+[[ -n "$threads" ]] && echo "zstd-threads $threads" >> "$SHIM_LOG"
+if [[ "${MC_TEST_REAL_TOOLS:-}" == 1 && -n "${REAL_ZSTD:-}" ]]; then
+  exec "$REAL_ZSTD" "$@"
+fi
 if $test_mode; then
   [[ "${ZSTD_SHIM_FAIL_TEST:-}" == 1 ]] && exit 1
   gzip -t "$in"
 elif $decompress; then
-  gzip -dc "$in"
+  if [[ "${ZSTD_SHIM_FAIL_DECOMPRESS:-}" == 1 ]]; then
+    if [[ -n "$in" ]]; then gzip -dc "$in" | head -c 512; else gzip -dc | head -c 512; fi
+    exit 1
+  fi
+  if [[ -n "$in" ]]; then gzip -dc "$in"; else gzip -dc; fi
 else
+  if [[ -n "${ZSTD_SHIM_STALL:-}" ]]; then
+    while [[ ! -e "$ZSTD_SHIM_STALL" ]]; do sleep 0.1; done
+  fi
+  if [[ "${ZSTD_SHIM_ENOSPC:-}" == 1 ]]; then
+    if [[ -n "$out" ]]; then head -c 100 > "$out"; else head -c 100; fi
+    echo "zstd: No space left on device" >&2
+    exit 1
+  fi
   if [[ -n "$out" ]]; then gzip -c > "$out"; else gzip -c; fi
 fi

@@ -289,11 +289,11 @@ test_identical_unit_is_left_alone() {
 config_archive() { # archive holding .mc-meta/api-server-config.json
   local src
   src="$(mktemp -d "$T/arch.XXXXXX")"
-  mkdir -p "$src/world" "$src/.mc-meta"
+  mkdir -p "$src/world/region" "$src/.mc-meta"
   echo restored > "$src/world/level.dat"
+  echo r > "$src/world/region/r.0.0.mca"
   echo '{"apiKey":"restored"}' > "$src/.mc-meta/api-server-config.json"
-  mkdir -p "$T/backups/archives"
-  "$REAL_TAR" -cf - -C "$src" . | gzip -c > "$T/backups/archives/minecraft_backup_c.tar.zst"
+  make_archive_from "$T/backups/archives/minecraft_backup_c.tar.zst" "$src"
   rm -rf "$src"
 }
 
