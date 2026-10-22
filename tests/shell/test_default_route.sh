@@ -422,7 +422,7 @@ EOF
 run_main_wiz() { # stdin-text, then main.sh args
   local input="$1" out rc=0
   shift
-  out="$(cd "$T/repo" && PATH="$T/bin:$(dirname "$(command -v jq)"):/usr/bin:/bin" EULA='' bash main.sh "$@" <<< "$input" 2>&1)" || rc=$?
+  out="$(cd "$T/repo" && PATH="$T/bin:$(dirname "$(command -v jq)"):/usr/bin:/bin" EULA='' bash ${DBG_X:+-x} main.sh "$@" <<< "$input" 2>&1)" || rc=$?
   echo "$out"
   echo "rc=$rc"
 }
@@ -500,9 +500,9 @@ test_main_failure_message_is_printed_once_and_exit_code_kept() {
   main_setup
   export MC_SETUP_FORCE_TTY='' PROBE_FAIL=1
   local out
-  out="$(run_main_wiz "" --default --agree-eula)"
+  out="$(DBG_X=1 run_main_wiz "" --default --agree-eula)"
   assert_contains "$out" "rc=3" "original exit code kept"
-  echo "DBGOUT<<$out>>" | sed "s/^/DBG: /" >&2
+  echo "$out" | tail -70 | sed "s/^/DBG: /" >&2
   assert_eq 1 "$(grep -c "Your answers are saved in variables.json" <<< "$out")" "message printed exactly once"
   assert_exists "$T/repo/variables.json" "config kept"
   unset PROBE_FAIL
