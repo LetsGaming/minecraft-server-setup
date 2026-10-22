@@ -63,4 +63,46 @@ test_a_checkout_without_the_modules_says_so() {
   cleanup
 }
 
+# create_backup in a scratch tree, with gzip (no zstd needed) and an optional
+# fake tar on PATH.
+run_create_backup() { # scripts-dir [bin-dir]
+  bash -c "
+    set -u
+    export PATH='${2:-/nonexistent}:$PATH'
+    source '$ROOT/migrate-lib/ui.sh'; source '$ROOT/migrate-lib/backup.sh'
+    TARGET_SCRIPTS_DIR='$1'; USE_ZSTD=false; DRY_RUN=false; MIGRATE_KEEP_ARCHIVES=5
+    create_backup && prune_old_migration_archives
+  " 2>&1
+}
+
+test_the_migration_archive_is_published_only_after_it_verified() {
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/mcsetup-modules.XXXXXX")"
+  mkdir -p "$TMP/scripts/common"
+  echo 'A="b"' > "$TMP/scripts/common/variables.txt"
+  local out
+  out="$(run_create_backup "$TMP/scripts")"
+  assert_eq 1 "$(find "$TMP" -maxdepth 1 -name 'scripts_backup_*.tar.gz' | wc -l | tr -d '[:space:]')" "one archive written"
+  assert_eq "" "$(find "$TMP" -maxdepth 1 -name '.*.part')" "no partial file left"
+  assert_contains "$out" "Archive size" "reports the size"
+}
+
+test_a_tar_that_dies_midway_leaves_no_migration_archive() {
+  TMP="$(mktemp -d "${TMPDIR:-/tmp}/mcsetup-modules.XXXXXX")"
+  mkdir -p "$TMP/scripts/common" "$TMP/bin"
+  echo 'A="b"' > "$TMP/scripts/common/variables.txt"
+  echo stale > "$TMP/scripts_backup_20200101_000000.tar.gz"
+  cat > "$TMP/bin/tar" <<'SH'
+#!/bin/bash
+for a in "$@"; do [[ "$a" == -c* ]] && { echo "tar: disk full" >&2; exit 2; }; done
+exec "$(PATH="${PATH#*:}" command -v tar)" "$@"
+SH
+  chmod +x "$TMP/bin/tar"
+  local out rc=0
+  out="$(run_create_backup "$TMP/scripts" "$TMP/bin")" || rc=$?
+  assert_nonzero "$rc" "create_backup fails"
+  assert_contains "$out" "failed" "says so"
+  assert_eq "" "$(find "$TMP" -maxdepth 1 -name '.*.part')" "no partial file left"
+  assert_eq 1 "$(find "$TMP" -maxdepth 1 -name 'scripts_backup_*.tar.gz' | wc -l | tr -d '[:space:]')" "only the old archive remains; nothing truncated counts as new"
+}
+
 run_tests
