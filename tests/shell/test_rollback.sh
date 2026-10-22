@@ -218,4 +218,44 @@ test_an_archive_whose_content_does_not_match_its_sidecar_is_refused() {
   assert_file_content "$T/server/world/level.dat" current "world untouched"
 }
 
+
+test_a_legacy_archive_is_refused_when_the_descriptor_cannot_be_inspected() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" legacy
+  rm -rf "$T/backups/.meta"
+  touch -d "2026-01-01 00:20:00" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst"
+  # stat fails for /dev/fd paths: the mtime fallback must not consult the path instead.
+  cat > "$T/bin/stat" <<SH
+#!/bin/bash
+for a in "\$@"; do [[ "\$a" == /dev/fd/* ]] && exit 1; done
+exec "$(PATH="${PATH#"$T/bin:"}" command -v stat)" "\$@"
+SH
+  chmod +x "$T/bin/stat"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 1 "$RC" "the rollback refuses"
+  assert_contains "$OUT" "cannot be checked through /dev/fd" "fails closed with a clear message"
+  assert_not_logged "systemctl stop" "the server was never stopped"
+}
+
+test_an_archive_swapped_after_the_open_is_not_rolled_back_to_by_name() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" honest
+  make_archive "$T/elsewhere/planted.tar.zst" planted
+  # The name is re-pointed at another inode once the archive is open: the
+  # stat of the path answers with the planted file's identity.
+  local planted_id; planted_id="$(stat -c '%d:%i' "$T/elsewhere/planted.tar.zst")"
+  cat > "$T/bin/stat" <<SH
+#!/bin/bash
+if [[ "\$1" == -c && "\$2" == "%d:%i" && "\$4" == *minecraft_backup_2026-01-01* ]]; then echo "$planted_id"; exit 0; fi
+exec "$(PATH="${PATH#"$T/bin:"}" command -v stat)" "\$@"
+SH
+  chmod +x "$T/bin/stat"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 1 "$RC" "the rollback refuses"
+  assert_contains "$OUT" "changed after it was opened" "says why"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
 run_tests

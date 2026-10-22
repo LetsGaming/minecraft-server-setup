@@ -301,15 +301,28 @@ complete_staged_jars() {
 # two hours of the stamp in its name. Anyone who can rename files in the
 # backups folder could otherwise make an old or planted archive the "newest".
 archive_name_is_credible() {
-  local file="$1" fd="${2:-}" base rel side recorded actual source
+  local file="$1" fd="${2:-}" base rel side recorded actual source mtime="" info
   base="${file##*/}"
   rel="${file#"${BACKUPS_PATH%/}"/}"
   side="${BACKUPS_PATH%/}/.meta/${rel}.sha256"
+  source="$file"
+  if [[ -n "$fd" ]]; then
+    # Every check goes through the opened descriptor; a host that cannot
+    # address it fails closed rather than checking the (swappable) path.
+    if ! info="$(bk_fd_stat "$fd" '%Y %d:%i')"; then
+      _ar_error "Refusing to pick $base automatically: the opened archive cannot be checked through /dev/fd on this host. Choose it explicitly with --file."
+      return 1
+    fi
+    mtime="${info%% *}"
+    if [[ "$(stat -c '%d:%i' -- "$file" 2>/dev/null)" != "${info##* }" ]]; then
+      _ar_error "Refusing to pick $base automatically: the file under that name changed after it was opened."
+      return 1
+    fi
+    source="/dev/fd/$fd"
+  fi
   if [[ -f "$side" ]]; then
     recorded="$(grep -F -- "  $base" "$side" 2>/dev/null | head -n1 | cut -d' ' -f1)"
     if [[ "$recorded" =~ ^[0-9a-f]{64}$ ]]; then
-      source="$file"
-      [[ -n "$fd" && -r "/dev/fd/$fd" ]] && source="/dev/fd/$fd"
       actual="$(bk_file_sha256 "$source")" || actual=""
       if [[ "$actual" == "$recorded" ]]; then
         return 0
@@ -318,7 +331,7 @@ archive_name_is_credible() {
       return 1
     fi
   fi
-  if bk_name_backed_by_mtime "$file"; then
+  if bk_name_backed_by_mtime "$file" "$mtime"; then
     return 0
   fi
   _ar_error "Refusing to pick $base automatically: no sidecar vouches for the name and the file was not written at the time its name says. Choose it explicitly with --file if it is the one you want."

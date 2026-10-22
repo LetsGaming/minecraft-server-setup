@@ -104,16 +104,31 @@ archive_is_valid() {
   (( rc == 1 )) && return 1
   (( LEGACY_CHECKS_LEFT > 0 )) || return 1
   LEGACY_CHECKS_LEFT=$((LEGACY_CHECKS_LEFT - 1))
+  # One open for the integrity test, the fstat and the hash, so the sidecar can
+  # only vouch for the inode that passed; the path must still name that inode
+  # when the sidecar is written.
+  local fd info owner mtime ident
+  exec {fd}<"$file" || return 1
   case "$file" in
-    *.tar.zst) bk_nice zstd -t "$file" > /dev/null 2>&1 || return 1 ;;
-    *.tar.gz) bk_nice gzip -t "$file" > /dev/null 2>&1 || return 1 ;;
-    *) return 1 ;;
+    *.tar.zst) bk_nice zstd -t <&"$fd" > /dev/null 2>&1 || { exec {fd}<&-; return 1; } ;;
+    *.tar.gz) bk_nice gzip -t <&"$fd" > /dev/null 2>&1 || { exec {fd}<&-; return 1; } ;;
+    *) exec {fd}<&-; return 1 ;;
   esac
-  if bk_name_backed_by_mtime "$file" && sum="$(bk_file_sha256 "$file")"; then
-    bk_archive_write_sidecar "$file" "$sum  ${file##*/}" 2>/dev/null || true
+  if info="$(bk_fd_stat "$fd" '%u %Y %d:%i')"; then
+    owner="${info%% *}"; ident="${info##* }"; mtime="${info#* }"; mtime="${mtime%% *}"
+    if [[ "$owner" != "$(id -u)" ]]; then
+      log "No sidecar written for ${file#"$BACKUP_BASE"/}: it is owned by uid $owner, not by $(id -un)."
+    elif ! bk_name_backed_by_mtime "$file" "$mtime"; then
+      log "No sidecar written for ${file#"$BACKUP_BASE"/}: its mtime does not back the stamp in its name."
+    elif sum="$(bk_file_sha256 "/dev/fd/$fd")" && [[ "$(stat -c '%d:%i' -- "$file" 2>/dev/null)" == "$ident" ]]; then
+      bk_archive_write_sidecar "$file" "$sum  ${file##*/}" 2>/dev/null || true
+    else
+      log "No sidecar written for ${file#"$BACKUP_BASE"/}: the file changed under its name while it was being checked."
+    fi
   else
-    log "No sidecar written for ${file#"$BACKUP_BASE"/}: its mtime does not back the stamp in its name."
+    log "No sidecar written for ${file#"$BACKUP_BASE"/}: this host cannot inspect an opened file through /dev/fd."
   fi
+  exec {fd}<&-
   return 0
 }
 

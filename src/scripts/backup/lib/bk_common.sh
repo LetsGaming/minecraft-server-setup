@@ -176,7 +176,8 @@ bk_private_dir() {
     return 1
   fi
   local stray
-  stray="$(find "$dir" -mindepth 1 \( ! -uid "$uid" -o -perm /022 \) -print -quit 2>/dev/null)"
+  # Symlinks always show mode 777, so only their ownership is checked.
+  stray="$(find "$dir" -mindepth 1 \( ! -uid "$uid" -o \( ! -type l -perm /022 \) \) -print -quit 2>/dev/null)"
   if [[ -n "$stray" ]]; then
     bk_log WARN "$stray (under $dir) is not owned by $(id -un) alone or is writable by others"
     return 1
@@ -190,19 +191,27 @@ bk_private_dir() {
   return 0
 }
 
-# bk_name_backed_by_mtime <file>
+# bk_name_backed_by_mtime <file> [mtime]
 # True when the file's mtime lies within two hours of the stamp in its name,
 # which is what an archive from before sidecars existed looks like; a renamed
-# archive does not.
+# archive does not. Callers that already fstat'ed an opened descriptor pass
+# that mtime, so the check binds to the inode they hold.
 bk_name_backed_by_mtime() {
-  local base="${1##*/}" epoch mtime diff
+  local base="${1##*/}" epoch mtime="${2:-}" diff
   local re='([0-9]{4})-([0-9]{2})-([0-9]{2})_([0-9]{2})-([0-9]{2})-([0-9]{2})'
   [[ "$base" =~ $re ]] || return 1
   epoch="$(date -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}" +%s 2>/dev/null)" || return 1
-  mtime="$(stat -c %Y -- "$1" 2>/dev/null)" || return 1
+  [[ -n "$mtime" ]] || mtime="$(stat -c %Y -- "$1" 2>/dev/null)" || return 1
   [[ "$epoch" =~ ^[0-9]+$ && "$mtime" =~ ^[0-9]+$ ]] || return 1
   diff=$(( mtime - epoch )); (( diff < 0 )) && diff=$(( -diff ))
   (( diff <= 7200 ))
+}
+
+# bk_fd_stat <fd> <format>: stat of the inode behind an opened descriptor, or
+# failure when the host cannot address it through /dev/fd.
+bk_fd_stat() {
+  [[ -e "/dev/fd/$1" ]] || return 1
+  stat -L -c "$2" "/dev/fd/$1" 2>/dev/null
 }
 
 # bk_file_sha256 <path>: the hex digest, or failure.

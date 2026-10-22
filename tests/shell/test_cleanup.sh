@@ -463,4 +463,39 @@ test_cleanup_waits_for_a_running_operation() {
   assert_exists "$T/backups/hourly/minecraft_backup_h1.tar.zst" "nothing was deleted"
 }
 
+
+test_no_legacy_sidecar_when_the_name_no_longer_points_at_the_checked_inode() {
+  setup
+  set_var MAX_HOURLY_BACKUPS 1
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" a
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" b
+  rm -rf "$T/backups/.meta"
+  touch -d "2026-01-02 00:05:00" "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst"
+  if [[ ! -e /dev/fd/0 ]]; then skip "fd stat" "this host has no /dev/fd"; return; fi
+  # A stat of the path (not of the opened descriptor) reports another inode,
+  # as it would after a swap between the check and the sidecar write.
+  cat > "$T/bin/stat" <<SH
+#!/bin/bash
+if [[ "\$1" == -c && "\$2" == "%d:%i" && "\$4" == *minecraft_backup_2026-01-02* ]]; then echo "9:9"; exit 0; fi
+exec "$(PATH="${PATH#"$T/bin:"}" command -v stat)" "\$@"
+SH
+  chmod +x "$T/bin/stat"
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_contains "$OUT" "changed under its name" "says why"
+  assert_missing "$T/backups/.meta/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst.sha256" "no sidecar for an inode the name no longer points at"
+}
+
+test_a_legacy_sidecar_hashes_the_opened_descriptor() {
+  setup
+  set_var MAX_HOURLY_BACKUPS 1
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" a
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" b
+  rm -rf "$T/backups/.meta"
+  touch -d "2026-01-02 00:05:00" "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst"
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_contains "$(cat "$T/backups/.meta/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst.sha256" 2>/dev/null)" "$(sha256sum "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" | cut -d' ' -f1)" "the recorded hash is the file's, read through the opened descriptor"
+}
+
 run_tests

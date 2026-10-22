@@ -39,7 +39,7 @@ decompress_cmd() {
 if $test_mode; then
   [[ "${ZSTD_SHIM_FAIL_TEST:-}" == 1 ]] && exit 1
   if $real; then exec "$REAL_ZSTD" "$@"; fi
-  gzip -t "$in"
+  if [[ -n "$in" ]]; then gzip -t "$in"; else gzip -t; fi
 elif $decompress; then
   if [[ "${ZSTD_SHIM_FAIL_DECOMPRESS:-}" == 1 ]]; then
     if [[ -n "$in" ]]; then decompress_cmd "$in" | head -c 512; else decompress_cmd | head -c 512; fi

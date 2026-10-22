@@ -767,4 +767,22 @@ test_privacy_is_enforced_below_the_mirror_too() {
   assert_eq yes "$(mode_has_no_group_or_other_write "$T/backups/.meta/hourly")" "and one inside .meta"
 }
 
+
+test_a_symlink_inside_the_mirror_does_not_make_it_unprivate() {
+  setup
+  export BACKUP_STAGING_MODE=mirror
+  if ! ln -s world/level.dat "$T/server/level_link" 2>/dev/null || [[ ! -L "$T/server/level_link" ]]; then
+    skip "symlink in the mirror" "this host cannot create real symlinks"
+    return
+  fi
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "backup exits 0"
+  assert_contains "$OUT" "Staging mode: mirror" "the mirror stays in use"
+  assert_not_contains "$OUT" "writable by others" "a link's 777 mode is not a privacy failure"
+  rm -f "$T"/backups/hourly/*.tar.zst
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "the second run, with the link now inside the mirror, exits 0"
+  assert_contains "$OUT" "Staging mode: mirror" "and still uses the mirror"
+}
+
 run_tests
