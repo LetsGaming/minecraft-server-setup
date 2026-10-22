@@ -98,9 +98,12 @@ test_orphan_jars_are_pruned_and_referenced_jars_kept() {
   mkdir -p "$T/backups/jars"
   echo fresh > "$T/backups/jars/fresh.jar"
   mkdir -p "$T/backups/archives/daily"
-  node "$HERE/lib/mk_symlink_archive.js" "$T/backups/archives/daily/minecraft_backup_d1.tar.zst" \
+  # The helper writes gzip, so the archive is named .tar.gz when the real zstd
+  # would otherwise be asked to read it.
+  local ext=zst; real_tools && ext=gz
+  node "$HERE/lib/mk_symlink_archive.js" "$T/backups/archives/daily/minecraft_backup_d1.tar.$ext" \
     "kept.jar=../../../jars/kept.jar"
-  touch -d "2026-01-02 00:00:00" "$T/backups/archives/daily/minecraft_backup_d1.tar.zst"
+  touch -d "2026-01-02 00:00:00" "$T/backups/archives/daily/minecraft_backup_d1.tar.$ext"
   run_script "$CLEANUP"
   assert_rc 0 "$RC" "cleanup succeeds"
   assert_exists "$T/backups/jars/kept.jar" "a jar an archive still links to is kept"
@@ -264,11 +267,169 @@ test_a_corrupt_newest_archive_does_not_shield_older_ones_from_being_the_kept_one
 
 # ── the size measure and the operation lock ──────────────────────────────────
 
-test_the_size_measure_leaves_out_a_running_backup_and_the_jars_folder() {
+test_the_size_measure_leaves_out_staging_sidecars_and_the_jars_folder() {
   setup
   set_var MAX_STORAGE_GB 1
   run_script "$CLEANUP"
-  assert_logged "du -sb --exclude=tmp_backup --exclude=jars $T/backups" "du skips tmp_backup and jars"
+  assert_logged "du -sb --exclude=tmp_backup --exclude=jars --exclude=.stage --exclude=.meta $T/backups" "du skips tmp_backup, jars, .stage and .meta"
+}
+
+# ── cheap cleanup: jars, bad config, pre-restore expiry ──────────────────────
+
+test_an_empty_jars_folder_is_removed_without_decompressing_anything() {
+  setup
+  mkdir -p "$T/backups/jars"
+  make_archive "$T/backups/archives/daily/minecraft_backup_2026-01-01_00-00-00.tar.zst" d
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_missing "$T/backups/jars" "the empty legacy folder is gone"
+  assert_not_logged "zstd -dc" "no archive was decompressed for it"
+}
+
+test_jars_too_young_to_prune_do_not_trigger_an_archive_scan() {
+  setup
+  mkdir -p "$T/backups/jars"
+  echo fresh > "$T/backups/jars/fresh.jar"
+  make_archive "$T/backups/archives/daily/minecraft_backup_2026-01-01_00-00-00.tar.zst" d
+  run_script "$CLEANUP"
+  assert_not_logged "zstd -dc" "no archive listing when no jar is old enough"
+  assert_exists "$T/backups/jars/fresh.jar" "the jar stays"
+}
+
+test_the_orphan_jar_scan_runs_at_most_once_a_day() {
+  setup
+  old_jar orphan.jar
+  make_archive "$T/backups/archives/daily/minecraft_backup_2026-01-01_00-00-00.tar.zst" d
+  run_script "$CLEANUP"
+  assert_missing "$T/backups/jars/orphan.jar" "the orphan is removed on the first run"
+  old_jar orphan2.jar
+  : > "$SHIM_LOG"
+  run_script "$CLEANUP"
+  assert_contains "$OUT" "already checked today" "the second run skips the scan"
+  assert_not_logged "zstd -dc" "and decompresses nothing"
+  assert_exists "$T/backups/jars/orphan2.jar" "the new orphan waits for tomorrow"
+}
+
+test_a_bad_tier_value_skips_only_that_tier() {
+  setup
+  set_var MAX_DAILY_BACKUPS "lots"
+  set_var MAX_WEEKLY_BACKUPS 1
+  mk_backup archives/daily minecraft_backup_d1.tar.zst 1
+  mk_backup archives/weekly minecraft_backup_w1.tar.zst 1
+  mk_backup archives/weekly minecraft_backup_w2.tar.zst 2
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup still succeeds"
+  assert_contains "$OUT" "MAX_DAILY_BACKUPS" "the bad value is reported"
+  assert_exists "$T/backups/archives/daily/minecraft_backup_d1.tar.zst" "the daily tier is left alone"
+  assert_missing "$T/backups/archives/weekly/minecraft_backup_w1.tar.zst" "the weekly cap still applies"
+}
+
+test_a_decimal_storage_limit_is_reported_and_skipped() {
+  setup
+  set_var MAX_STORAGE_GB 1.5
+  mk_backup hourly minecraft_backup_h1.tar.zst 1
+  export DU_SHIM_BYTES=$((1073741824 * 3))
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "no arithmetic abort"
+  assert_contains "$OUT" "MAX_STORAGE_GB" "the bad value is reported"
+  assert_contains "$OUT" "Backup cleanup complete." "the run finishes"
+  assert_exists "$T/backups/hourly/minecraft_backup_h1.tar.zst" "nothing evicted on a bad limit"
+}
+
+test_an_old_pre_restore_copy_is_removed_after_the_keep_period() {
+  setup
+  mkdir -p "$T/server.pre-restore/world"
+  touch -d "8 days ago" "$T/server.pre-restore"
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_missing "$T/server.pre-restore" "the copy older than 7 days is gone"
+}
+
+test_a_recent_pre_restore_copy_is_kept() {
+  setup
+  mkdir -p "$T/server.pre-restore/world"
+  touch -d "2 days ago" "$T/server.pre-restore"
+  run_script "$CLEANUP"
+  assert_exists "$T/server.pre-restore" "a 2 day old copy stays"
+  set_var RESTORE_KEEP_OLD_DAYS 1
+  run_script "$CLEANUP"
+  assert_missing "$T/server.pre-restore" "unless RESTORE_KEEP_OLD_DAYS says otherwise"
+}
+
+# ── sidecars decide validity; legacy archives are tested once ───────────────
+
+test_a_legacy_archive_without_sidecar_is_tested_once_and_gets_one() {
+  setup
+  set_var MAX_HOURLY_BACKUPS 1
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" a
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" b
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_logged "zstd -t" "the newest legacy archive is tested"
+  assert_file_content "$T/backups/.meta/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst.sha256" "verified-legacy  minecraft_backup_2026-01-02_00-00-00.tar.zst" "and gets a verified-legacy sidecar"
+  : > "$SHIM_LOG"
+  run_script "$CLEANUP"
+  assert_not_logged "zstd -t" "the next run trusts the sidecar"
+}
+
+test_a_sidecar_vouches_without_decompression() {
+  setup
+  set_var MAX_HOURLY_BACKUPS 1
+  mk_backup hourly minecraft_backup_2026-01-01_00-00-00.tar.zst 1
+  mk_backup hourly minecraft_backup_2026-01-02_00-00-00.tar.zst 2
+  mkdir -p "$T/backups/.meta/hourly"
+  echo "abc  minecraft_backup_2026-01-02_00-00-00.tar.zst" > "$T/backups/.meta/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst.sha256"
+  run_script "$CLEANUP"
+  assert_not_logged "zstd -t" "no integrity test for an archive with a sidecar"
+  assert_missing "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" "the older one is pruned"
+  assert_missing "$T/backups/.meta/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst.sha256" "and would take its sidecar with it"
+}
+
+# ── --make-room and hardlink-aware eviction ─────────────────────────────────
+
+test_make_room_evicts_in_tier_order_until_enough_is_free() {
+  setup
+  mk_backup archives/monthly minecraft_backup_m1.tar.zst 1
+  mk_backup hourly minecraft_backup_2026-01-05_00-00-00.tar.zst 5
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-06_00-00-00.tar.zst" h2
+  mk_backup archives/daily minecraft_backup_2026-01-07_00-00-00.tar.zst 7
+  make_archive "$T/backups/archives/daily/minecraft_backup_2026-01-08_00-00-00.tar.zst" d2
+  export DF_SHIM_AVAIL=1000
+  run_script "$CLEANUP" --make-room 1150
+  assert_rc 0 "$RC" "enough was freed"
+  assert_missing "$T/backups/hourly/minecraft_backup_2026-01-05_00-00-00.tar.zst" "oldest hourly first"
+  assert_exists "$T/backups/hourly/minecraft_backup_2026-01-06_00-00-00.tar.zst" "the newest valid hourly is protected"
+  assert_missing "$T/backups/archives/daily/minecraft_backup_2026-01-07_00-00-00.tar.zst" "then the oldest daily"
+  assert_exists "$T/backups/archives/daily/minecraft_backup_2026-01-08_00-00-00.tar.zst" "stops once the target is met"
+  assert_exists "$T/backups/archives/monthly/minecraft_backup_m1.tar.zst" "monthly untouched"
+}
+
+test_make_room_exits_73_when_it_cannot_free_enough() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-05_00-00-00.tar.zst" only
+  export DF_SHIM_AVAIL=1000
+  run_script "$CLEANUP" --make-room 5000
+  assert_rc 73 "$RC" "exit 73"
+  assert_contains "$OUT" "Could not free enough space" "says so"
+  assert_exists "$T/backups/hourly/minecraft_backup_2026-01-05_00-00-00.tar.zst" "the only valid archive of the tier stays"
+}
+
+test_eviction_does_not_count_bytes_a_hardlinked_archive_shares() {
+  setup
+  mk_backup hourly minecraft_backup_2026-01-01_00-00-00.tar.zst 1
+  mk_backup hourly minecraft_backup_2026-01-02_00-00-00.tar.zst 2
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-03_00-00-00.tar.zst" h3
+  mkdir -p "$T/backups/archives/daily"
+  if ! ln "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" "$T/backups/archives/daily/minecraft_backup_2026-01-01_00-00-00.tar.zst" 2>/dev/null; then
+    skip "hardlink accounting" "this host cannot create hard links here"
+    return
+  fi
+  export DF_SHIM_AVAIL=0
+  run_script "$CLEANUP" --make-room 100
+  assert_rc 0 "$RC" "the target is met"
+  assert_missing "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" "the linked file is evicted"
+  assert_missing "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" "but counted as zero, so the next one goes too"
+  assert_exists "$T/backups/hourly/minecraft_backup_2026-01-03_00-00-00.tar.zst" "the newest valid one stays"
 }
 
 test_cleanup_waits_for_a_running_operation() {
