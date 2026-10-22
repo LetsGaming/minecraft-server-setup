@@ -9,7 +9,9 @@
 echo "rsync $*" >> "$SHIM_LOG"
 [[ "${RSYNC_SHIM_FAIL:-}" == 1 ]] && exit 23
 if [[ "${MC_TEST_REAL_TOOLS:-}" == 1 && -n "${REAL_RSYNC:-}" ]]; then
-  exec "$REAL_RSYNC" "$@"
+  "$REAL_RSYNC" "$@" || exit $?
+  [[ -n "${RSYNC_SHIM_EXIT:-}" ]] && exit "$RSYNC_SHIM_EXIT"
+  exit 0
 fi
 paths=()
 excludes=()
@@ -41,7 +43,7 @@ for pat in "${excludes[@]}"; do
   [[ -n "$pat" ]] || continue
   case "$pat" in
     /*) rm -rf -- "$dest/${pat#/}" ;;
-    */\*) find "$dest" -type d -name "${pat%/*}" -exec sh -c 'find "$1" -mindepth 1 -delete' _ {} \; ;;
+    */\*) find "$dest" -type d -path "*/${pat%/*}" -exec sh -c 'find "$1" -mindepth 1 -delete' _ {} \; ;;
     *) find "$dest" -name "$pat" -exec rm -rf -- {} + 2>/dev/null ;;
   esac
 done

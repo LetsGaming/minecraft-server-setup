@@ -1,59 +1,17 @@
 #!/bin/bash
 set -e
 
-# ——— basics ———
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../common/server_control.sh"
 source "$SCRIPT_DIR/../common/archive_restore.sh"
 source "$SCRIPT_DIR/../common/utils.sh"
+source "$SCRIPT_DIR/lib/bk_common.sh"
+source "$SCRIPT_DIR/lib/bk_state.sh"
+source "$SCRIPT_DIR/lib/bk_stage.sh"
+source "$SCRIPT_DIR/lib/bk_archive.sh"
+source "$SCRIPT_DIR/lib/bk_space.sh"
 
-# Track auto-save state so we can always re-enable on exit
-_AUTO_SAVE_DISABLED=false
-# Set while a backup is being staged or compressed; removed by the EXIT trap
-# so no failure path leaves a temp tree or a half-written archive behind.
-TMP_DIR=""
-PARTIAL_ARCHIVE=""
-
-_backup_cleanup() {
-  release_operation_lock
-  if [[ -n "$PARTIAL_ARCHIVE" ]]; then
-    rm -f -- "$PARTIAL_ARCHIVE"
-    PARTIAL_ARCHIVE=""
-  fi
-  if [[ -n "$TMP_DIR" && -d "$TMP_DIR" ]]; then
-    rm -rf -- "$TMP_DIR"
-  fi
-  if $_AUTO_SAVE_DISABLED; then
-    log INFO "Re-enabling auto-save (cleanup trap)..."
-    enable_auto_save 2>/dev/null || log WARN "Failed to re-enable auto-save — run /save-on manually"
-    _AUTO_SAVE_DISABLED=false
-  fi
-}
-trap _backup_cleanup EXIT
-
-# ——— helpers ———
-log() {
-    local level="$1"
-    shift
-    echo "$(date +'%F %T') [$level] $*"
-}
-
-# Runs the given command de-prioritized (CPU niceness and, where supported,
-# I/O class) so the hourly backup does not compete on equal footing with the
-# game server or the API wrapper for the same CPU/disk. Falls back to plain
-# nice, then to running the command as-is, on a system missing either tool
-# rather than failing the backup over it.
-nice_run() {
-  if command -v ionice &>/dev/null; then
-    ionice -c2 -n7 nice -n 10 "$@"
-  elif command -v nice &>/dev/null; then
-    nice -n 10 "$@"
-  else
-    "$@"
-  fi
-}
-
-# ——— args ———
+# ── args ──
 ARCHIVE_MODE=false
 ARCHIVE_TYPE=""
 DRY_RUN=false
@@ -77,291 +35,270 @@ Usage: $0 [--archive [TYPE]] [--dry-run] [--verbose]
 
 Options:
   --archive [TYPE]   Store this backup in 'archives/<type>' instead of hourly
-  --dry-run          Simulate the backup process without making changes
-  --verbose          Enable verbose output for rsync, tar, and zstd
+  --dry-run          Show what the run would do without making changes
+  --verbose          Verbose rsync output (the files copied and transfer stats)
+
+Environment:
+  BK_EXTRA_TIERS     Further archive tiers (space separated) that receive the
+                     same archive by hardlink, used by run_backup.sh when
+                     several tiers are due on the same day.
+
+Exit codes: 0 done, 1 failed, 65 archive holds no world, 73 not enough free
+space, 75 another backup or operation holds the lock (skipped).
 EOF
       exit 0
       ;;
-    *) log ERROR "Unknown argument: $1"; exit 1 ;;
+    *) bk_log ERROR "Unknown argument: $1"; exit 1 ;;
   esac
 done
 
-# ——— backup message ———
 if $ARCHIVE_MODE; then
   ARCHIVE_TYPE="${ARCHIVE_TYPE:-general}"
   # The type becomes a directory name under archives/, so it must not be able
   # to carry a path separator or "..".
   if [[ ! "$ARCHIVE_TYPE" =~ ^[a-z0-9_-]+$ ]]; then
-    log ERROR "Invalid archive type '$ARCHIVE_TYPE' (allowed: lowercase letters, digits, '_' and '-')"
+    bk_log ERROR "Invalid archive type '$ARCHIVE_TYPE' (allowed: lowercase letters, digits, '_' and '-')"
     exit 1
   fi
-  send_message "Starting archive backup ($ARCHIVE_TYPE)" || log WARN "Failed to send message to server"
-  log INFO "Archive mode ON — type: $ARCHIVE_TYPE"
+  BK_COMPONENT="backup:$ARCHIVE_TYPE"
 else
-  send_message "Starting hourly backup" || log WARN "Failed to send message to server"
-  log INFO "Hourly backup mode"
+  BK_COMPONENT="backup:hourly"
 fi
 
-$DRY_RUN && log INFO "Dry run mode enabled — no data will be written"
-$VERBOSE && log INFO "Verbose mode enabled"
+EXTRA_TIERS=()
+for tier in ${BK_EXTRA_TIERS:-}; do
+  if [[ ! "$tier" =~ ^[a-z0-9_-]+$ ]]; then
+    bk_log ERROR "Invalid extra tier '$tier' in BK_EXTRA_TIERS"
+    exit 1
+  fi
+  [[ "$tier" == "$ARCHIVE_TYPE" ]] || EXTRA_TIERS+=("$tier")
+done
 
-# ——— setup ———
+bk_load_config || exit 1
+bk_probe_priority
+BK_VERBOSE="$VERBOSE"
+
+# ── state for the EXIT handler ──
+_AUTO_SAVE_DISABLED=false
+PART_FILE=""
+NOTIFIED=false
+START_TIME=$(date +%s)
+BK_TIERS="${ARCHIVE_TYPE:-hourly} ${EXTRA_TIERS[*]}"
+BK_SAVE_OFF_SECONDS=0
+BK_STAGING=""
+BK_LEVEL=0
+BK_THREADS="$(bk_zstd_threads)"
+
+# Order matters: the server must get save-on before anything slow, the
+# partial archive must never be seen under a final name, and exactly one
+# failure notification goes out for whatever ended the run.
+_bk_exit() {
+  local rc=$?
+  trap - EXIT ERR
+  set +e
+  if $_AUTO_SAVE_DISABLED; then
+    bk_log INFO "Re-enabling auto-save (cleanup trap)..."
+    enable_auto_save 2>/dev/null || bk_log WARN "Failed to re-enable auto-save; run /save-on manually"
+    _AUTO_SAVE_DISABLED=false
+  fi
+  if [[ -n "$PART_FILE" ]]; then
+    rm -f -- "$PART_FILE"
+    PART_FILE=""
+  fi
+  bk_stage_discard_run
+  if (( rc != 0 && rc != BK_EX_SKIP )) && ! $NOTIFIED && ! $DRY_RUN; then
+    local reason="${BK_FAIL_REASON:-command failed${BK_ERR_CMD:+: $BK_ERR_CMD}}"
+    case "$rc" in
+      130|143|129) reason="interrupted (signal, exit $rc)" ;;
+    esac
+    bk_log ERROR "Backup failed at stage '$BK_STAGE': $reason"
+    send_message "Backup failed: $reason" 2>/dev/null || true
+    notify_error "backup_failed" "Backup failed at stage '$BK_STAGE': $reason. No backup was made." || true
+    NOTIFIED=true
+    bk_state_write_last "$rc" "${ARCHIVE_TYPE:-hourly}" "" 0 "$(( $(date +%s) - START_TIME ))" "$BK_STAGE" 2>/dev/null || true
+  fi
+  wait_for_notifications
+  release_operation_lock
+  exit "$rc"
+}
+_bk_on_err() { BK_ERR_CMD="$BASH_COMMAND"; }
+BK_ERR_CMD=""
+set -o errtrace
+trap _bk_on_err ERR
+trap _bk_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+# ── setup ──
 BACKUP_BASE="$BACKUPS_PATH"
 DATE=$(date +'%Y-%m-%d_%H-%M-%S')
-START_TIME=$(date +%s)
-
 if $ARCHIVE_MODE; then
   BACKUP_DIR="$BACKUP_BASE/archives/$ARCHIVE_TYPE"
+  LEVEL="$BACKUP_ARCHIVE_LEVEL"
+  HOURLY=0
 else
   BACKUP_DIR="$BACKUP_BASE/hourly"
+  LEVEL="$BACKUP_HOURLY_LEVEL"
+  HOURLY=1
 fi
+BK_LEVEL="$LEVEL"
 
 # Archives hold variables.txt (API key, RCON password, webhook URL) and
 # api-server-config.json, so nothing this run creates is readable by other
 # users. Set BACKUP_UMASK to widen it when another account must read backups.
 umask "${BACKUP_UMASK:-077}"
 
+if $DRY_RUN; then
+  bk_log INFO "Dry run: nothing is written"
+  bk_log INFO "Would make a${ARCHIVE_MODE:+n archive ($ARCHIVE_TYPE)} backup${EXTRA_TIERS:+ linked into ${EXTRA_TIERS[*]}} in $BACKUP_DIR"
+  bk_log INFO "zstd level $LEVEL, threads $BK_THREADS, staging mode ${BACKUP_STAGING_MODE}, priority wrapper: ${BK_NICE[*]:-none}"
+  bk_log INFO "(dry-run) No backup written."
+  exit 0
+fi
+
 mkdir -p "$BACKUP_DIR"
+bk_set_stage preflight
 
-# ——— no backup while a restore, rollback or upgrade is rewriting the server ———
+# ── no backup while a restore, rollback or upgrade is rewriting the server ──
 # The upgrade job runs this script itself and passes (MC_OPERATION_LOCK_HELD).
-if ! $DRY_RUN; then
-  acquire_operation_lock backup || { log WARN "Another operation is running for $INSTANCE_NAME; skipping."; exit 75; }
-fi
+acquire_operation_lock backup || { bk_log WARN "Another operation is running for $INSTANCE_NAME; skipping."; exit "$BK_EX_SKIP"; }
 
-# ——— one backup per instance at a time ———
-# Cron and wrapper-triggered runs share the staging directory below, so they
-# must not overlap. Exit 75 (EX_TEMPFAIL) tells callers the run was skipped.
-if ! $DRY_RUN; then
-  if command -v flock &>/dev/null; then
-    exec 9>"$BACKUP_BASE/.backup.lock"
-    if ! flock -n 9; then
-      log WARN "Another backup is already running for $INSTANCE_NAME; skipping."
-      exit 75
-    fi
-  else
-    log WARN "flock not found; concurrent backups are not prevented"
+# ── one backup per instance at a time ──
+# Cron and wrapper-triggered runs share the staging tree, so they must not
+# overlap. Exit 75 (EX_TEMPFAIL) tells callers the run was skipped.
+if command -v flock &>/dev/null; then
+  exec 9>"$BACKUP_BASE/.backup.lock"
+  if ! flock -n 9; then
+    bk_log WARN "Another backup is already running for $INSTANCE_NAME; skipping."
+    exit "$BK_EX_SKIP"
   fi
+else
+  bk_log WARN "flock not found; only the operation lock serializes backups"
 fi
 
-log INFO "Backup directory: $BACKUP_DIR"
+bk_log INFO "Backup directory: $BACKUP_DIR"
+bk_archive_remove_stale_parts
+bk_stage_remove_legacy_tmp
 
-# ——— disable auto‑save ———
-abort_backup() {
-  log ERROR "$1. Aborting, so that no half-written world is archived."
-  send_message "Backup failed: $1" || true
-  notify_error "backup_failed" "$1. No backup was made." || true
-  wait_for_notifications
-  exit 1
-}
+STAGING_MODE="$(bk_stage_select)"
+BK_STAGING="$STAGING_MODE"
+bk_log INFO "Staging mode: $STAGING_MODE; zstd level $LEVEL, threads $BK_THREADS; priority wrapper: ${BK_NICE[*]:-none}"
+
+bk_space_preflight "$STAGING_MODE" "$SCRIPT_DIR/automation/cleanup_backups.sh" || exit $?
+
+if $ARCHIVE_MODE; then
+  send_message "Starting archive backup ($ARCHIVE_TYPE)" || bk_log WARN "Failed to send message to server"
+  bk_log INFO "Archive mode, type: $ARCHIVE_TYPE${EXTRA_TIERS:+ (also ${EXTRA_TIERS[*]})}"
+else
+  send_message "Starting hourly backup" || bk_log WARN "Failed to send message to server"
+  bk_log INFO "Hourly backup mode"
+fi
+
+# ── quiesce ──
+bk_set_stage quiesce
+abort_backup() { bk_die 1 "$1. Aborting, so that no half-written world is archived."; }
 
 # A stopped server has nothing to flush. One that is up, or whose state cannot
 # be told, must confirm both commands, or the copy below could catch region
 # files mid-write.
 SERVER_UP=false
-if ! $DRY_RUN; then
-  server_state=0
-  server_is_running || server_state=$?
-  [[ "$server_state" -ne 1 ]] && SERVER_UP=true
-fi
+server_state=0
+server_is_running || server_state=$?
+[[ "$server_state" -ne 1 ]] && SERVER_UP=true
 
+SAVE_OFF_START=0
 if $SERVER_UP; then
-  log INFO "Disabling auto-save..."
+  bk_log INFO "Disabling auto-save..."
+  SAVE_OFF_START="$(bk_now_ms)"
   # Marked before the call (S-011): save-off can take effect even when its
   # reply is lost, and then only the trap's save-on turns saving back on.
   _AUTO_SAVE_DISABLED=true
   disable_auto_save || abort_backup "Could not turn auto-save off"
-
-  # Force a save.
-  log INFO "Saving world to disk..."
+  bk_log INFO "Saving world to disk..."
   save_and_wait || abort_backup "The server did not confirm the save"
-  sleep 2
-elif ! $DRY_RUN; then
-  log INFO "The server is not running; copying its files as they are."
-fi
-
-# ——— build include list ———
-cd "$SERVER_PATH"
-INCLUDE_PATHS=()
-for item in * .*; do
-  [[ "$item" == "." || "$item" == ".." || "$item" == "backups" || "$item" == ".mc-meta" ]] && continue
-  INCLUDE_PATHS+=("$item")
-done
-
-# ——— define exclude rules ———
-EXCLUDES=(
-  --exclude='logs/*'
-  --exclude='*.log'
-  --exclude='*.tmp'
-  --exclude='crash-reports/*'
-  --exclude='*.gz'
-  --exclude='ledger.sqlite'
-)
-
-if ! $ARCHIVE_MODE; then
-  log INFO "Excluding .jar files in hourly mode"
-  EXCLUDES+=('--exclude=*.jar')
-fi
-
-# ——— create temporary folder ———
-TMP_DIR="$BACKUP_DIR/tmp_backup"
-if ! $DRY_RUN; then
-  # Anything here is residue of a run that was killed; the lock above makes
-  # it safe to discard, and rsync into a stale tree would resurrect deleted files.
-  rm -rf -- "$TMP_DIR"
-  mkdir -p "$TMP_DIR"
 else
-  TMP_DIR=""
+  bk_log INFO "The server is not running; copying its files as they are."
 fi
 
-# ——— rsync to the temporary directory ———
-log INFO "Syncing server data to temporary backup directory..."
-$DRY_RUN && log INFO "Dry run mode — no rsync performed"
-$DRY_RUN || nice_run rsync -a --inplace --numeric-ids "${EXCLUDES[@]}" "${INCLUDE_PATHS[@]}" "$TMP_DIR" || {
-    log ERROR "rsync failed"
-    exit 1
-}
+# ── stage ──
+bk_set_stage stage
+STAGE_START="$(bk_now_ms)"
+bk_stage_refresh "$STAGING_MODE" "$SERVER_PATH" "$(( HOURLY == 1 ? 0 : 1 ))" || bk_die 1 "Staging the server files failed"
+STAGE_ROOT="$BK_STAGE_ROOT"
+STAGE_MS=$(( $(bk_now_ms) - STAGE_START ))
 
-# The snapshot is on disk; compressing and validating it can take minutes, and
+# The snapshot is on disk; compressing and verifying it can take minutes, and
 # the server must not run without auto-save for that long.
-if $_AUTO_SAVE_DISABLED && ! $DRY_RUN; then
-  log INFO "Re-enabling auto-save..."
-  enable_auto_save && _AUTO_SAVE_DISABLED=false || log WARN "enable_auto_save failed, run /save-on manually"
-fi
-
-# Jars in archive mode.
-# An archive keeps the real jars rsync copied above (S-002). It used to swap
-# them for links into a shared jars/ folder: the links only resolved inside the
-# backups tree, so every restored archive had a dangling server.jar, and the
-# server could not start after a restore, an upgrade rollback or rollback.sh.
-# restore.sh repairs those links in archives made before this change.
-
-# ——— stage instance metadata (archive mode only) ———
-# Everything outside SERVER_PATH that is needed to fully rebuild the management
-# infrastructure from scratch: all management scripts, systemd service files,
-# and the api-server config. node_modules are excluded and reinstalled on restore.
-if $ARCHIVE_MODE && ! $DRY_RUN; then
-  log INFO "Staging instance metadata..."
-
-  INSTANCE_SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"   # <root>/scripts/<instance>
-  # The install root holds scripts/, instances/ and services/. It is not the
-  # server dir's parent: in the instances/ layout that is <root>/instances.
-  BASE_DIR="$(dirname "$(dirname "$INSTANCE_SCRIPTS_DIR")")"
-  TARGET_DIR_NAME="$(basename "$BASE_DIR")"       # e.g. minecraft-server
-  META_DIR="$TMP_DIR/.mc-meta"
-
-  mkdir -p "$META_DIR/scripts" "$META_DIR/systemd"
-
-  # 1. Entire scripts/INSTANCE_NAME tree — skip node_modules and logs
-  rsync -a \
-    --exclude='node_modules/' \
-    --exclude='logs/' \
-    --exclude='*.log' \
-    "$INSTANCE_SCRIPTS_DIR/" "$META_DIR/scripts/"
-  log INFO "  ✓ scripts/ ($(du -sh "$META_DIR/scripts" | cut -f1))"
-
-  # 2. Systemd service files
-  # ${TARGET_DIR_NAME}-manager.service is deliberately absent: the bundled web
-  # interface was retired, so a new backup should not carry a unit that restore
-  # would then reinstall. Restore skips it in old backups for the same reason.
-  for svc_file in \
-    "/etc/systemd/system/${INSTANCE_NAME}.service" \
-    "/etc/systemd/system/${TARGET_DIR_NAME}-api-server.service"; do
-    if [[ -f "$svc_file" ]]; then
-      cp "$svc_file" "$META_DIR/systemd/$(basename "$svc_file")"
-      log INFO "  ✓ systemd/$(basename "$svc_file")"
-    fi
-  done
-
-  # 3. api-server-config.json (at <root>/api-server/ before the services/ layout)
-  API_CONFIG="$BASE_DIR/services/api-server/api-server-config.json"
-  [[ -f "$API_CONFIG" ]] || API_CONFIG="$BASE_DIR/api-server/api-server-config.json"
-  if [[ -f "$API_CONFIG" ]]; then
-    cp "$API_CONFIG" "$META_DIR/api-server-config.json"
-    log INFO "  ✓ api-server-config.json"
-  else
-    log WARN "  api-server-config.json not found — skipping"
+if $_AUTO_SAVE_DISABLED; then
+  bk_log INFO "Re-enabling auto-save..."
+  enable_auto_save && _AUTO_SAVE_DISABLED=false || bk_log WARN "enable_auto_save failed, run /save-on manually"
+  BK_SAVE_OFF_SECONDS="$(bk_ms_to_s $(( $(bk_now_ms) - SAVE_OFF_START )))"
+  bk_log INFO "Staging ($STAGING_MODE) took $(bk_ms_to_s "$STAGE_MS") s; auto-save was off for $BK_SAVE_OFF_SECONDS s"
+else
+  bk_log INFO "Staging ($STAGING_MODE) took $(bk_ms_to_s "$STAGE_MS") s"
+  # A server that started during the copy may have rewritten files under it.
+  state_now=0
+  server_is_running || state_now=$?
+  if [[ "$state_now" -eq 0 ]]; then
+    bk_die 1 "The server started while its files were being copied; discarding this run"
   fi
 fi
 
-# ——— compress with tar + zstd ———
-FINAL_ARCHIVE=""
-if ! $DRY_RUN; then
-  log INFO "Compressing backup..."
+[[ "$STAGING_MODE" == mirror ]] && { bk_stage_check_mirror "$STAGE_ROOT" || bk_die 1 "Staging mirror incomplete"; }
 
-  TAR_OPTS=(-cf - -C "$TMP_DIR" .)
-  ZSTD_OPTS=(-T0)
-
-  ARCHIVE_PATH="$BACKUP_DIR/minecraft_backup_$DATE.tar.zst"
-
-  if $ARCHIVE_MODE; then
-    # Archives use the higher of configured level and 15 for long-term storage
-    archive_level=$(( COMPRESSION_LEVEL > 15 ? COMPRESSION_LEVEL : 15 ))
-    ZSTD_OPTS+=("-$archive_level" -o "$ARCHIVE_PATH")
-  else
-    ZSTD_OPTS+=("-$COMPRESSION_LEVEL" -o "$ARCHIVE_PATH")
-  fi
-
-  PARTIAL_ARCHIVE="$ARCHIVE_PATH"
-  set +e
-  set -o pipefail
-  nice_run tar "${TAR_OPTS[@]}" | nice_run zstd "${ZSTD_OPTS[@]}"
-  PIPE_STATUS=("${PIPESTATUS[@]}")
-  set +o pipefail
-  set -e
-  if [[ "${PIPE_STATUS[0]}" -ne 0 || "${PIPE_STATUS[1]}" -ne 0 ]]; then
-    log ERROR "Compression failed (tar exit ${PIPE_STATUS[0]}, zstd exit ${PIPE_STATUS[1]}); removing partial archive"
-    send_message "Backup failed while compressing" || true
-    notify_error "backup_failed" "Backup compression failed (tar ${PIPE_STATUS[0]}, zstd ${PIPE_STATUS[1]})." || true
-    exit 1
-  fi
-  FINAL_ARCHIVE="$ARCHIVE_PATH"
+META_ROOT=""
+if $ARCHIVE_MODE; then
+  bk_log INFO "Staging instance metadata..."
+  META_ROOT="$(bk_stage_dir)/meta"
+  bk_stage_metadata "$META_ROOT" "$(cd "$SCRIPT_DIR/.." && pwd)" || bk_die 1 "Staging the instance metadata failed"
 fi
 
-# ——— validate archive ———
-# zstd -t proves the compressed stream is intact; listing it with tar proves
-# the tar inside is complete (a tar that died midway still yields a valid zstd
-# stream).
-if ! $DRY_RUN; then
-  log INFO "Validating archive..."
-  if ! nice_run zstd -t "$FINAL_ARCHIVE" &>/dev/null      || ! ( set -o pipefail; nice_run zstd -d -c "$FINAL_ARCHIVE" | nice_run tar -tf - >/dev/null ) 2>/dev/null; then
-    log ERROR "Validation failed, corrupted archive removed"
-    send_message "Backup archive appears corrupted. Removing" || true
-    notify_error "backup_failed" "Backup archive was corrupted and removed." || true
-    exit 1
-  fi
-  PARTIAL_ARCHIVE=""
+# ── compress ──
+bk_set_stage compress
+bk_log INFO "Compressing backup (level $LEVEL, T$BK_THREADS)..."
+PART_FILE="$(bk_archive_part_path "$BACKUP_DIR" "$DATE")"
+bk_archive_create "$STAGE_ROOT" "$META_ROOT" "$BACKUP_DIR" "$DATE" "$LEVEL" "$HOURLY" >/dev/null || bk_die 1 "Compression failed"
+
+# ── verify ──
+bk_set_stage verify
+bk_log INFO "Verifying archive..."
+verify_rc=0
+bk_archive_verify "$PART_FILE" || verify_rc=$?
+if (( verify_rc != 0 )); then
+  bk_die "$verify_rc" "Archive verification failed; the partial archive is removed"
 fi
 
-# ——— cleanup ———
-$DRY_RUN || { rm -rf -- "$TMP_DIR"; TMP_DIR=""; }
+# ── publish ──
+bk_set_stage publish
+FINAL_ARCHIVE="$BACKUP_DIR/minecraft_backup_$DATE.tar.zst"
+bk_archive_publish "$PART_FILE" "$FINAL_ARCHIVE" || bk_die 1 "Could not publish the archive"
+PART_FILE=""
+if (( ${#EXTRA_TIERS[@]} > 0 )); then
+  bk_archive_link_tiers "$FINAL_ARCHIVE" "${EXTRA_TIERS[@]}" || bk_die 1 "Could not link the archive into every due tier"
+fi
+bk_stage_discard_run
 
-# ——— success message ———
+# ── done ──
+bk_set_stage done
 TIME_TAKEN=$(( $(date +%s) - START_TIME ))
 TIME_TAKEN_STMP=$(printf '%02d:%02d:%02d' $((TIME_TAKEN/3600)) $((TIME_TAKEN%3600/60)) $((TIME_TAKEN%60)))
+BACKUP_BYTES="$(bk_file_size "$FINAL_ARCHIVE")"
+BACKUP_SIZE="$(bk_human_bytes "$BACKUP_BYTES")"
 
-log SUCCESS "Backup complete: $FINAL_ARCHIVE"
-
-BACKUP_SIZE=""
-if [[ -n "$FINAL_ARCHIVE" ]] && ! $DRY_RUN; then
-  BACKUP_SIZE=$(du -sh "$FINAL_ARCHIVE" | cut -f1)
-  log INFO "Backup size: $BACKUP_SIZE"
-fi
+bk_log SUCCESS "Backup complete: $FINAL_ARCHIVE"
+bk_log SUCCESS "Published ${FINAL_ARCHIVE##*/} ($BACKUP_SIZE, level $LEVEL, T$BK_THREADS, ${BK_VERIFY_ENTRIES:-?} entries)"
+bk_state_write_last 0 "${ARCHIVE_TYPE:-hourly}" "${FINAL_ARCHIVE#"$BACKUP_BASE"/}" "$BACKUP_BYTES" "$TIME_TAKEN" done || true
 
 if $ARCHIVE_MODE; then
-  send_message "Archive backup ($ARCHIVE_TYPE) completed | In $TIME_TAKEN_STMP" || log WARN "Failed to notify server"
+  send_message "Archive backup ($ARCHIVE_TYPE) completed | In $TIME_TAKEN_STMP" || bk_log WARN "Failed to notify server"
   notify_success "backup_complete" "Archive backup ($ARCHIVE_TYPE) completed in $TIME_TAKEN_STMP. Size: $BACKUP_SIZE"
 else
-  send_message "Hourly backup completed | In $TIME_TAKEN_STMP" || log WARN "Failed to notify server"
+  send_message "Hourly backup completed | In $TIME_TAKEN_STMP" || bk_log WARN "Failed to notify server"
   notify_success "backup_complete" "Hourly backup completed in $TIME_TAKEN_STMP. Size: $BACKUP_SIZE"
 fi
+NOTIFIED=true
 
-log INFO "Backup took: $TIME_TAKEN_STMP"
-
-if ! $DRY_RUN; then
-  log INFO "Backups storage usage: $(du -sh "$BACKUP_BASE" | cut -f1)"
-else
-  log INFO "(dry-run) No backup written."
-fi
-
+bk_log INFO "Backup took: $TIME_TAKEN_STMP"
+bk_log INFO "Backups storage usage: $(bk_nice du -sh --exclude=.stage --exclude=.meta "$BACKUP_BASE" 2>/dev/null | cut -f1)"
 wait_for_notifications
