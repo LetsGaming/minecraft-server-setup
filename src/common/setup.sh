@@ -273,7 +273,7 @@ run_rollback() {
   if [[ "$_ROLLBACK_ARMED" != true ]]; then
     warn "Nothing was recorded before the failure — leaving everything in place."
     warn "You may need to clean up manually."
-    return
+    return 0
   fi
 
   local base="$MAIN_DIR/$TARGET_DIR_NAME"
