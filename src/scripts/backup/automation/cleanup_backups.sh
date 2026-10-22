@@ -94,9 +94,11 @@ list_archives() {
 # archive_is_valid <file>: not empty and the compressed stream is intact. The
 # sidecar written at publish time answers without reading the archive; an
 # archive from before sidecars existed is tested once, niced, and gets a
-# "verified-legacy" sidecar so the next run does not test it again.
+# sidecar with its real hash so the next run does not test it again. The
+# sidecar is only written when the file's mtime backs the stamp in its name:
+# a renamed or planted archive must not acquire a trust record here.
 archive_is_valid() {
-  local file="$1" rc=0
+  local file="$1" rc=0 sum
   bk_archive_is_valid_quick "$file" || rc=$?
   (( rc == 0 )) && return 0
   (( rc == 1 )) && return 1
@@ -107,7 +109,11 @@ archive_is_valid() {
     *.tar.gz) bk_nice gzip -t "$file" > /dev/null 2>&1 || return 1 ;;
     *) return 1 ;;
   esac
-  bk_archive_write_sidecar "$file" "verified-legacy  ${file##*/}" 2>/dev/null || true
+  if bk_name_backed_by_mtime "$file" && sum="$(bk_file_sha256 "$file")"; then
+    bk_archive_write_sidecar "$file" "$sum  ${file##*/}" 2>/dev/null || true
+  else
+    log "No sidecar written for ${file#"$BACKUP_BASE"/}: its mtime does not back the stamp in its name."
+  fi
   return 0
 }
 

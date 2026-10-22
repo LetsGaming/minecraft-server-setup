@@ -51,7 +51,9 @@ bk_stage_select() {
       fi ;;
     *) if bk_stage_reflink_works; then mode=reflink; else mode=mirror; fi ;;
   esac
-  bk_private_dir "$(bk_stage_dir)" >&2 || bk_log WARN "The staging folder $(bk_stage_dir) is not private to this user" >&2
+  # Every mode stages under .stage, so a .stage that is not ours alone ends
+  # the run rather than copying the server into it.
+  bk_private_dir "$(bk_stage_dir)" >&2 || { bk_log ERROR "The staging folder $(bk_stage_dir) is not private to this user" >&2; return 1; }
   if [[ "$mode" == mirror ]] && ! bk_private_dir "$(bk_stage_mirror_dir)" >&2; then
     bk_log WARN "The staging mirror is not private to this user; using a fresh copy for this run" >&2
     mode=fresh

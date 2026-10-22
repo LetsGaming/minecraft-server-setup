@@ -208,11 +208,12 @@ else
 fi
 
 [[ -n "${BACKUP_TO_RESTORE:-}" && -e "$BACKUP_TO_RESTORE" ]] || { echo "[ERROR] No suitable backup found."; exit 1; }
-# A name chosen by the script, not the operator, must be backed by its sidecar
-# or its mtime; a renamed archive is not restored silently.
-[[ -n "$SPECIFIC_BACKUP" ]] || archive_name_is_credible "$BACKUP_TO_RESTORE" || exit 1
 # From here on every check and the extraction use the opened inode (S-004).
 archive_open_trusted "$BACKUP_TO_RESTORE" || exit 1
+# A name chosen by the script, not the operator, must be backed by its sidecar
+# (hash checked on the opened inode) or its mtime; a renamed archive is not
+# restored silently.
+[[ -n "$SPECIFIC_BACKUP" ]] || archive_name_is_credible "$BACKUP_TO_RESTORE" "$AR_FD" || exit 1
 
 echo "[INFO] Selected backup: $BACKUP_TO_RESTORE"
 

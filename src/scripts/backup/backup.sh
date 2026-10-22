@@ -183,7 +183,7 @@ bk_stage_remove_legacy_tmp
 # The sidecars vouch for archives, so only this user may write them.
 bk_private_dir "$(bk_state_meta_dir)" || bk_die 1 "The sidecar folder $(bk_state_meta_dir) is not private to this user"
 
-STAGING_MODE="$(bk_stage_select)"
+STAGING_MODE="$(bk_stage_select)" || bk_die 1 "The staging folder is not private to this user"
 BK_STAGING="$STAGING_MODE"
 bk_log INFO "Staging mode: $STAGING_MODE; zstd level $LEVEL, threads $BK_THREADS; priority wrapper: ${BK_NICE[*]:-none}"
 

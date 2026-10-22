@@ -741,4 +741,30 @@ SH
   assert_exists "$(first_archive "$T/backups/hourly")" "archive written"
 }
 
+
+test_a_staging_folder_that_cannot_be_made_private_ends_the_run() {
+  setup
+  cat > "$T/bin/stat" <<SH
+#!/bin/bash
+if [[ "\$*" == *"$T/backups/.stage" ]]; then echo "4242 700"; exit 0; fi
+exec "$(PATH="${PATH#"$T/bin:"}" command -v stat)" "\$@"
+SH
+  chmod +x "$T/bin/stat"
+  run_script "$BACKUP"
+  assert_rc 1 "$RC" "the run fails closed"
+  assert_contains "$OUT" "staging folder" "names the folder"
+  assert_eq "" "$(first_archive "$T/backups/hourly")" "nothing written"
+}
+
+test_privacy_is_enforced_below_the_mirror_too() {
+  setup
+  export BACKUP_STAGING_MODE=mirror
+  mkdir -p "$T/backups/.stage/mirror/world" "$T/backups/.meta/hourly"
+  chmod 777 "$T/backups/.stage/mirror/world" "$T/backups/.meta/hourly"
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "backup exits 0"
+  assert_eq yes "$(mode_has_no_group_or_other_write "$T/backups/.stage/mirror/world")" "a folder inside the mirror is tightened"
+  assert_eq yes "$(mode_has_no_group_or_other_write "$T/backups/.meta/hourly")" "and one inside .meta"
+}
+
 run_tests

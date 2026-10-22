@@ -74,8 +74,8 @@ fi
 # "Newest" is decided by whoever can rename files in the folder (S-004): the
 # name must be backed by its sidecar or its mtime, and from here on every
 # check and the extraction use the opened inode.
-archive_name_is_credible "$LATEST_BACKUP" || exit 1
 archive_open_trusted "$LATEST_BACKUP" || exit 1
+archive_name_is_credible "$LATEST_BACKUP" "$AR_FD" || exit 1
 
 BACKUP_DATE=$(basename "$LATEST_BACKUP" | sed 's/minecraft_backup_//' | sed 's/\.tar\..*//' | tr '_' ' ')
 echo "[INFO] Most recent pre-update backup:"

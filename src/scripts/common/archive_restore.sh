@@ -6,6 +6,9 @@
 _ar_error() { echo "[ERROR] $*" >&2; }
 _ar_info() { echo "[INFO] $*"; }
 
+# Hash and mtime helpers shared with the backup scripts.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../backup/lib/bk_common.sh"
+
 # resolve_backup_file <path> <tier_dir>
 # Prints the canonical path of a backup archive. <path> is either absolute or
 # relative to <tier_dir>. The canonical path must be a regular file inside
@@ -288,34 +291,37 @@ complete_staged_jars() {
   return 0
 }
 
-# archive_name_is_credible <file>
+# archive_name_is_credible <file> [fd]
 # For an archive chosen by its name rather than by the operator: the name's
 # timestamp must be backed by something a renamer cannot forge. Either the
-# sidecar for this exact name exists in .meta/ (written by the backup user
-# only), or, for an archive from before sidecars, its mtime lies within two
-# hours of the stamp in its name. Anyone who can rename files in the backups
-# folder could otherwise make an old or planted archive the "newest".
+# sidecar for this exact name in .meta/ (written by the backup user only)
+# records a sha256 that matches the file, hashed through the opened
+# descriptor when one is given so the check binds to the same inode as the
+# extraction; or, for an archive from before sidecars, its mtime lies within
+# two hours of the stamp in its name. Anyone who can rename files in the
+# backups folder could otherwise make an old or planted archive the "newest".
 archive_name_is_credible() {
-  local file="$1" base rel side stamp epoch mtime diff
+  local file="$1" fd="${2:-}" base rel side recorded actual source
   base="${file##*/}"
   rel="${file#"${BACKUPS_PATH%/}"/}"
   side="${BACKUPS_PATH%/}/.meta/${rel}.sha256"
-  if [[ -f "$side" ]] && grep -qF -- "  $base" "$side" 2>/dev/null; then
-    return 0
-  fi
-  local re='([0-9]{4})-([0-9]{2})-([0-9]{2})_([0-9]{2})-([0-9]{2})-([0-9]{2})'
-  if [[ "$base" =~ $re ]]; then
-    stamp="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}"
-    epoch="$(date -d "$stamp" +%s 2>/dev/null)" || epoch=""
-    mtime="$(stat -c %Y -- "$file" 2>/dev/null)" || mtime=""
-    if [[ "$epoch" =~ ^[0-9]+$ && "$mtime" =~ ^[0-9]+$ ]]; then
-      diff=$(( mtime - epoch )); (( diff < 0 )) && diff=$(( -diff ))
-      (( diff <= 7200 )) && return 0
-      _ar_error "Refusing to pick $base automatically: its name says $stamp but the file was last written $(( diff / 60 )) minutes away from that and no sidecar vouches for the name. Choose it explicitly with --file if it is the one you want."
+  if [[ -f "$side" ]]; then
+    recorded="$(grep -F -- "  $base" "$side" 2>/dev/null | head -n1 | cut -d' ' -f1)"
+    if [[ "$recorded" =~ ^[0-9a-f]{64}$ ]]; then
+      source="$file"
+      [[ -n "$fd" && -r "/dev/fd/$fd" ]] && source="/dev/fd/$fd"
+      actual="$(bk_file_sha256 "$source")" || actual=""
+      if [[ "$actual" == "$recorded" ]]; then
+        return 0
+      fi
+      _ar_error "Refusing to pick $base automatically: its content does not match the hash recorded for that name. Choose it explicitly with --file if it is the one you want."
       return 1
     fi
   fi
-  _ar_error "Refusing to pick $base automatically: no sidecar vouches for the name. Choose it explicitly with --file if it is the one you want."
+  if bk_name_backed_by_mtime "$file"; then
+    return 0
+  fi
+  _ar_error "Refusing to pick $base automatically: no sidecar vouches for the name and the file was not written at the time its name says. Choose it explicitly with --file if it is the one you want."
   return 1
 }
 

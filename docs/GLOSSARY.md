@@ -10,7 +10,7 @@ Terms specific to this project that are easy to misread.
 
 **Save-off window.** The time between `save-off` and `save-on` during a backup, when the server runs without auto-save. Only staging happens inside it; compression and verification happen after. Every run logs its length and `last_backup.json` records it as `save_off_seconds`.
 
-**Sidecar.** The checksum file `$BACKUPS_PATH/.meta/<tier>/<name>.sha256` written when an archive is published. Cleanup treats an archive with a sidecar newer than itself as valid without decompressing it. A `verified-legacy` sidecar marks an older archive that passed a one-time `zstd -t`.
+**Sidecar.** The checksum file `$BACKUPS_PATH/.meta/<tier>/<name>.sha256` written when an archive is published. Cleanup treats an archive with a sidecar newer than itself as valid without decompressing it; restore and rollback compare the recorded hash with the file before picking an archive by name. An older archive gets its sidecar from cleanup after a one-time `zstd -t`, and only when its mtime backs the stamp in its name.
 
 **Due tier.** An archive tier (daily, weekly, monthly) that `run_backup.sh` still owes for the current day: its flag `.backup_flags/<tier>_<date>` does not exist and it has failed fewer than `BACKUP_ARCHIVE_MAX_ATTEMPTS` times today. All due tiers are made in one run from one archive. The pure function `bk_due_tiers` in `backup/lib/bk_schedule.sh` computes the list.
 

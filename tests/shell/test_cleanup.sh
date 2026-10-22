@@ -364,13 +364,31 @@ test_a_legacy_archive_without_sidecar_is_tested_once_and_gets_one() {
   make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" a
   make_archive "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" b
   rm -rf "$T/backups/.meta"   # archives from before sidecars existed
+  touch -d "2026-01-01 00:05:00" "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst"
+  touch -d "2026-01-02 00:05:00" "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst"
   run_script "$CLEANUP"
   assert_rc 0 "$RC" "cleanup succeeds"
   assert_logged "zstd -t" "the newest legacy archive is tested"
-  assert_file_content "$T/backups/.meta/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst.sha256" "verified-legacy  minecraft_backup_2026-01-02_00-00-00.tar.zst" "and gets a verified-legacy sidecar"
+  local side="$T/backups/.meta/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst.sha256"
+  assert_exists "$side" "and gets a sidecar"
+  assert_file_content "$side" "$(sha256sum "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" | cut -d' ' -f1)  minecraft_backup_2026-01-02_00-00-00.tar.zst" "recording its real hash"
   : > "$SHIM_LOG"
   run_script "$CLEANUP"
   assert_not_logged "zstd -t" "the next run trusts the sidecar"
+}
+
+test_a_legacy_archive_whose_mtime_does_not_back_its_name_gets_no_sidecar() {
+  setup
+  set_var MAX_HOURLY_BACKUPS 1
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" a
+  make_archive "$T/backups/hourly/minecraft_backup_2026-12-31_00-00-00.tar.zst" renamed
+  rm -rf "$T/backups/.meta"
+  touch -d "2025-06-01 00:00:00" "$T/backups/hourly/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  run_script "$CLEANUP"
+  assert_rc 0 "$RC" "cleanup succeeds"
+  assert_contains "$OUT" "No sidecar written" "says why"
+  assert_missing "$T/backups/.meta/hourly/minecraft_backup_2026-12-31_00-00-00.tar.zst.sha256" "no trust record for a name the mtime does not back"
+  assert_exists "$T/backups/hourly/minecraft_backup_2026-12-31_00-00-00.tar.zst" "it is still the protected newest valid archive of the tier"
 }
 
 test_a_sidecar_vouches_without_decompression() {

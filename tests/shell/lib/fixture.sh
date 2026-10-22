@@ -127,7 +127,7 @@ write_sidecar() {
   [[ "$dest" == "$T/backups/"* ]] || return 0
   rel="${dest#"$T/backups/"}"
   mkdir -p "$T/backups/.meta/$(dirname "$rel")"
-  echo "fixture  $(basename "$dest")" > "$T/backups/.meta/$rel.sha256"
+  echo "$(sha256sum -- "$dest" | cut -d' ' -f1)  $(basename "$dest")" > "$T/backups/.meta/$rel.sha256"
 }
 
 # make_archive <dest.tar.zst> <label>: archive of a world tagged <label>, in the

@@ -203,4 +203,19 @@ test_a_legacy_archive_whose_mtime_matches_its_name_is_accepted() {
   assert_file_content "$T/server/world/level.dat" legacy "world restored"
 }
 
+
+test_an_archive_whose_content_does_not_match_its_sidecar_is_refused() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" honest
+  # The file is replaced under its own name; the sidecar still names the old hash.
+  make_archive "$T/elsewhere/planted.tar.zst" planted
+  cp -f "$T/elsewhere/planted.tar.zst" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 1 "$RC" "the rollback refuses"
+  assert_contains "$OUT" "does not match the hash" "says why"
+  assert_not_logged "systemctl stop" "the server was never stopped"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
 run_tests

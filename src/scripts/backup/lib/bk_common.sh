@@ -150,35 +150,67 @@ bk_nice() {
 }
 
 # bk_private_dir <dir>
-# Makes <dir> writable by this user alone and fails when that cannot be
-# verified. Setup grants the API wrapper's service user a default ACL on the
-# backups folder (so it can delete archives); a staging or sidecar directory
-# that inherited it would let that user plant content in the next archive or
-# vouch for a corrupt one, past the S-004 trust boundary.
+# Makes <dir> and everything below it writable by this user alone and fails
+# when that cannot be verified. Setup grants the API wrapper's service user a
+# default ACL on the backups folder (so it can delete archives); a staging or
+# sidecar tree that inherited it would let that user plant content in the
+# next archive or vouch for a corrupt one, past the S-004 trust boundary.
 bk_private_dir() {
-  local dir="$1" info owner mode
+  local dir="$1" info owner mode uid linux=false
+  uid="$(id -u)"
+  [[ "$(uname -s 2>/dev/null)" == Linux ]] && linux=true
   mkdir -p -- "$dir" || return 1
   chmod 700 -- "$dir" 2>/dev/null || true
-  if [[ "$(uname -s 2>/dev/null)" == Linux ]] && command -v setfacl >/dev/null 2>&1; then
-    setfacl -b -k -- "$dir" 2>/dev/null || true
+  chmod -R go-w -- "$dir" 2>/dev/null || true
+  if $linux && command -v setfacl >/dev/null 2>&1; then
+    setfacl -R -b -k -- "$dir" 2>/dev/null || true
   fi
   info="$(stat -c '%u %a' -- "$dir" 2>/dev/null)" || return 1
   owner="${info%% *}"
   mode="${info##* }"
-  [[ "$owner" == "$(id -u)" ]] || { bk_log WARN "$dir is owned by uid $owner, not by $(id -un)"; return 1; }
+  [[ "$owner" == "$uid" ]] || { bk_log WARN "$dir is owned by uid $owner, not by $(id -un)"; return 1; }
   # Group and other must have no write bit; the owner digit is left alone so
   # hosts that cannot represent 700 (Windows) still pass.
   if [[ ! "$mode" =~ ^[0-7]?[0-7]?[0-7]?[0-7][0-7][0-7]$ ]] || (( (10#${mode: -2:1} & 2) != 0 || (10#${mode: -1:1} & 2) != 0 )); then
     bk_log WARN "$dir has mode $mode and is writable by others"
     return 1
   fi
-  if [[ "$(uname -s 2>/dev/null)" == Linux ]] && command -v getfacl >/dev/null 2>&1; then
-    if getfacl -cp -- "$dir" 2>/dev/null | grep -Eq '^(user|group):[^:]+:|^default:'; then
+  local stray
+  stray="$(find "$dir" -mindepth 1 \( ! -uid "$uid" -o -perm /022 \) -print -quit 2>/dev/null)"
+  if [[ -n "$stray" ]]; then
+    bk_log WARN "$stray (under $dir) is not owned by $(id -un) alone or is writable by others"
+    return 1
+  fi
+  if $linux && command -v getfacl >/dev/null 2>&1; then
+    if getfacl -R -cp -- "$dir" 2>/dev/null | grep -Eq '^(user|group):[^:]+:|^default:'; then
       bk_log WARN "$dir carries ACL entries for other users that could not be removed"
       return 1
     fi
   fi
   return 0
+}
+
+# bk_name_backed_by_mtime <file>
+# True when the file's mtime lies within two hours of the stamp in its name,
+# which is what an archive from before sidecars existed looks like; a renamed
+# archive does not.
+bk_name_backed_by_mtime() {
+  local base="${1##*/}" epoch mtime diff
+  local re='([0-9]{4})-([0-9]{2})-([0-9]{2})_([0-9]{2})-([0-9]{2})-([0-9]{2})'
+  [[ "$base" =~ $re ]] || return 1
+  epoch="$(date -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}" +%s 2>/dev/null)" || return 1
+  mtime="$(stat -c %Y -- "$1" 2>/dev/null)" || return 1
+  [[ "$epoch" =~ ^[0-9]+$ && "$mtime" =~ ^[0-9]+$ ]] || return 1
+  diff=$(( mtime - epoch )); (( diff < 0 )) && diff=$(( -diff ))
+  (( diff <= 7200 ))
+}
+
+# bk_file_sha256 <path>: the hex digest, or failure.
+bk_file_sha256() {
+  local sum
+  sum="$(bk_nice sha256sum -- "$1" 2>/dev/null | cut -d' ' -f1)" || return 1
+  [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 1
+  echo "$sum"
 }
 
 # bk_human_bytes <bytes>: 2.1 GiB style figure for log lines.
