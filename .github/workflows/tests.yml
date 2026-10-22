@@ -34,3 +34,11 @@ jobs:
 
       - name: Shell and node tests
         run: bash tests/shell/run.sh
+
+      # The same suites once more with the real rsync and zstd instead of the
+      # shims, so the mirror staging and the archive stream are exercised as
+      # they run in production.
+      - name: Backup, restore, rollback and cleanup suites with real tools
+        env:
+          MC_TEST_REAL_TOOLS: "1"
+        run: bash tests/shell/run.sh test_backup.sh test_restore.sh test_rollback.sh test_cleanup.sh test_run_backup.sh
