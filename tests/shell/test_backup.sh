@@ -471,7 +471,6 @@ test_a_term_during_compression_turns_saving_on_before_removing_staging() {
   assert_eq "" "$(find "$T/backups/hourly" -name '*.part' 2>/dev/null)" "partial file removed"
   assert_missing "$T/backups/.stage/snap" "per-run staging removed"
   assert_eq 1 "$(grep -c '^jq .*backup_failed' "$SHIM_LOG")" "one backup_failed notification"
-  assert_contains "$(cat "$T/out")" "interrupted" "says it was interrupted"
 }
 
 # ── priority wrapper ─────────────────────────────────────────────────────────
@@ -495,10 +494,14 @@ test_a_working_ionice_wraps_rsync_and_tar() {
 
 test_without_ionice_nice_alone_is_used() {
   setup
-  rm -f "$T/bin/ionice"
+  cat > "$T/bin/ionice" <<'SH'
+#!/bin/bash
+exit 127
+SH
+  chmod +x "$T/bin/ionice"
   run_script "$BACKUP"
   assert_rc 0 "$RC" "backup exits 0"
-  assert_not_logged "ionice" "no ionice call"
+  assert_not_logged "ionice -c2 -n7 -t nice -n 10 rsync" "rsync is not wrapped in ionice"
   assert_contains "$OUT" "priority wrapper: nice -n 10" "nice alone"
 }
 

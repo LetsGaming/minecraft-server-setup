@@ -178,8 +178,9 @@ run_script() { # script args... ; sets OUT and RC
 run_script_tty() {
   local cmd
   cmd="bash $(printf '%q ' "$@")"
-  OUT="$(cd "$T/scripts" && script -qec "$cmd" /dev/null 2>&1 < /dev/null | tr -d '\r')"
-  RC=${PIPESTATUS[0]}
+  OUT="$(cd "$T/scripts" && script -qec "$cmd" /dev/null 2>&1 < /dev/null)"
+  RC=$?
+  OUT="${OUT//$'\r'/}"
 }
 
 # use_install_layout: move the fixture into the layout setup creates, so scripts

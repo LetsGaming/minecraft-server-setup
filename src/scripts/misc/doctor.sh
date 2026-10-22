@@ -152,10 +152,10 @@ check_last_backup() {
   stage="$(sed -n 's/.*"stage":"\([^"]*\)".*/\1/p' "$f" | head -n1)"
   age_h=""
   if [[ -n "$finished" ]]; then
-    local then now
-    then="$(date -d "$finished" +%s 2> /dev/null || true)"
-    now="$(date +%s)"
-    [[ "$then" =~ ^[0-9]+$ ]] && age_h=$(( (now - then) / 3600 ))
+    local finished_ts now_ts
+    finished_ts="$(date -d "$finished" +%s 2>/dev/null || true)"
+    now_ts="$(date +%s)"
+    [[ "$finished_ts" =~ ^[0-9]+$ ]] && age_h=$(( (now_ts - finished_ts) / 3600 ))
   fi
   if [[ "$rc" != 0 ]]; then
     report FAIL last-backup "the last backup failed (exit ${rc:-?} at stage ${stage:-?}, ${finished:-unknown time})"

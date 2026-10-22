@@ -282,7 +282,7 @@ fi
 bk_stage_discard_run
 
 # ── done ──
-bk_set_stage done
+bk_set_stage "done"
 TIME_TAKEN=$(( $(date +%s) - START_TIME ))
 TIME_TAKEN_STMP=$(printf '%02d:%02d:%02d' $((TIME_TAKEN/3600)) $((TIME_TAKEN%3600/60)) $((TIME_TAKEN%60)))
 BACKUP_BYTES="$(bk_file_size "$FINAL_ARCHIVE")"
@@ -290,7 +290,7 @@ BACKUP_SIZE="$(bk_human_bytes "$BACKUP_BYTES")"
 
 bk_log SUCCESS "Backup complete: $FINAL_ARCHIVE"
 bk_log SUCCESS "Published ${FINAL_ARCHIVE##*/} ($BACKUP_SIZE, level $LEVEL, T$BK_THREADS, ${BK_VERIFY_ENTRIES:-?} entries)"
-bk_state_write_last 0 "${ARCHIVE_TYPE:-hourly}" "${FINAL_ARCHIVE#"$BACKUP_BASE"/}" "$BACKUP_BYTES" "$TIME_TAKEN" done || true
+bk_state_write_last 0 "${ARCHIVE_TYPE:-hourly}" "${FINAL_ARCHIVE#"$BACKUP_BASE"/}" "$BACKUP_BYTES" "$TIME_TAKEN" "done" || true
 
 if $ARCHIVE_MODE; then
   send_message "Archive backup ($ARCHIVE_TYPE) completed | In $TIME_TAKEN_STMP" || bk_log WARN "Failed to notify server"
