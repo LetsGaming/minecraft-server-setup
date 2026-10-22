@@ -275,7 +275,7 @@ test_failed_write_leaves_original_and_no_temp() {
   before="$(md5sum < "$S/$LIB")"
   (
     source "$SCRIPT"
-    printf() { return 1; }
+    printf() { case "${FUNCNAME[1]:-}" in render | apply_key) return 1 ;; *) builtin printf "$@" ;; esac; }
     apply_key "$S/$LIB" everyone_tracks_everyone true
     echo "rc=$?" > "$T/rc"
     apply_key "$S/$MAP" register_status_effects false

@@ -502,6 +502,7 @@ test_main_failure_message_is_printed_once_and_exit_code_kept() {
   local out
   out="$(run_main_wiz "" --default --agree-eula)"
   assert_contains "$out" "rc=3" "original exit code kept"
+  echo "DBGOUT<<$out>>" | sed "s/^/DBG: /" >&2
   assert_eq 1 "$(grep -c "Your answers are saved in variables.json" <<< "$out")" "message printed exactly once"
   assert_exists "$T/repo/variables.json" "config kept"
   unset PROBE_FAIL
