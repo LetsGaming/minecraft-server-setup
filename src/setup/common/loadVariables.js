@@ -10,6 +10,7 @@ const EXAMPLE_API_KEYS = ["replace-with-a-long-random-secret"];
 const KNOWN_WEBHOOK_EVENTS = [
   "backup_complete",
   "backup_failed",
+  "backup_skipped",
   "server_start",
   "server_start_failed",
   "server_stop",
@@ -67,6 +68,39 @@ function loadVariables() {
   }
   if (backups.MAX_UPDATE_BACKUPS !== undefined && (!Number.isInteger(backups.MAX_UPDATE_BACKUPS) || backups.MAX_UPDATE_BACKUPS < 1)) {
     throw new Error("BACKUPS.MAX_UPDATE_BACKUPS must be a positive whole number when set.");
+  }
+  // Optional tuning keys; each one has a default in the shell scripts.
+  const optionalInts = {
+    MAX_CUSTOM_BACKUPS: [0, null],
+    BACKUP_HOURLY_LEVEL: [1, 19],
+    BACKUP_ARCHIVE_LEVEL: [1, 19],
+    BACKUP_ZSTD_THREADS: [0, 256],
+    BACKUP_SPACE_MARGIN_PCT: [0, 50],
+    BACKUP_TIMEOUT_MINUTES: [1, null],
+    BACKUP_SKIP_ALERT_AFTER: [1, null],
+    BACKUP_ARCHIVE_MAX_ATTEMPTS: [1, null],
+    BACKUP_LOG_MAX_MB: [1, null],
+    RESTORE_KEEP_OLD_DAYS: [0, null],
+  };
+  for (const [key, [min, max]] of Object.entries(optionalInts)) {
+    const value = backups[key];
+    if (value === undefined) continue;
+    if (!Number.isInteger(value) || value < min || (max !== null && value > max)) {
+      throw new Error(`BACKUPS.${key} must be a whole number${max !== null ? ` between ${min} and ${max}` : ` of at least ${min}`} when set.`);
+    }
+  }
+  if (backups.BACKUP_STAGING_MODE !== undefined && !["auto", "mirror", "reflink", "fresh"].includes(backups.BACKUP_STAGING_MODE)) {
+    throw new Error("BACKUPS.BACKUP_STAGING_MODE must be one of auto, mirror, reflink or fresh when set.");
+  }
+  for (const key of ["BACKUP_FOLLOW_SYMLINKS", "RESTORE_KEEP_OLD"]) {
+    if (backups[key] !== undefined && typeof backups[key] !== "boolean") {
+      throw new Error(`BACKUPS.${key} must be true or false when set.`);
+    }
+  }
+  for (const key of ["BACKUP_EXTRA_EXCLUDES", "RESTORE_CARRY_OVER"]) {
+    if (backups[key] !== undefined && typeof backups[key] !== "string") {
+      throw new Error(`BACKUPS.${key} must be a string of space-separated names when set.`);
+    }
   }
 
   // ── API_SERVER (optional) ──

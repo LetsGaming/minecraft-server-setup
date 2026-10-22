@@ -81,6 +81,29 @@ const lines = [
   `API_SERVER_KEY=${q(apiServer.API_KEY || "")}`,
 ];
 
+// Optional backup tuning keys are written only when set; the shell scripts
+// default the rest, so an older variables.txt keeps working unchanged.
+const OPTIONAL_BACKUP_KEYS = [
+  "MAX_CUSTOM_BACKUPS",
+  "BACKUP_HOURLY_LEVEL",
+  "BACKUP_ARCHIVE_LEVEL",
+  "BACKUP_ZSTD_THREADS",
+  "BACKUP_STAGING_MODE",
+  "BACKUP_FOLLOW_SYMLINKS",
+  "BACKUP_EXTRA_EXCLUDES",
+  "BACKUP_SPACE_MARGIN_PCT",
+  "BACKUP_TIMEOUT_MINUTES",
+  "BACKUP_SKIP_ALERT_AFTER",
+  "BACKUP_ARCHIVE_MAX_ATTEMPTS",
+  "BACKUP_LOG_MAX_MB",
+  "RESTORE_KEEP_OLD",
+  "RESTORE_KEEP_OLD_DAYS",
+  "RESTORE_CARRY_OVER",
+];
+for (const key of OPTIONAL_BACKUP_KEYS) {
+  if (BACKUPS[key] !== undefined) lines.push(`${key}=${q(BACKUPS[key])}`);
+}
+
 const variablesContent = lines.join("\n");
 
 // Ensure directory exists
