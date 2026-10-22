@@ -4,7 +4,19 @@ Terms specific to this project that are easy to misread.
 
 **Operation lock.** The one slot per instance for work that rewrites the server or its archives: restore, rollback, backup, upgrade, backup cleanup and the mod scripts. It is a file under `scripts/<instance>/.locks` (or `INSTANCE_LOCK_DIR`), taken with `flock`, or with a `mkdir` lock where `flock` is missing. A refused run exits `75`. The holder exports `MC_OPERATION_LOCK_HELD=1` so the scripts it starts pass instead of waiting on it.
 
-**Pre-restore copy.** The server folder as it was before a restore or rollback, kept as `<server>.pre-restore` when the run was given `--keep-old`. Without the flag the old folder is deleted after the swap. Only one such copy exists; the next run with `--keep-old` replaces it.
+**Pre-restore copy.** The server folder as it was before a restore or rollback, kept as `<server>.pre-restore` by default (`RESTORE_KEEP_OLD`). `--discard-old` deletes it instead. Only one such copy exists; the next restore replaces it, and `cleanup_backups.sh` deletes it after `RESTORE_KEEP_OLD_DAYS` (default 7).
+
+**Staging mirror.** The persistent copy of the server directory at `$BACKUPS_PATH/.stage/mirror` that `backup.sh` refreshes with `rsync --delete` while auto-save is off and then archives. Only changed files are copied on each run. The default staging mode (`BACKUP_STAGING_MODE=auto`) uses it unless the filesystem can clone files (`reflink`). It is never built from hardlinks: region files are rewritten in place.
+
+**Save-off window.** The time between `save-off` and `save-on` during a backup, when the server runs without auto-save. Only staging happens inside it; compression and verification happen after. Every run logs its length and `last_backup.json` records it as `save_off_seconds`.
+
+**Sidecar.** The checksum file `$BACKUPS_PATH/.meta/<tier>/<name>.sha256` written when an archive is published. Cleanup treats an archive with a sidecar newer than itself as valid without decompressing it. A `verified-legacy` sidecar marks an older archive that passed a one-time `zstd -t`.
+
+**Due tier.** An archive tier (daily, weekly, monthly) that `run_backup.sh` still owes for the current day: its flag `.backup_flags/<tier>_<date>` does not exist and it has failed fewer than `BACKUP_ARCHIVE_MAX_ATTEMPTS` times today. All due tiers are made in one run from one archive. The pure function `bk_due_tiers` in `backup/lib/bk_schedule.sh` computes the list.
+
+**Carry-over.** The entries a restore copies from the live server tree into the restored one because no backup contains them: `logs/`, `crash-reports/` and `ledger.sqlite` by default (`RESTORE_CARRY_OVER`). The archive's own copy wins when it has one.
+
+**Partial archive.** An archive still being written, named `<tier>/.minecraft_backup_<stamp>.tar.zst.part`. The leading dot keeps it out of every `minecraft_backup_*` listing; it is renamed to its final name only after verification, and a stale one is removed by the next locked run.
 
 **Instance lock.** A named per-instance lock (`maintenance`, `onjoin`) that keeps a second copy of the same script from running. Separate from the operation lock.
 

@@ -4,15 +4,37 @@ How `backup/backup.sh`, `backup/restore.sh` and `rollback.sh` treat your data, a
 
 ## Backup
 
-`backup/backup.sh [--archive [type]] [--dry-run] [--verbose]` stages the server directory, compresses it with `tar | zstd` and verifies the result.
+`backup/backup.sh [--archive [type]] [--dry-run] [--verbose]` stages the server directory, compresses it with `tar | zstd`, verifies the result and publishes it under its final name only then. The entry point does the orchestration; the steps live in `backup/lib/` (`bk_common.sh` logging, config and priority, `bk_stage.sh` staging, `bk_archive.sh` compress, verify and publish, `bk_space.sh` free-space preflight, `bk_state.sh` status and counters, `bk_schedule.sh` the due-tier table).
 
-- **One backup per instance at a time.** The script takes a non-blocking `flock` on `$BACKUPS_PATH/.backup.lock`. A second run (cron plus a wrapper-triggered one, for example) exits with status `75` without touching anything. `run_backup.sh` treats `75` as a skip and leaves that day's flag unset so the slot is retried. On a host without `flock` the script logs a warning and runs unlocked.
-- **Archive type.** `--archive <type>` must match `^[a-z0-9_-]+$`; anything else is rejected before any directory is created. Without a type, `general` is used.
-- **A confirmed save, or no backup.** While the server is running (or its state cannot be told), the script turns auto-save off and runs `save-all flush`, and aborts with exit `1` and a `backup_failed` webhook if either is not confirmed: over RCON a timeout or error is a failure and the command is not repeated through screen. The flush gets `SAVE_TIMEOUT_SECONDS` (default `120`) instead of rcon.js's 5 s. A stopped server is copied as it is. Auto-save is switched back on as soon as the rsync snapshot is complete, before compression and validation.
-- **Verification.** A failed `tar` or `zstd` in the pipeline fails the backup. The finished file must pass `zstd -t` and a full `tar -tf` listing. A failed backup never leaves a partial archive or the `tmp_backup` staging directory behind.
+- **One backup per instance at a time.** The script takes the operation lock and a non-blocking `flock` on `$BACKUPS_PATH/.backup.lock`. A second run (cron plus a wrapper-triggered one, for example) exits with status `75` without touching anything. `run_backup.sh` treats `75` as a skip and leaves that day's flag unset so the slot is retried; `BACKUP_SKIP_ALERT_AFTER` (default `3`) skips in a row send one `backup_skipped` webhook. On a host without `flock` the operation lock's `mkdir` fallback still serializes runs.
+- **Archive type.** `--archive <type>` must match `^[a-z0-9_-]+$`; anything else is rejected before any directory is created. Without a type, `general` is used. `BK_EXTRA_TIERS` (set by `run_backup.sh`) names further tiers that receive the same archive as a hardlink (a copy where the filesystem has no hardlinks), so a first Sunday builds one archive for monthly, weekly and daily.
+- **A confirmed save, or no backup.** While the server is running (or its state cannot be told), the script turns auto-save off and runs `save-all flush`, and aborts with exit `1` and a `backup_failed` webhook if either is not confirmed: over RCON a timeout or error is a failure and the command is not repeated through screen. The flush gets `SAVE_TIMEOUT_SECONDS` (default `120`) instead of rcon.js's 5 s. A stopped server is copied as it is; if it starts while its files are being copied the run is discarded. Auto-save is switched back on as soon as staging is complete, before compression and verification, and every run logs how long it was off (the save-off window).
+- **Staging.** `BACKUP_STAGING_MODE` (default `auto`) decides what tar reads:
+  - `mirror`: a persistent rsync mirror at `$BACKUPS_PATH/.stage/mirror`, refreshed with `rsync -a --delete`. After the first run only changed files are copied, so the save-off window is seconds on a mostly idle world. Archive runs (daily and above) compare by checksum instead of size and mtime, so a region file rewritten within the same second as the previous copy is never missed. A marker `.stage/MIRROR_INCOMPLETE` exists while the refresh runs; a run that finds it (an interrupted refresh) fails instead of archiving a half mirror, and the next refresh heals it. The mirror permanently costs about one server size on the backups filesystem.
+  - `reflink`: a per-run `cp --reflink=always` snapshot (XFS, btrfs), near instant and without permanent extra disk.
+  - `fresh`: a per-run full copy, for disks with no room for a mirror.
+  - `auto`: `reflink` when a probe clone of a server file into `.stage` succeeds, else `mirror`.
+  Staging never uses hardlinks: region files are rewritten in place, so a hardlinked "copy" would change after `save-on`.
+- **What is left out.** `logs/`, `*.log`, `*.tmp`, `crash-reports/`, `*.gz` and `ledger.sqlite` are never archived (the patterns are unanchored on purpose, so plugin log folders are left out as well); a restore carries them over from the live tree instead. Hourly archives leave `*.jar` out; the mirror still holds the jars, the exclusion happens in the `tar` step. `BACKUP_EXTRA_EXCLUDES` adds space-separated rsync patterns, for example a plugin's live database (prefer the plugin's own dump: a database copied while open may be torn even though the archive verifies). A top-level symlink pointing outside the server directory is followed (`BACKUP_FOLLOW_SYMLINKS`, default `true`) and named in the log; otherwise it would be archived as a dangling link.
+- **Compression.** Hourly backups use `BACKUP_HOURLY_LEVEL` (default: `COMPRESSION_LEVEL`), archive tiers `BACKUP_ARCHIVE_LEVEL` (default: the higher of `COMPRESSION_LEVEL` and `15`). zstd gets `BACKUP_ZSTD_THREADS` threads (default: half the cores, at least 1 and at most 4; `0` means all cores). New installs ship `COMPRESSION_LEVEL` `3`: region files are already deflate-compressed per chunk, so a higher level costs most of the CPU time for a few percent of size. `backup/tools/bench_levels.sh` runs zstd's benchmark on a sample of your own world and prints ratio and MB/s per level so the choice rests on numbers. `rsync`, `tar` and `zstd` run under `ionice -c2 -n7 -t nice -n 10` (each part probed once; a refused `ionice` never fails the backup). `ionice` only has an effect under the BFQ scheduler; on `mq-deadline` or `none` the levers that matter are the level, the thread count and the mirror copying less.
+- **Verification and publish.** The archive is written as `<tier>/.minecraft_backup_<stamp>.tar.zst.part` (the leading dot keeps it out of every listing, including the API wrapper's). One decompression pass (`zstd -dc | tar -tf`) checks the stream and lists the members; the listing must contain a `level.dat` and a `region/*.mca`, else the run fails with exit `65` rather than publishing an archive without a world. Then a checksum sidecar is written to `$BACKUPS_PATH/.meta/<tier>/<name>.sha256` and the file is renamed into place. A failed backup never leaves a partial archive or per-run staging behind; a stale `.part` from a killed run is removed by the next run.
+- **Free space.** Before staging, the run estimates what it needs (the last archive's size plus 20 percent, plus the server size for a first mirror or a fresh copy) against `df` minus `BACKUP_SPACE_MARGIN_PCT` (default `5`). If short, `cleanup_backups.sh --make-room <bytes>` evicts in the usual tier order; if still short the run fails with exit `73` and a `backup_failed` webhook naming the shortfall.
+- **Failure handling.** `INT`, `TERM` and `HUP` exit `130`, `143` and `129` through the same EXIT handler as every other failure: `save-on` first, then the `.part` and the per-run staging are removed (never the mirror), then exactly one `backup_failed` webhook naming the stage (`preflight`, `quiesce`, `stage`, `compress`, `verify`, `publish`) and the reason, then the lock is released. `rsync` exit `24` (files vanished during the copy) is a warning, which is normal for a live server.
+- **Status.** `$BACKUPS_PATH/.meta/last_backup.json` records the last run (`finished`, `rc`, `tier`, `tiers`, `file`, `bytes`, `seconds`, `save_off_seconds`, `staging`, `level`, `threads`, `stage`), written atomically after success and failure alike. `doctor.sh` reads it and fails when the last run failed, warns when the last success is three hours old or more.
 - **`DO_GENERATION_BACKUPS`** in `variables.txt` is compared with the string `true`; any other value means hourly backups only.
-- **Private by default.** Archives contain `common/variables.txt` (API key, RCON password, webhook URL) and `api-server-config.json`, so the script runs under `umask 077`: archives and the staging directory are readable by the instance user only. Set `BACKUP_UMASK` (for example `027`) in the environment of the backup job if another account, such as an API wrapper running as a different user, must read the archives. The standard setup runs the wrapper as the same user.
-- **Notifications.** The webhook request is bounded (`--max-time 10`, `-f`), the URL is passed to `curl` on stdin so it never shows in the process list, and the script waits for in-flight notifications before it exits.
+- **Private by default.** Archives contain `common/variables.txt` (API key, RCON password, webhook URL) and `api-server-config.json`, so the script runs under `umask 077`: archives, the mirror and the sidecars are readable by the instance user only. Set `BACKUP_UMASK` (for example `027`) in the environment of the backup job if another account, such as an API wrapper running as a different user, must read the archives. The standard setup runs the wrapper as the same user.
+- **Notifications.** The webhook request is bounded (`--max-time 10`, `-f`), the URL is passed to `curl` on stdin so it never shows in the process list, the lock descriptors are closed for it, and the script waits for in-flight notifications before it exits.
+- **Log format.** Every line reads `YYYY-MM-DD HH:MM:SS [LEVEL] [component] message`, with components `backup:<tier>`, `run_backup`, `cleanup`, `restore` and `rollback`.
+
+## The hourly job
+
+`backup/automation/run_backup.sh` is the cron entry point (`20 * * * *`, written by setup) and the supervisor around `backup.sh`:
+
+- It computes the **due tiers** for the day from `backup/lib/bk_schedule.sh`: daily every day, weekly on Sunday, monthly on the first Sunday, each due for the whole calendar day until its flag `.backup_flags/<tier>_<date>` exists. Several due tiers are made in one run from one archive. A failed archive slot is retried every hour until `BACKUP_ARCHIVE_MAX_ATTEMPTS` (default `3`) failures, then given up for the day with one `backup_failed` webhook; in the same run an hourly backup is made instead, so coverage has no gap.
+- It runs `backup.sh` under `timeout --signal=TERM --kill-after=120 "${BACKUP_TIMEOUT_MINUTES:-120}m"`. After a timeout it sends `save-on` itself if the server is up, sends a `backup_failed` webhook and exits `124`.
+- It exports a sane `PATH` for cron, rotates `backup/logs/backup.log` copy-truncate style above `BACKUP_LOG_MAX_MB` (default `10`, three rotations kept), resets or increments the skip streak, and runs `cleanup_backups.sh` after every backup, failed ones included.
+
+Exit codes across the scripts: `0` done, `1` failed, `3` server running (restore and rollback), `65` archive holds no world, `73` not enough free space, `75` lock held (mapped to `0` by `run_backup.sh`), `124` timed out (`run_backup.sh`), `129`/`130`/`143` signal after cleanup.
 
 ## Locks
 
@@ -24,40 +46,70 @@ The instance's systemd unit (written by `create_service.sh`) gives a stop up to 
 
 ## Cleanup
 
-`backup/automation/cleanup_backups.sh` applies the retention policy.
+`backup/automation/cleanup_backups.sh [--make-room <bytes>]` applies the retention policy.
 
-- **Count caps.** `MAX_HOURLY_BACKUPS`, `MAX_DAILY_BACKUPS`, `MAX_WEEKLY_BACKUPS` and `MAX_MONTHLY_BACKUPS` keep the newest N of each tier; `0` means no count limit for that tier (the storage limit still applies). `MAX_UPDATE_BACKUPS` (default `5`, optional `BACKUPS.MAX_UPDATE_BACKUPS` in `variables.json`) does the same for `archives/update/`, the rollback targets.
+- **Count caps.** `MAX_HOURLY_BACKUPS`, `MAX_DAILY_BACKUPS`, `MAX_WEEKLY_BACKUPS` and `MAX_MONTHLY_BACKUPS` keep the newest N of each tier; `0` means no count limit for that tier (the storage limit still applies). `MAX_UPDATE_BACKUPS` (default `5`, optional `BACKUPS.MAX_UPDATE_BACKUPS` in `variables.json`) does the same for `archives/update/`, the rollback targets. A tier whose value is not a whole number is reported and skipped; the rest of the run continues. New installs ship `MAX_HOURLY_BACKUPS` `24`: with level 3 and no jars an hourly archive is cheap, and with the old default of `3` an operator noticing grief four hours later had only dailies left. `MAX_STORAGE_GB` remains the guard.
 - **General and custom archives.** `archives/general` and any `--archive <type>` folder that is not daily, weekly, monthly or update are capped by `MAX_CUSTOM_BACKUPS` (default `0`, no count limit) and take part in storage eviction.
 - **Order.** Archives are ordered by the timestamp in their file name, not by modification time, so copying or touching files does not change which one is the oldest.
-- **Storage limit.** Above `MAX_STORAGE_GB` the script evicts oldest-first within a tier, tier by tier: hourly, daily, weekly, update, general and custom, then monthly. A monthly archive is only evicted once nothing else is left. The measured size leaves out `tmp_backup/` (a backup in progress) and `jars/`. The newest valid archive of a tier (non-empty, passes `zstd -t` or `gzip -t`) is never deleted, by the storage limit or by a count cap; if that leaves the folder over the limit, the script says so and sends a `storage_warning` webhook.
+- **Storage limit.** Above `MAX_STORAGE_GB` (a whole number of GB; anything else is reported and the check skipped) the script evicts oldest-first within a tier, tier by tier: hourly, daily, weekly, update, general and custom, then monthly. A monthly archive is only evicted once nothing else is left. The measured size leaves out `.stage/` (the mirror), `.meta/` (sidecars), `tmp_backup/` and `jars/`. A file with more than one hard link (one archive serving several tiers) frees nothing when deleted and is counted as such. The newest valid archive of a tier is never deleted, by the storage limit or by a count cap; if that leaves the folder over the limit, the script says so and sends a `storage_warning` webhook.
+- **Validity without decompression.** An archive is valid when its sidecar in `.meta/` exists and is newer than the file. An archive from before sidecars existed is tested once with `zstd -t` or `gzip -t` (niced, at most two per run) and gets a `verified-legacy` sidecar.
+- **`--make-room <bytes>`** (used by the backup preflight) evicts in the same tier order until that many bytes are free on the backups filesystem, and exits `73` when it cannot.
 - **Locking.** Cleanup takes the operation lock and skips the run, with a message, while a restore, rollback or upgrade holds it.
-- **Jars.** Archives link to the jars stored once under `jars/`. A jar that no remaining archive references and that is older than a day is deleted. If any archive cannot be listed, no jar is deleted.
+- **Legacy jars.** Archives made before S-002 link to jars stored once under `jars/`. A jar that no remaining archive references and that is older than a day is deleted. The scan (which lists every archive) runs only when such a jar exists and at most once a day; if any archive cannot be listed, no jar is deleted. An empty `jars/` folder is removed.
+- **Pre-restore copies.** The `<server>.pre-restore` tree a restore or rollback kept is deleted after `RESTORE_KEEP_OLD_DAYS` (default `7`; `0` keeps it until the next restore replaces it).
 - **A file that cannot be deleted** is reported and skipped; the rest of the run continues.
 
 ## Restore
 
-`backup/restore.sh [--y] [--file <path> | --ago <duration>] [--archive]`
+`backup/restore.sh [--y] [--file <path> | --ago <duration>] [--archive] [--discard-old]`
 
 - **The server must be stopped.** The script checks live (RCON, the screen session and `systemctl is-active`, nothing cached) and exits with status `3` if the server is running or if none of those checks can be made. It checks again after extraction, immediately before the swap.
 - **`--file`** takes either an absolute path or a name relative to `hourly/` (`archives/` with `--archive`). The resolved real path must be a regular file inside `$BACKUPS_PATH`: `..` segments are rejected, and symlinks that point outside the backups root are rejected. The API wrapper passes absolute paths.
-- **Safe replacement.** The archive is validated (`zstd -t` and `tar -t`), extracted into a staging directory next to the server directory (`<server>.restore-staging.<pid>`), and swapped in by rename. If validation, extraction or the swap fails, the current server directory is left as it was. Dotfiles are replaced along with everything else.
+- **Selection** without `--file` considers only `minecraft_backup_*.tar.zst` and `.tar.gz` files directly in the tier folder (`archives/*/` with `--archive`), ordered by the timestamp in the name like cleanup; partial files, sidecars and data folders are never candidates. `--ago <duration>` picks the newest backup taken at or before that long ago, prints the requested and the chosen time, and refuses a match more than half the requested distance away unless `--y` was given.
+- **The archive is opened once.** Every check (owner, regular file, hard-link rule) is made on the opened file descriptor and the extraction reads from it, so a file swapped under the same name after the check, during the confirmation prompt for example, changes nothing. Only an archive owned by the user running the restore, or by root, is accepted; a hard link is accepted only under `archives/`.
+- **Safe replacement.** The archive is extracted in one pass (an archive that does not decompress fails here, before anything live is touched) into a staging directory next to the server directory (`<server>.restore-staging.<pid>`). A staged tree holding a symlink to an absolute path, or one that leaves the tree, is refused (the jar links of archives made before S-002 are the exception; they are replaced by real files). Then the directory is swapped in by rename. If extraction, the scan or the swap fails, the current server directory is left as it was, its `.mc-meta` included. Dotfiles are replaced along with everything else. A restore run as root hands the tree to the server directory's owner.
+- **Carry-over.** `logs/`, `crash-reports/` and `ledger.sqlite` (`RESTORE_CARRY_OVER`, space separated) are never in a backup, so they are copied from the live tree into the restored one when the archive does not hold them.
+- **The replaced files are kept.** The old tree becomes `<server>.pre-restore` (one generation; an earlier copy is replaced) and is deleted by cleanup after `RESTORE_KEEP_OLD_DAYS` (default `7`), so a wrong archive can be undone by renaming the folders back. `--discard-old` or `RESTORE_KEEP_OLD=false` deletes it after the swap instead; `--keep-old` is still accepted and means the default. Keeping costs the disk space of one server copy for up to a week but no extra time and no extra peak usage: the old tree also coexists with staging until the swap. The space check before extraction (exit `73`) covers the staging tree only.
 - **Systemd units in an archive are never installed silently.** Archive backups carry the instance's unit files. A restore prints how each one differs from the installed unit (or its full contents when new) and installs it with `sudo` only when you pass `--install-units` or answer `y` at an interactive prompt. A non-interactive run, which includes the API wrapper's restore, skips the units and says so; install them afterwards by hand or rerun with `--install-units`. `daemon-reload` runs only after a unit was installed. `SYSTEMD_UNIT_DIR` (default `/etc/systemd/system`) overrides the target directory.
-- **`--keep-old`** keeps the replaced server files as `<server>.pre-restore` (a copy from an earlier run is replaced) instead of deleting them, so a wrong archive can be undone by renaming the folders back. It is off by default and costs the disk space of one server copy. `rollback.sh` takes the same flag.
 - **`--with-scripts` and `--install-units` need a terminal.** Run without one (the wrapper's sudo call), the script refuses them.
 - The staging directory must be on the same filesystem as the server directory, so a server directory that is itself a mount point cannot be restored this way.
 
 ## Rollback
 
-`rollback.sh [--y] [--keep-old] [--list]` restores the newest archive in `archives/update/`.
+`rollback.sh [--y] [--discard-old] [--list]` restores the newest archive in `archives/update/`.
 
-1. The archive is validated before anything is stopped, so a bad archive costs no downtime.
+1. The archive is opened, extracted into staging and checked while the server still runs, so a bad archive costs no downtime and the server is down only for the swap.
 2. The server is stopped with `systemctl stop`. If that fails, or the server is still running afterwards, the rollback aborts with the files untouched.
-3. The archive is extracted to staging, the server state is checked again, and the directory is swapped in.
-4. If extraction or the swap fails, the server is started again with its original files.
+3. Logs, crash reports and the ledger are carried over, and the directory is swapped in. The old tree is kept as `<server>.pre-restore` unless `--discard-old` or `RESTORE_KEEP_OLD=false`.
+4. If the swap fails, the server is started again with its original files.
 
 ## API wrapper
 
-`POST /instances/:id/backups/files/:fileId/restore` answers `409` unless a fresh health probe reports the server `offline`, and `503` if that probe cannot complete. See the wrapper's `openapi.json`.
+`POST /instances/:id/backups/files/:fileId/restore` answers `409` unless a fresh health probe reports the server `offline`, and `503` if that probe cannot complete. See the wrapper's `openapi.json`. The wrapper's argument shapes are unchanged: `backup.sh`, `backup.sh --archive`, `restore.sh --file <abs> --y [--archive]` and `rollback.sh --y`; a wrapper restore therefore keeps the old tree by default like every other restore.
+
+## Configuration
+
+All keys are optional `BACKUPS.*` entries in `variables.json` (written to `variables.txt` only when set) or environment variables of the job; the scripts default them.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `BACKUP_HOURLY_LEVEL` | `COMPRESSION_LEVEL` | zstd level for hourly backups |
+| `BACKUP_ARCHIVE_LEVEL` | `max(COMPRESSION_LEVEL, 15)` | zstd level for archive tiers |
+| `BACKUP_ZSTD_THREADS` | half the cores, 1 to 4 | `0` means all cores |
+| `BACKUP_STAGING_MODE` | `auto` | `auto`, `mirror`, `reflink`, `fresh` |
+| `BACKUP_FOLLOW_SYMLINKS` | `true` | follow symlinks that point outside the server directory |
+| `BACKUP_EXTRA_EXCLUDES` | empty | space-separated rsync patterns |
+| `BACKUP_SPACE_MARGIN_PCT` | `5` | free-space margin for the preflight |
+| `BACKUP_TIMEOUT_MINUTES` | `120` | watchdog per run |
+| `BACKUP_SKIP_ALERT_AFTER` | `3` | consecutive skips before a `backup_skipped` webhook |
+| `BACKUP_ARCHIVE_MAX_ATTEMPTS` | `3` | failed attempts per tier per day |
+| `BACKUP_LOG_MAX_MB` | `10` | rotation threshold for `backup.log` |
+| `MAX_CUSTOM_BACKUPS` | `0` | count cap for general and custom archives |
+| `RESTORE_KEEP_OLD` | `true` | keep `<server>.pre-restore` |
+| `RESTORE_KEEP_OLD_DAYS` | `7` | cleanup expiry for the kept tree |
+| `RESTORE_CARRY_OVER` | `logs crash-reports ledger.sqlite` | copied from the live tree into the restored one |
+
+Upgrading an existing install changes three behaviours without any configuration: zstd threads are capped, a restore keeps the old tree, and a restore carries logs, crash reports and the ledger over. `COMPRESSION_LEVEL` is honoured as configured; only new installs get `3` and 24 hourly backups.
 
 ## Downloads
 
@@ -65,4 +117,4 @@ The Node update scripts (`src/scripts/update/lib/download.js`) treat everything 
 
 ## Tests
 
-`bash tests/shell/run.sh` exercises the backup, restore, rollback, cleanup, webhook and server-control scripts and the Node update scripts (`tests/js`, with a stubbed `axios`) against a scratch fake instance with fake `tar`, `zstd`, `rsync`, `systemctl`, `screen`, `sudo` and `flock` on `PATH`. It never touches real server data or systemd. Cases that need real symlinks or a real `flock` skip themselves with a message on hosts that lack them (for example Windows Git Bash). The shell runner counts a test as failed when it stops before its last statement or makes no assertion; `tests/shell/test_assert_harness.sh` checks that.
+`bash tests/shell/run.sh` exercises the backup, supervisor, restore, rollback, cleanup, webhook and server-control scripts and the Node update scripts (`tests/js`, with a stubbed `axios`) against a scratch fake instance with fake `tar`, `zstd`, `rsync`, `ionice`, `df`, `timeout`, `systemctl`, `screen`, `sudo` and `flock` on `PATH`. It never touches real server data or systemd. Cases that need real symlinks, a real `flock`, a terminal or signals skip themselves with a message on hosts that lack them (for example Windows Git Bash); the runner prints the total number of skipped cases so a green run there is not mistaken for full coverage. CI runs the backup, restore, rollback, cleanup and supervisor suites a second time with `MC_TEST_REAL_TOOLS=1`, where the `rsync` and `zstd` shims defer to the real tools. The shell runner counts a test as failed when it stops before its last statement or makes no assertion; `tests/shell/test_assert_harness.sh` checks that.
