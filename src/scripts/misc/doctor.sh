@@ -113,7 +113,7 @@ check_storage() {
     return
   fi
   local used_bytes max_bytes pct
-  used_bytes="$(du -sb --exclude=tmp_backup --exclude=jars "$BACKUPS_PATH" 2> /dev/null | cut -f1)"
+  used_bytes="$(du -sb --exclude=tmp_backup --exclude=jars --exclude=.stage --exclude=.meta "$BACKUPS_PATH" 2> /dev/null | cut -f1)"
   if [[ "$used_bytes" =~ ^[0-9]+$ && "$MAX_STORAGE_GB" =~ ^[0-9]+$ && "$MAX_STORAGE_GB" -ge 1 ]]; then
     max_bytes=$((MAX_STORAGE_GB * 1024 * 1024 * 1024))
     pct=$((used_bytes * 100 / max_bytes))
@@ -136,6 +136,33 @@ check_storage() {
     else
       report OK disk-space "${free_gb} GB free where the backups live"
     fi
+  fi
+}
+
+# The backup scripts record their last run in .meta/last_backup.json; a stale
+# or failed entry is caught here without parsing backup.log.
+check_last_backup() {
+  local f="$BACKUPS_PATH/.meta/last_backup.json" finished rc stage age_h
+  if [[ ! -f "$f" ]]; then
+    report SKIP last-backup "no run recorded yet (the status file appears after the first backup)"
+    return
+  fi
+  finished="$(sed -n 's/.*"finished":"\([^"]*\)".*/\1/p' "$f" | head -n1)"
+  rc="$(sed -n 's/.*"rc":\([0-9]*\).*/\1/p' "$f" | head -n1)"
+  stage="$(sed -n 's/.*"stage":"\([^"]*\)".*/\1/p' "$f" | head -n1)"
+  age_h=""
+  if [[ -n "$finished" ]]; then
+    local finished_ts now_ts
+    finished_ts="$(date -d "$finished" +%s 2>/dev/null || true)"
+    now_ts="$(date +%s)"
+    [[ "$finished_ts" =~ ^[0-9]+$ ]] && age_h=$(( (now_ts - finished_ts) / 3600 ))
+  fi
+  if [[ "$rc" != 0 ]]; then
+    report FAIL last-backup "the last backup failed (exit ${rc:-?} at stage ${stage:-?}, ${finished:-unknown time})"
+  elif [[ -n "$age_h" ]] && (( age_h >= 3 )); then
+    report WARN last-backup "the last successful backup is ${age_h} hours old (${finished})"
+  else
+    report OK last-backup "last backup succeeded${age_h:+ ${age_h} h ago} (${finished:-unknown time})"
   fi
 }
 
@@ -236,6 +263,7 @@ echo "Doctor: $INSTANCE_NAME"
 check_service
 check_cron
 check_storage
+check_last_backup
 check_sudoers
 check_wrapper
 check_xaero_config

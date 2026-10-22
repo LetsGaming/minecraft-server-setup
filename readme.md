@@ -254,6 +254,7 @@ Run it as an admin with sudo. It prints one `OK`, `WARN`, `FAIL` or `SKIP` line 
 - the systemd unit is enabled and running, and has crash-loop limits in `[Unit]` (`migrate.sh` adds them to older units)
 - the hourly backup cron job (and the restart job when `RESTART_SCHEDULE.ENABLED`) is in the server user's crontab
 - backup usage against `MAX_STORAGE_GB` (warns from 90%, fails above 100%) and free disk space where the backups live (warns under 5 GB)
+- the last backup run recorded in `.meta/last_backup.json` (fails when it failed, warns when the last success is 3 hours old or more)
 - the wrapper's sudoers file passes `visudo -c` (skipped without an `API_SERVER.SERVICE_USER`)
 - the wrapper answers on its port and accepts the configured API key (skipped unless `API_SERVER.ENABLED`)
 
@@ -273,7 +274,8 @@ Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhook
 | Event | Sent when |
 |---|---|
 | `backup_complete` | A backup finished and passed validation |
-| `backup_failed` | A backup failed |
+| `backup_failed` | A backup failed (the message names the stage: preflight, quiesce, stage, compress, verify or publish), timed out, or an archive tier was given up for the day |
+| `backup_skipped` | `BACKUP_SKIP_ALERT_AFTER` (default 3) hourly runs in a row were skipped because another backup or operation holds the lock |
 | `storage_warning` | Backups are still over `MAX_STORAGE_GB` after cleanup evicted every archive it may evict (sent on each hourly cleanup while that stays true) |
 | `server_start` | The server came up |
 | `server_start_failed` | The server did not come up |

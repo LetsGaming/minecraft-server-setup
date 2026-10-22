@@ -1,3 +1,13 @@
 #!/bin/bash
-# Prevents wait_for_server_ready from tailing a log for up to two minutes.
-exit 124
+# Stand-in for GNU timeout: runs the command unless asked to expire.
+#   TIMEOUT_SHIM_EXPIRE=1  exits 124 without running the command
+echo "timeout $*" >> "$SHIM_LOG"
+while [[ $# -gt 0 && "$1" == -* ]]; do
+  case "$1" in
+    -s|-k) shift 2 ;;
+    *) shift ;;
+  esac
+done
+shift   # the duration
+[[ "${TIMEOUT_SHIM_EXPIRE:-}" == 1 ]] && exit 124
+exec "$@"

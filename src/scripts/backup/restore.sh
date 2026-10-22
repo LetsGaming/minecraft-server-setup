@@ -5,6 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../common/server_control.sh"
 source "$SCRIPT_DIR/../common/archive_restore.sh"
 source "$SCRIPT_DIR/../common/utils.sh"
+BK_COMPONENT=restore
+source "$SCRIPT_DIR/lib/bk_common.sh"
+source "$SCRIPT_DIR/lib/bk_state.sh"
+source "$SCRIPT_DIR/lib/bk_space.sh"
 
 BASE_BACKUP_DIR="$BACKUPS_PATH"
 BACKUP_DIR="$BASE_BACKUP_DIR"
@@ -14,7 +18,7 @@ RELATIVE_TIME=""
 FROM_ARCHIVE=false
 INSTALL_UNITS=false
 WITH_SCRIPTS=false
-KEEP_OLD=false
+DISCARD_OLD=false
 SYSTEMD_UNIT_DIR="${SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 
 print_help() {
@@ -24,21 +28,25 @@ print_help() {
     echo "  --y                   Skip confirmation prompt"
     echo "  --file <path>         Restore a specific backup: an absolute path inside the backups"
     echo "                        directory, or a name relative to hourly/ (archives/ with --archive)"
-    echo "  --ago <duration>      Restore backup closest to specified time ago (e.g. '3h', '15m', '2d')"
+    echo "  --ago <duration>      Restore the newest backup taken at or before that long ago"
+    echo "                        (e.g. '3h', '15m', '2d'); a match far from the target is refused"
+    echo "                        unless --y is given"
     echo "  --archive             Restore from the archive folder instead of hourly snapshots"
     echo "  --install-units       Install the systemd units stored in an archive (with sudo) after"
     echo "                        showing what changes. Without it, units are installed only after"
     echo "                        an interactive confirmation, and skipped when run non-interactively."
     echo "  --with-scripts        Also put back the management scripts stored in an archive"
     echo "                        (asked for when run interactively; skipped otherwise)"
-    echo "  --keep-old            Keep the replaced server files as <server>.pre-restore instead of"
-    echo "                        deleting them (an earlier .pre-restore copy is replaced)"
+    echo "  --discard-old         Delete the replaced server files instead of keeping them as"
+    echo "                        <server>.pre-restore (the default; RESTORE_KEEP_OLD=false does the same)"
+    echo "  --keep-old            Accepted for compatibility; keeping the old files is the default"
     echo "  --help                Show this help message and exit"
     echo ""
     echo "The server must be stopped; the restore refuses to run (exit 3) while it is online."
     echo "Run without a terminal (by the API wrapper), it needs --file and --y, and only"
     echo "restores an archive owned by the user running it. --with-scripts and --install-units"
-    echo "are refused without a terminal."
+    echo "are refused without a terminal. logs/, crash-reports/ and ledger.sqlite are carried"
+    echo "over from the current server files (RESTORE_CARRY_OVER)."
 }
 
 # review_and_install_unit <unit-file> <unit-name>
@@ -79,17 +87,17 @@ review_and_install_unit() {
     return 0
 }
 
+# normalize_relative_time <Ns|Nm|Nh|Nd|Nw>: prints the number of seconds.
 normalize_relative_time() {
     local input="$1"
     if [[ "$input" =~ ^([0-9]+)([smhdw])$ ]]; then
         local value="${BASH_REMATCH[1]}"
-        local unit="${BASH_REMATCH[2]}"
-        case "$unit" in
-            s) echo "$value seconds ago" ;;
-            m) echo "$value minutes ago" ;;
-            h) echo "$value hours ago" ;;
-            d) echo "$value days ago" ;;
-            w) echo "$value weeks ago" ;;
+        case "${BASH_REMATCH[2]}" in
+            s) echo "$value" ;;
+            m) echo $((value * 60)) ;;
+            h) echo $((value * 3600)) ;;
+            d) echo $((value * 86400)) ;;
+            w) echo $((value * 604800)) ;;
             *) return 1 ;;
         esac
     else
@@ -112,7 +120,8 @@ while [[ $# -gt 0 ]]; do
         --archive) FROM_ARCHIVE=true; shift ;;
         --install-units) INSTALL_UNITS=true; shift ;;
         --with-scripts) WITH_SCRIPTS=true; shift ;;
-        --keep-old) KEEP_OLD=true; shift ;;
+        --keep-old) shift ;;
+        --discard-old) DISCARD_OLD=true; shift ;;
         --help) print_help; exit 0 ;;
         *) echo "$(date +'%F %T') [ERROR] Unknown argument: $1" >&2; exit 1 ;;
     esac
@@ -131,42 +140,80 @@ if [[ ! -t 0 ]] && { $WITH_SCRIPTS || $INSTALL_UNITS; }; then
     exit 1
 fi
 
+bk_load_config >/dev/null 2>&1 || true
+KEEP_MODE=keep
+if $DISCARD_OLD || [[ "${RESTORE_KEEP_OLD:-true}" == false ]]; then
+    KEEP_MODE=discard
+fi
+
 acquire_operation_lock restore || exit 75
 
 if $FROM_ARCHIVE; then
     BACKUP_DIR="$BASE_BACKUP_DIR/archives"
+    SEARCH_DEPTH=2
 else
     BACKUP_DIR="$BASE_BACKUP_DIR/hourly"
+    SEARCH_DEPTH=1
 fi
 
 find_latest_backup() {
-    find "$BACKUP_DIR" -maxdepth 2 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
-        sort -nr | head -n1 | cut -d' ' -f2-
+    list_backup_files "$BACKUP_DIR" "$SEARCH_DEPTH" | head -n1 | cut -d' ' -f2-
 }
 
-find_closest_backup_by_time() {
-    local target_ts="$1"
-    find "$BACKUP_DIR" -maxdepth 2 -type f \( -name '*.tar.*' \) -printf '%T@ %p\n' |
-        awk -v tgt="$target_ts" '{ diff = ($1 - tgt); if (diff < 0) diff = -diff; print diff, $0; }' |
-        sort -n | head -n1 | cut -d' ' -f3-
+# find_backup_by_age <seconds-ago>: the newest backup taken at or before the
+# target, by the stamp in its name; the oldest one after it when none is older.
+find_backup_by_age() {
+    local target=$(( $(date +%s) - $1 )) line epoch file before="" after=""
+    while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        epoch="${line%% *}"; file="${line#* }"
+        if (( epoch <= target )); then
+            [[ -z "$before" ]] && before="$epoch $file"
+        else
+            after="$epoch $file"
+        fi
+    done < <(list_backup_files "$BACKUP_DIR" "$SEARCH_DEPTH")
+    [[ -n "$before" ]] && { echo "$before"; return 0; }
+    [[ -n "$after" ]] && { echo "$after"; return 0; }
+    return 1
 }
+
+if [[ ! -d "$BACKUP_DIR" && -z "$SPECIFIC_BACKUP" ]]; then
+    echo "[ERROR] No backups folder at $BACKUP_DIR; nothing to restore from."
+    exit 1
+fi
 
 if [[ -n "$SPECIFIC_BACKUP" ]]; then
     BACKUP_TO_RESTORE=$(resolve_backup_file "$SPECIFIC_BACKUP" "$BACKUP_DIR") || exit 1
 elif [[ -n "$RELATIVE_TIME" ]]; then
-    HUMAN_TIME=$(normalize_relative_time "$RELATIVE_TIME") || {
+    AGO_SECONDS=$(normalize_relative_time "$RELATIVE_TIME") || {
         echo "[ERROR] Invalid time format for --ago: $RELATIVE_TIME"; exit 1;
     }
-    TARGET_TIMESTAMP=$(date -d "$HUMAN_TIME" +%s) || {
-        echo "[ERROR] Failed to parse relative time: $RELATIVE_TIME"; exit 1;
-    }
-    BACKUP_TO_RESTORE=$(find_closest_backup_by_time "$TARGET_TIMESTAMP")
+    CHOICE="$(find_backup_by_age "$AGO_SECONDS")" || { echo "[ERROR] No suitable backup found."; exit 1; }
+    CHOSEN_EPOCH="${CHOICE%% *}"
+    BACKUP_TO_RESTORE="${CHOICE#* }"
+    TARGET_EPOCH=$(( $(date +%s) - AGO_SECONDS ))
+    DISTANCE=$(( CHOSEN_EPOCH - TARGET_EPOCH )); (( DISTANCE < 0 )) && DISTANCE=$(( -DISTANCE ))
+    echo "[INFO] Requested: $(date -d "@$TARGET_EPOCH" +'%F %T') ($RELATIVE_TIME ago); closest backup: $(date -d "@$CHOSEN_EPOCH" +'%F %T') ($(basename "$BACKUP_TO_RESTORE"))"
+    if (( DISTANCE * 2 > AGO_SECONDS )); then
+        if $SKIP_CONFIRMATION; then
+            echo "[WARN] That backup is $((DISTANCE / 60)) minutes away from the requested time; continuing because of --y."
+        else
+            echo "[ERROR] The closest backup is $((DISTANCE / 60)) minutes away from the requested time (more than half of $RELATIVE_TIME). Pass --file to choose it explicitly, or --y to accept it."
+            exit 1
+        fi
+    fi
 else
     BACKUP_TO_RESTORE=$(find_latest_backup)
 fi
 
-[[ -e "$BACKUP_TO_RESTORE" ]] || { echo "[ERROR] No suitable backup found."; exit 1; }
-archive_is_trusted "$BACKUP_TO_RESTORE" || exit 1
+[[ -n "${BACKUP_TO_RESTORE:-}" && -e "$BACKUP_TO_RESTORE" ]] || { echo "[ERROR] No suitable backup found."; exit 1; }
+# From here on every check and the extraction use the opened inode (S-004).
+archive_open_trusted "$BACKUP_TO_RESTORE" || exit 1
+# A name chosen by the script, not the operator, must be backed by its sidecar
+# (hash checked on the opened inode) or its mtime; a renamed archive is not
+# restored silently.
+[[ -n "$SPECIFIC_BACKUP" ]] || archive_name_is_credible "$BACKUP_TO_RESTORE" "$AR_FD" || exit 1
 
 echo "[INFO] Selected backup: $BACKUP_TO_RESTORE"
 
@@ -174,11 +221,28 @@ echo "[INFO] Selected backup: $BACKUP_TO_RESTORE"
 # a hard stop. Stop the server first (or use rollback.sh, which does it).
 require_server_stopped || exit 3
 
-echo "[INFO] Validating archive..."
-validate_archive "$BACKUP_TO_RESTORE" || exit 1
+# The restored tree is unpacked next to the server directory; the kept
+# pre-restore copy is only a rename and needs no extra room.
+STAGING_PARENT="$(dirname "${SERVER_PATH%/}")"
+NEED_BYTES=0
+if [[ -d "$SERVER_PATH" ]]; then
+    NEED_BYTES="$(du -sb -- "$SERVER_PATH" 2>/dev/null | cut -f1 || echo 0)"
+fi
+[[ "$NEED_BYTES" =~ ^[0-9]+$ ]] || NEED_BYTES=0
+ARCHIVE_BYTES="$(stat -L -c %s "/dev/fd/$AR_FD" 2>/dev/null || stat -c %s -- "$BACKUP_TO_RESTORE" 2>/dev/null || echo 0)"
+(( ARCHIVE_BYTES * 3 > NEED_BYTES )) && NEED_BYTES=$(( ARCHIVE_BYTES * 3 ))
+AVAIL_BYTES="$(bk_space_available "$STAGING_PARENT" 2>/dev/null || echo "")"
+if [[ "$AVAIL_BYTES" =~ ^[0-9]+$ ]] && (( AVAIL_BYTES < NEED_BYTES )); then
+    echo "[ERROR] Not enough free space next to $SERVER_PATH: about $(bk_human_bytes "$NEED_BYTES") needed for the restored tree, $(bk_human_bytes "$AVAIL_BYTES") free."
+    exit 73
+fi
 
 if [[ -d "$SERVER_PATH" && -n "$(ls -A "$SERVER_PATH")" ]]; then
-    echo "[WARN] $SERVER_PATH is not empty and will be replaced."
+    if [[ "$KEEP_MODE" == keep ]]; then
+        echo "[WARN] $SERVER_PATH will be replaced; the current files are kept at ${SERVER_PATH%/}.pre-restore for $RESTORE_KEEP_OLD_DAYS days."
+    else
+        echo "[WARN] $SERVER_PATH is not empty and will be replaced; the current files are deleted."
+    fi
     if [ "$SKIP_CONFIRMATION" = false ]; then
         read -rp "Continue with restore? (y/N): " confirm
         [[ "$confirm" =~ ^[Yy]$ ]] || { echo "[INFO] Restore aborted."; exit 0; }
@@ -188,23 +252,44 @@ fi
 # The archive is unpacked next to the server directory and swapped in only
 # once extraction succeeded, so a failure leaves the current world untouched.
 STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
+SWAPPED=false
 # Puts the original back if a signal lands mid-swap (S-031), and releases the
-# operation lock this trap would otherwise have replaced (S-030).
-trap 'swap_recover; rm -rf -- "$STAGING_DIR" "${SERVER_PATH%/}/.mc-meta"; release_operation_lock' EXIT
-trap 'exit 130' INT TERM
+# operation lock this trap would otherwise have replaced (S-030). The archive's
+# .mc-meta is only removed once the restored tree is live (F21).
+_restore_exit() {
+    local rc=$?
+    trap - EXIT
+    swap_recover
+    rm -rf -- "$STAGING_DIR"
+    $SWAPPED && rm -rf -- "${SERVER_PATH%/}/.mc-meta"
+    archive_close
+    release_operation_lock
+    exit "$rc"
+}
+trap _restore_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "[INFO] Restoring backup..."
-extract_archive "$BACKUP_TO_RESTORE" "$STAGING_DIR" || exit 1
+extract_archive_fd "$AR_FD" "$AR_FORMAT" "$STAGING_DIR" || exit 1
+scan_staged_tree "$STAGING_DIR" || exit 1
 # Hourly archives hold no jars, older archives hold dangling jar links (S-002,
-# S-003); either way the restored tree gets runnable jars before it goes live.
+# S-003); either way the restored tree gets runnable jars before it goes live,
+# and after that no symlink may leave the tree at all.
 complete_staged_jars "$STAGING_DIR" "$SERVER_PATH"
+scan_staged_tree "$STAGING_DIR" strict || exit 1
+# Logs, crash reports and the event ledger are never in a backup (D5); they
+# are taken from the live tree so a restore does not destroy them.
+# shellcheck disable=SC2086
+carry_over_live "$SERVER_PATH" "$STAGING_DIR" ${RESTORE_CARRY_OVER:-}
 # Extraction takes a while; confirm nothing started the server in the meantime.
 require_server_stopped || exit 3
-swap_server_dir "$STAGING_DIR" "$SERVER_PATH" "$($KEEP_OLD && echo keep)" || exit 1
+swap_server_dir "$STAGING_DIR" "$SERVER_PATH" "$KEEP_MODE" || exit 1
+SWAPPED=true
 
 echo "[INFO] Server data restored."
 
-# ——— restore instance metadata ———
+# ── restore instance metadata ──
 # Archive backups embed a .mc-meta directory containing the scripts tree,
 # systemd service files, and api-server-config.json. Restore them now so the
 # management infrastructure is fully rebuilt alongside the server data.
@@ -226,22 +311,21 @@ if [[ -d "$META_DIR" ]]; then
     [[ "$answer" =~ ^[Yy]$ ]] && restore_scripts=true
   fi
   if [[ -d "$META_DIR/scripts" ]] && ! $restore_scripts; then
-    echo "[INFO]   — scripts/ left as they are (pass --with-scripts to restore them)"
+    echo "[INFO]   - scripts/ left as they are (pass --with-scripts to restore them)"
   fi
   if [[ -d "$META_DIR/scripts" ]] && $restore_scripts; then
     rsync -a "$META_DIR/scripts/" "$INSTANCE_SCRIPTS_DIR/"
     echo "[INFO]   ✓ scripts/"
 
     # Reinstall node_modules, which the backup excludes. Only update/ has any
-    # since the web interface was retired — a loop over one entry was left
-    # behind by that removal and shellcheck was right to object.
+    # since the web interface was retired.
     _update_dir="$INSTANCE_SCRIPTS_DIR/update"
     if [[ -f "$_update_dir/package.json" ]]; then
       echo "[INFO]   npm install in update/..."
       if [[ -f "$_update_dir/package-lock.json" ]]; then _npm=(npm ci); else _npm=(npm install); fi
       "${_npm[@]}" --omit=dev --prefix "$_update_dir" >/dev/null \
         && echo "[INFO]     ✓ update/node_modules" \
-        || echo "[WARN]     npm install failed in update/ — run manually"
+        || echo "[WARN]     npm install failed in update/; run manually"
     fi
   fi
 
@@ -255,7 +339,7 @@ if [[ -d "$META_DIR" ]]; then
       # unit. Reinstalling it here would quietly bring a retired, credentialed
       # service back up on a host the operator had already cleaned.
       if [[ "$svc_name" == *-manager.service ]]; then
-        echo "[INFO]   — skipped $svc_name (the web interface was retired)"
+        echo "[INFO]   - skipped $svc_name (the web interface was retired)"
         continue
       fi
       if review_and_install_unit "$svc_file" "$svc_name"; then
@@ -276,12 +360,12 @@ if [[ -d "$META_DIR" ]]; then
     mkdir -p "$API_DIR"
     cp "$META_DIR/api-server-config.json" "$API_DIR/api-server-config.json"
     chmod 600 "$API_DIR/api-server-config.json"
-    echo "[INFO]   ✓ api-server-config.json → $API_DIR/"
+    echo "[INFO]   ✓ api-server-config.json -> $API_DIR/"
     echo "[INFO]     If the wrapper runs as its own user (API_SERVER.SERVICE_USER), run"
     echo "[INFO]     src/setup/management/service_user.sh again so it can read the file."
   fi
 
-  # Clean .mc-meta out of the server root — it has no place there at runtime
+  # Clean .mc-meta out of the server root: it has no place there at runtime
   rm -rf "$META_DIR"
 
   echo "[INFO] Metadata restore complete."
@@ -291,7 +375,7 @@ if [[ -d "$META_DIR" ]]; then
   echo "         sudo systemctl enable --now ${INSTANCE_NAME}.service"
   echo "         sudo systemctl enable --now ${TARGET_DIR_NAME}-api-server.service"
 else
-  echo "[WARN] No .mc-meta found in archive — metadata not restored."
+  echo "[WARN] No .mc-meta found in archive; metadata not restored."
   echo "       This is expected for hourly backups or archives created before this feature."
 fi
 

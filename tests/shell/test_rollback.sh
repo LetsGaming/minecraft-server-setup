@@ -72,15 +72,16 @@ SH
   assert_file_content "$T/server/world/level.dat" current "world untouched"
 }
 
-test_rollback_rechecks_right_before_the_swap() {
+test_rollback_unpacks_the_archive_before_stopping_the_server() {
   setup
   make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
   server_running
-  export TAR_SHIM_START_SERVER=1
   run_script "$ROLLBACK" --y
-  assert_nonzero "$RC" "server that came up during extraction aborts the swap"
-  assert_file_content "$T/server/world/level.dat" current "world untouched"
-  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "staging directory cleaned up"
+  assert_rc 0 "$RC" "rollback exits 0"
+  local extract_line stop_line
+  extract_line="$(grep -n '^tar -x' "$SHIM_LOG" | head -n1 | cut -d: -f1)"
+  stop_line="$(grep -n '^systemctl stop' "$SHIM_LOG" | head -n1 | cut -d: -f1)"
+  assert_eq 1 "$([[ -n "$extract_line" && -n "$stop_line" && "$extract_line" -lt "$stop_line" ]] && echo 1 || echo 0)" "extraction happens while the server still runs"
 }
 
 test_corrupt_archive_aborts_before_stopping_server() {
@@ -94,7 +95,7 @@ test_corrupt_archive_aborts_before_stopping_server() {
   assert_file_content "$T/server/world/level.dat" current "world untouched"
 }
 
-test_extraction_failure_keeps_world_and_restarts_server() {
+test_extraction_failure_keeps_world_and_never_stops_the_server() {
   setup
   make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
   server_running
@@ -103,8 +104,26 @@ test_extraction_failure_keeps_world_and_restarts_server() {
   assert_nonzero "$RC" "rollback fails"
   assert_file_content "$T/server/world/level.dat" current "world untouched"
   assert_exists "$T/server/.live_dotfile" "dotfiles untouched"
-  assert_logged "systemctl start testinst.service" "server started again"
+  assert_not_logged "systemctl stop" "the server was never stopped"
+  assert_contains "$OUT" "was not stopped" "says so"
   assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "staging directory cleaned up"
+}
+
+test_a_swap_failure_starts_the_server_again() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
+  server_running
+  # mv shim: refuse to move the server directory aside.
+  cat > "$T/bin/mv" <<SH
+#!/bin/bash
+for a in "\$@"; do [[ "\$a" == "$T/server" ]] && { echo "mv: cannot move" >&2; exit 1; }; done
+exec "$(PATH="${PATH#"$T/bin:"}" command -v mv)" "\$@"
+SH
+  chmod +x "$T/bin/mv"
+  run_script "$ROLLBACK" --y
+  assert_nonzero "$RC" "rollback fails"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  assert_logged "systemctl start testinst.service" "server started again"
 }
 
 test_rollback_replaces_dotfiles() {
@@ -126,12 +145,117 @@ test_keep_old_keeps_the_replaced_server_files() {
   assert_file_content "$T/server.pre-restore/world/level.dat" current "the previous world is kept"
 }
 
-test_rollback_deletes_the_replaced_files_without_keep_old() {
+test_rollback_keeps_the_replaced_files_by_default() {
   setup
   make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
   server_running
   run_script "$ROLLBACK" --y
-  assert_missing "$T/server.pre-restore" "nothing kept by default"
+  assert_rc 0 "$RC" "rollback exits 0"
+  assert_file_content "$T/server.pre-restore/world/level.dat" current "the previous world is kept"
+}
+
+test_rollback_discard_old_deletes_the_replaced_files() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
+  server_running
+  run_script "$ROLLBACK" --y --discard-old
+  assert_rc 0 "$RC" "rollback exits 0"
+  assert_missing "$T/server.pre-restore" "nothing kept with --discard-old"
+}
+
+test_rollback_carries_logs_over_from_the_live_tree() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_a.tar.zst" before-update
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 0 "$RC" "rollback exits 0"
+  assert_file_content "$T/server/logs/latest.log" current-log "logs/ survive the rollback"
+}
+
+
+# ── a renamed archive is not rolled back to silently ────────────────────────
+
+test_a_renamed_old_archive_with_a_forged_newer_stamp_is_refused() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" honest
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2025-06-01_00-00-00.tar.zst" old
+  # Someone who can rename files in the folder makes the old one look newest;
+  # the sidecar stays under the old name and the mtime says June.
+  mv "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2025-06-01_00-00-00.tar.zst" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  touch -d "2025-06-01 00:10:00" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 1 "$RC" "the rollback refuses"
+  assert_contains "$OUT" "Refusing to pick" "says why"
+  assert_contains "$OUT" "--file" "points at an explicit choice"
+  assert_not_logged "systemctl stop" "the server was never stopped"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_a_legacy_archive_whose_mtime_matches_its_name_is_accepted() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" legacy
+  rm -rf "$T/backups/.meta"
+  touch -d "2026-01-01 00:20:00" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 0 "$RC" "no sidecar, but the mtime backs the name"
+  assert_file_content "$T/server/world/level.dat" legacy "world restored"
+}
+
+
+test_an_archive_whose_content_does_not_match_its_sidecar_is_refused() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" honest
+  # The file is replaced under its own name; the sidecar still names the old hash.
+  make_archive "$T/elsewhere/planted.tar.zst" planted
+  cp -f "$T/elsewhere/planted.tar.zst" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 1 "$RC" "the rollback refuses"
+  assert_contains "$OUT" "does not match the hash" "says why"
+  assert_not_logged "systemctl stop" "the server was never stopped"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+
+test_a_legacy_archive_is_refused_when_the_descriptor_cannot_be_inspected() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" legacy
+  rm -rf "$T/backups/.meta"
+  touch -d "2026-01-01 00:20:00" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst"
+  # stat fails for /dev/fd paths: the mtime fallback must not consult the path instead.
+  cat > "$T/bin/stat" <<SH
+#!/bin/bash
+for a in "\$@"; do [[ "\$a" == /dev/fd/* ]] && exit 1; done
+exec "$(PATH="${PATH#"$T/bin:"}" command -v stat)" "\$@"
+SH
+  chmod +x "$T/bin/stat"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 1 "$RC" "the rollback refuses"
+  assert_contains "$OUT" "cannot be checked through /dev/fd" "fails closed with a clear message"
+  assert_not_logged "systemctl stop" "the server was never stopped"
+}
+
+test_an_archive_swapped_after_the_open_is_not_rolled_back_to_by_name() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" honest
+  make_archive "$T/elsewhere/planted.tar.zst" planted
+  # The name is re-pointed at another inode once the archive is open: the
+  # stat of the path answers with the planted file's identity.
+  local planted_id; planted_id="$(stat -c '%d:%i' "$T/elsewhere/planted.tar.zst")"
+  cat > "$T/bin/stat" <<SH
+#!/bin/bash
+if [[ "\$1" == -c && "\$2" == "%d:%i" && "\$4" == *minecraft_backup_2026-01-01* ]]; then echo "$planted_id"; exit 0; fi
+exec "$(PATH="${PATH#"$T/bin:"}" command -v stat)" "\$@"
+SH
+  chmod +x "$T/bin/stat"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 1 "$RC" "the rollback refuses"
+  assert_contains "$OUT" "changed after it was opened" "says why"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
 }
 
 run_tests

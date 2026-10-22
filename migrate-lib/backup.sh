@@ -10,16 +10,38 @@ create_backup() {
   BACKUP_BASE="$(basename "$TARGET_SCRIPTS_DIR")_backup_${BACKUP_TIMESTAMP}"
 
   echo -e "${BOLD}Step 1: Backup${NC}"
+  # Written under a .part name and renamed only after a full listing passed,
+  # so a tar that died midway never counts as one of the "newest N" archives.
+  local part rc=0
   if $USE_ZSTD; then
     BACKUP_ARCHIVE="${BACKUP_PARENT}/${BACKUP_BASE}.tar.zst"
+    part="${BACKUP_PARENT}/.${BACKUP_BASE}.tar.zst.part"
     log "Creating archive: $(basename "$BACKUP_ARCHIVE")"
     # umask 077 (S-029): the archive holds common/variables.txt and its secrets.
-    ( umask 077; run_cmd tar -C "$BACKUP_PARENT" -I 'zstd -3' -cf "$BACKUP_ARCHIVE" "$(basename "$TARGET_SCRIPTS_DIR")" )
+    ( umask 077; run_cmd tar -C "$BACKUP_PARENT" -I 'zstd -3' -cf "$part" "$(basename "$TARGET_SCRIPTS_DIR")" ) || rc=$?
   else
     BACKUP_ARCHIVE="${BACKUP_PARENT}/${BACKUP_BASE}.tar.gz"
+    part="${BACKUP_PARENT}/.${BACKUP_BASE}.tar.gz.part"
     log "Creating archive: $(basename "$BACKUP_ARCHIVE")"
-    ( umask 077; run_cmd tar -C "$BACKUP_PARENT" -czf "$BACKUP_ARCHIVE" "$(basename "$TARGET_SCRIPTS_DIR")" )
+    ( umask 077; run_cmd tar -C "$BACKUP_PARENT" -czf "$part" "$(basename "$TARGET_SCRIPTS_DIR")" ) || rc=$?
   fi
+  $DRY_RUN && return 0
+  if (( rc != 0 )); then
+    rm -f -- "$part"
+    err "Creating the archive failed (tar exit $rc)."
+    return 1
+  fi
+  if $USE_ZSTD; then
+    ( set -o pipefail; zstd -dc "$part" | tar -tf - > /dev/null ) 2>/dev/null || rc=1
+  else
+    tar -tzf "$part" > /dev/null 2>&1 || rc=1
+  fi
+  if (( rc != 0 )); then
+    rm -f -- "$part"
+    err "The archive does not list cleanly; removed."
+    return 1
+  fi
+  mv -f -- "$part" "$BACKUP_ARCHIVE"
   [[ -f "$BACKUP_ARCHIVE" ]] && info "Archive size: $(du -sk "$BACKUP_ARCHIVE" | cut -f1)KB"
   return 0
 }

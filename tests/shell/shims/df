@@ -1,0 +1,9 @@
+#!/bin/bash
+# DF_SHIM_AVAIL=<bytes> answers `df --output=avail -B1 <dir>` with that value;
+# without it, defers to the real df.
+echo "df $*" >> "$SHIM_LOG"
+if [[ -n "${DF_SHIM_AVAIL:-}" ]]; then
+  printf '%s\n%s\n' "Avail" "$DF_SHIM_AVAIL"
+  exit 0
+fi
+exec "$REAL_DF" "$@"

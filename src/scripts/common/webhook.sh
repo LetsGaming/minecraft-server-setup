@@ -101,11 +101,13 @@ notify() {
   # Callers that are about to exit should run wait_for_notifications first.
   local url_escaped=${WEBHOOK_URL//\\/\\\\}
   url_escaped=${url_escaped//\"/\\\"}
+  # The lock descriptors (7, 8, 9) are closed for curl, or a request still in
+  # flight after the script exits would keep the flock for up to --max-time.
   printf 'url = "%s"\n' "$url_escaped" | curl -sS -f -o /dev/null -X POST \
     --connect-timeout 5 --max-time 10 \
     -H "Content-Type: application/json" \
     -d "$payload" \
-    --config - 2> /dev/null &
+    --config - 2> /dev/null 7>&- 8>&- 9>&- &
   _WEBHOOK_PIDS+=("$!")
 }
 

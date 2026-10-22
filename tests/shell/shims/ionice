@@ -1,0 +1,19 @@
+#!/bin/bash
+# Stand-in for util-linux ionice: records the call and runs the command.
+#   IONICE_SHIM_FAIL=1  refuses to set the priority and exits 1 without running
+#                       the command, unless -t (ignore failures) was given
+echo "ionice $*" >> "$SHIM_LOG"
+tolerant=false
+while [[ $# -gt 0 && "$1" == -* ]]; do
+  case "$1" in
+    -t) tolerant=true; shift ;;
+    -c|-n|-p) shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "${IONICE_SHIM_FAIL:-}" == 1 ]] && ! $tolerant; then
+  echo "ionice: ioprio_set failed: Operation not permitted" >&2
+  exit 1
+fi
+[[ $# -gt 0 ]] || exit 0
+exec "$@"

@@ -165,14 +165,51 @@ test_file_without_value_is_a_usage_error() {
   assert_contains "$OUT" "--ago requires a value" "same for --ago"
 }
 
-test_ago_picks_closest_backup() {
+stamp_ago() { date -d "$1 ago" +'%Y-%m-%d_%H-%M-%S'; }
+
+test_ago_picks_the_newest_backup_at_or_before_the_target_by_name() {
   setup
-  make_archive "$T/backups/hourly/minecraft_backup_old.tar.zst" old
-  touch -d "5 hours ago" "$T/backups/hourly/minecraft_backup_old.tar.zst"
-  make_archive "$T/backups/hourly/minecraft_backup_new.tar.zst" new
+  # mtimes say the opposite of the names; the name wins.
+  make_archive "$T/backups/hourly/minecraft_backup_$(stamp_ago '6 hours').tar.zst" six
+  make_archive "$T/backups/hourly/minecraft_backup_$(stamp_ago '4 hours').tar.zst" four
+  make_archive "$T/backups/hourly/minecraft_backup_$(stamp_ago '1 hour').tar.zst" one
+  touch -d "10 hours ago" "$T"/backups/hourly/minecraft_backup_*
   run_script_tty "$RESTORE" --ago 5h --y
   assert_rc 0 "$RC" "--ago exits 0"
-  assert_file_content "$T/server/world/level.dat" old "closest-to-5h archive chosen"
+  assert_file_content "$T/server/world/level.dat" six "the newest backup at or before 5h ago is chosen"
+  assert_contains "$OUT" "closest backup" "says which stamp was chosen"
+}
+
+test_ago_refuses_a_match_far_from_the_target_without_y() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_$(stamp_ago '30 hours').tar.zst" old
+  run_script_tty "$RESTORE" --ago 5h
+  assert_rc 1 "$RC" "a backup 25 hours off a 5 hour target is refused"
+  assert_contains "$OUT" "away from the requested time" "says why"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  run_script_tty "$RESTORE" --ago 5h --y
+  assert_rc 0 "$RC" "--y accepts it"
+  assert_file_content "$T/server/world/level.dat" old "and restores it"
+}
+
+test_a_missing_tier_folder_gives_a_friendly_error() {
+  setup
+  rm -rf "$T/backups/hourly"
+  run_script_tty "$RESTORE" --y
+  assert_rc 1 "$RC" "exit 1"
+  assert_contains "$OUT" "No backups folder" "explains instead of a find error"
+  assert_not_contains "$OUT" "No such file" "no raw tool error"
+}
+
+test_selection_ignores_partial_files_and_data_folders() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" good
+  make_archive "$T/backups/hourly/.minecraft_backup_2026-01-02_00-00-00.tar.zst.part" partial
+  mkdir -p "$T/backups/hourly/tmp_backup/world"
+  make_archive "$T/backups/hourly/tmp_backup/minecraft_backup_2026-01-03_00-00-00.tar.zst" nested
+  run_script_tty "$RESTORE" --y
+  assert_rc 0 "$RC" "restore exits 0"
+  assert_file_content "$T/server/world/level.dat" good "only a finished archive in the tier folder itself is a candidate"
 }
 
 test_stale_dotfiles_are_replaced() {
@@ -188,7 +225,7 @@ test_no_staging_or_old_directories_remain() {
   setup
   make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
   run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
-  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "no server.restore-staging.* or server.pre-restore.* left"
+  assert_eq "" "$(find "$T" -maxdepth 1 \( -name 'server.restore-staging.*' -o -name 'server.pre-restore.*' \))" "no server.restore-staging.* or server.pre-restore.<pid> left"
 }
 
 test_corrupt_archive_leaves_world_untouched() {
@@ -205,10 +242,20 @@ test_corrupt_archive_leaves_world_untouched() {
 test_zstd_integrity_failure_leaves_world_untouched() {
   setup
   make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
-  export ZSTD_SHIM_FAIL_TEST=1
+  export ZSTD_SHIM_FAIL_DECOMPRESS=1
   run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
-  assert_nonzero "$RC" "failed zstd -t aborts"
+  assert_nonzero "$RC" "a stream that does not decompress aborts"
   assert_file_content "$T/server/world/level.dat" current "world untouched"
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "no staging or pre-restore directory left"
+}
+
+test_restore_decompresses_the_archive_once() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore exits 0"
+  assert_eq "1" "$(grep -c '^zstd .*-d' "$SHIM_LOG")" "one zstd decompression"
+  assert_not_logged "zstd -t" "no separate integrity pass"
 }
 
 test_extraction_failure_leaves_world_untouched() {
@@ -289,11 +336,11 @@ test_identical_unit_is_left_alone() {
 config_archive() { # archive holding .mc-meta/api-server-config.json
   local src
   src="$(mktemp -d "$T/arch.XXXXXX")"
-  mkdir -p "$src/world" "$src/.mc-meta"
+  mkdir -p "$src/world/region" "$src/.mc-meta"
   echo restored > "$src/world/level.dat"
+  echo r > "$src/world/region/r.0.0.mca"
   echo '{"apiKey":"restored"}' > "$src/.mc-meta/api-server-config.json"
-  mkdir -p "$T/backups/archives"
-  "$REAL_TAR" -cf - -C "$src" . | gzip -c > "$T/backups/archives/minecraft_backup_c.tar.zst"
+  make_archive_from "$T/backups/archives/minecraft_backup_c.tar.zst" "$src"
   rm -rf "$src"
 }
 
@@ -402,27 +449,204 @@ test_dangling_jar_links_of_older_archives_are_repaired() {
   assert_file_content "$T/server/server.jar" stored "taken from the stored copy"
 }
 
-# ── --keep-old ───────────────────────────────────────────────────────────────
+# ── the replaced files are kept by default (D2) ─────────────────────────────
 
-test_the_replaced_server_files_are_deleted_by_default() {
-  setup
-  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
-  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
-  assert_rc 0 "$RC" "restore succeeds"
-  assert_missing "$T/server.pre-restore" "no copy of the old tree is kept"
-}
-
-test_keep_old_keeps_the_replaced_server_files_and_replaces_an_older_copy() {
+test_the_replaced_server_files_are_kept_by_default_and_replace_an_older_copy() {
   setup
   make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
   mkdir -p "$T/server.pre-restore"
   echo stale > "$T/server.pre-restore/marker"
-  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y --keep-old
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
   assert_rc 0 "$RC" "restore succeeds"
   assert_file_content "$T/server/world/level.dat" restored "the archive is live"
   assert_file_content "$T/server.pre-restore/world/level.dat" current "the previous world is kept"
   assert_missing "$T/server.pre-restore/marker" "the older kept copy was replaced"
   assert_contains "$OUT" "$T/server.pre-restore" "says where the old files are"
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.pre-restore.*')" "no trash or pid-named copies left"
+}
+
+test_keep_old_is_still_accepted() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y --keep-old
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$T/server.pre-restore/world/level.dat" current "the previous world is kept"
+}
+
+test_discard_old_deletes_the_replaced_server_files() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y --discard-old
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$T/server/world/level.dat" restored "the archive is live"
+  assert_missing "$T/server.pre-restore" "no copy of the old tree is kept"
+  assert_eq "" "$(find "$T" -maxdepth 1 -name 'server.*')" "nothing else left either"
+}
+
+test_restore_keep_old_false_deletes_the_replaced_server_files() {
+  setup
+  echo 'RESTORE_KEEP_OLD="false"' >> "$T/scripts/common/variables.txt"
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_missing "$T/server.pre-restore" "no copy kept when the config says so"
+}
+
+# ── carry-over of what no backup contains (D5) ──────────────────────────────
+
+test_logs_crash_reports_and_the_ledger_are_carried_over_from_the_live_tree() {
+  setup
+  mkdir -p "$T/server/crash-reports"
+  echo crash > "$T/server/crash-reports/crash-1.txt"
+  echo ledger > "$T/server/ledger.sqlite"
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$T/server/logs/latest.log" current-log "logs/ kept"
+  assert_file_content "$T/server/crash-reports/crash-1.txt" crash "crash-reports/ kept"
+  assert_file_content "$T/server/ledger.sqlite" ledger "ledger.sqlite kept"
+  assert_contains "$OUT" "Carried over logs" "says what it carried"
+}
+
+test_carry_over_never_overwrites_what_the_archive_holds() {
+  setup
+  local src; src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world/region" "$src/logs"
+  echo restored > "$src/world/level.dat"; echo r > "$src/world/region/r.0.0.mca"
+  echo archived-log > "$src/logs/latest.log"
+  make_archive_from "$T/backups/hourly/minecraft_backup_a.tar.zst" "$src"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$T/server/logs/latest.log" archived-log "the archive's logs win"
+}
+
+test_carry_over_list_is_configurable() {
+  setup
+  echo 'RESTORE_CARRY_OVER="ledger.sqlite"' >> "$T/scripts/common/variables.txt"
+  echo ledger > "$T/server/ledger.sqlite"
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$T/server/ledger.sqlite" ledger "the listed entry is carried"
+  assert_missing "$T/server/logs" "an unlisted one is not"
+}
+
+# ── safety of the archive itself ────────────────────────────────────────────
+
+test_a_failed_restore_keeps_the_live_metadata_folder() {
+  setup
+  mkdir -p "$T/server/.mc-meta"
+  echo live > "$T/server/.mc-meta/note"
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" restored
+  export TAR_SHIM_FAIL_EXTRACT=1
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_nonzero "$RC" "the restore fails"
+  assert_file_content "$T/server/.mc-meta/note" live "the live tree's .mc-meta is untouched"
+}
+
+test_the_archive_opened_for_the_checks_is_the_one_restored() {
+  # TOCTOU: the file is swapped under the same name once the trusted open
+  # happened (the tar shim swaps it while extracting); the opened inode wins.
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_a.tar.zst" opened
+  make_archive "$T/elsewhere/planted.tar.zst" planted
+  cat > "$T/bin/tar" <<SH
+#!/bin/bash
+echo "tar \$*" >> "\$SHIM_LOG"
+for a in "\$@"; do [[ "\$a" == -x* ]] && mv -f "$T/elsewhere/planted.tar.zst" "$T/backups/hourly/minecraft_backup_a.tar.zst"; done
+exec "$REAL_TAR" "\$@"
+SH
+  chmod +x "$T/bin/tar"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "restore succeeds"
+  assert_file_content "$T/server/world/level.dat" opened "the content comes from the inode that passed the checks"
+}
+
+test_an_archive_with_an_escaping_symlink_is_refused() {
+  setup
+  local src; src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world/region"
+  echo restored > "$src/world/level.dat"; echo r > "$src/world/region/r.0.0.mca"
+  if ! ln -s /etc/passwd "$src/evil" 2>/dev/null || [[ ! -L "$src/evil" ]]; then
+    skip "escaping symlink" "this host cannot create real symlinks"
+    return
+  fi
+  ln -s ../../outside "$src/evil2"
+  make_archive_from "$T/backups/hourly/minecraft_backup_a.tar.zst" "$src"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 1 "$RC" "refused"
+  assert_contains "$OUT" "symlink" "says why"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_an_archive_with_an_internal_symlink_is_accepted() {
+  setup
+  local src; src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world/region"
+  echo restored > "$src/world/level.dat"; echo r > "$src/world/region/r.0.0.mca"
+  if ! ln -s world "$src/world_link" 2>/dev/null || [[ ! -L "$src/world_link" ]]; then
+    skip "internal symlink" "this host cannot create real symlinks"
+    return
+  fi
+  make_archive_from "$T/backups/hourly/minecraft_backup_a.tar.zst" "$src"
+  run_script "$RESTORE" --file minecraft_backup_a.tar.zst --y
+  assert_rc 0 "$RC" "a link that stays inside the tree is fine"
+  assert_file_content "$T/server/world/level.dat" restored "world restored"
+}
+
+
+# ── a renamed archive is not picked silently ────────────────────────────────
+
+test_a_renamed_archive_with_a_forged_stamp_is_not_selected_silently() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" honest
+  make_archive "$T/backups/hourly/minecraft_backup_2025-06-01_00-00-00.tar.zst" old
+  mv "$T/backups/hourly/minecraft_backup_2025-06-01_00-00-00.tar.zst" "$T/backups/hourly/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  touch -d "2025-06-01 00:10:00" "$T/backups/hourly/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  run_script_tty "$RESTORE" --y
+  assert_rc 1 "$RC" "the default selection refuses"
+  assert_contains "$OUT" "Refusing to pick" "says why"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  run_script "$RESTORE" --file minecraft_backup_2026-12-31_00-00-00.tar.zst --y
+  assert_rc 0 "$RC" "an explicit --file is the operator's call"
+  assert_file_content "$T/server/world/level.dat" old "and restores that file"
+}
+
+# ── only the exact legacy jar link form is tolerated, and never kept ────────
+
+jar_link_archive() { # link-name target: an archive with one jar symlink
+  local src; src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world/region"
+  echo restored > "$src/world/level.dat"; echo r > "$src/world/region/r.0.0.mca"
+  ln -s "$2" "$src/$1" 2>/dev/null && [[ -L "$src/$1" ]] || { rm -rf "$src"; return 1; }
+  make_archive_from "$T/backups/hourly/minecraft_backup_j.tar.zst" "$src"
+  rm -rf "$src"
+}
+
+test_a_jar_symlink_that_is_not_the_legacy_form_is_refused() {
+  setup
+  if ! jar_link_archive server.jar ../../../jars/other.jar; then skip "jar symlink" "this host cannot create real symlinks"; return; fi
+  run_script "$RESTORE" --file minecraft_backup_j.tar.zst --y
+  assert_rc 1 "$RC" "a jar link to another name is refused"
+  assert_contains "$OUT" "symlink" "says why"
+  jar_link_archive evil.jar ../../../../etc/jars/evil.jar
+  run_script "$RESTORE" --file minecraft_backup_j.tar.zst --y
+  assert_rc 1 "$RC" "a jar link with a path before jars/ is refused"
+  jar_link_archive server.jar /opt/jars/server.jar
+  run_script "$RESTORE" --file minecraft_backup_j.tar.zst --y
+  assert_rc 1 "$RC" "an absolute jar link is refused"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_a_legacy_jar_link_without_a_stored_jar_is_removed_not_kept() {
+  setup
+  if ! jar_link_archive server.jar ../../../jars/server.jar; then skip "jar symlink" "this host cannot create real symlinks"; return; fi
+  rm -f "$T/server/server.jar"
+  run_script "$RESTORE" --file minecraft_backup_j.tar.zst --y
+  assert_rc 0 "$RC" "the restore proceeds"
+  assert_contains "$OUT" "link was removed" "and says the jar is missing"
+  assert_missing "$T/server/server.jar" "no link into the backups folder survives"
+  assert_eq "" "$(find "$T/server" -type l)" "no symlink at all in the live tree"
 }
 
 run_tests

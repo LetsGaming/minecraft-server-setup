@@ -5,10 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common/server_control.sh"
 source "$SCRIPT_DIR/common/archive_restore.sh"
 source "$SCRIPT_DIR/common/utils.sh"
+BK_COMPONENT=rollback
+source "$SCRIPT_DIR/backup/lib/bk_common.sh"
 
 BACKUP_DIR="$BACKUPS_PATH/archives/update"
 SKIP_CONFIRMATION=false
-KEEP_OLD=false
+DISCARD_OLD=false
 
 print_help() {
   cat <<EOF
@@ -17,18 +19,23 @@ Usage: $0 [options]
 Rolls back the server to the most recent pre-update backup.
 
 Options:
-  --y         Skip confirmation prompt
-  --keep-old  Keep the replaced server files as <server>.pre-restore instead of
-              deleting them (an earlier .pre-restore copy is replaced)
-  --list      List available update backups and exit
-  --help      Show this help message
+  --y            Skip confirmation prompt
+  --discard-old  Delete the replaced server files instead of keeping them as
+                 <server>.pre-restore (the default; RESTORE_KEEP_OLD=false does the same)
+  --keep-old     Accepted for compatibility; keeping the old files is the default
+  --list         List available update backups and exit
+  --help         Show this help message
+
+The archive is unpacked and checked while the server is still running; it is
+stopped only for the swap itself.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --y) SKIP_CONFIRMATION=true; shift ;;
-    --keep-old) KEEP_OLD=true; shift ;;
+    --keep-old) shift ;;
+    --discard-old) DISCARD_OLD=true; shift ;;
     --list)
       echo "Available update backups in $BACKUP_DIR:"
       if [[ -d "$BACKUP_DIR" ]]; then
@@ -43,6 +50,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+bk_load_config >/dev/null 2>&1 || true
+KEEP_MODE=keep
+if $DISCARD_OLD || [[ "${RESTORE_KEEP_OLD:-true}" == false ]]; then
+  KEEP_MODE=discard
+fi
+
 acquire_operation_lock rollback || exit 75
 
 # Find the latest update backup
@@ -52,14 +65,17 @@ if [[ ! -d "$BACKUP_DIR" ]]; then
   exit 1
 fi
 
-LATEST_BACKUP=$(find "$BACKUP_DIR" -maxdepth 1 -type f \( -name '*.tar.zst' -o -name '*.tar.gz' \) -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)
+LATEST_BACKUP="$(list_backup_files "$BACKUP_DIR" 1 | head -n1 | cut -d' ' -f2-)"
 
 if [[ -z "$LATEST_BACKUP" || ! -e "$LATEST_BACKUP" ]]; then
   echo "[ERROR] No update backups found in $BACKUP_DIR"
   exit 1
 fi
-# "Newest" is decided by whoever can write into the folder (S-004).
-archive_is_trusted "$LATEST_BACKUP" || exit 1
+# "Newest" is decided by whoever can rename files in the folder (S-004): the
+# name must be backed by its sidecar or its mtime, and from here on every
+# check and the extraction use the opened inode.
+archive_open_trusted "$LATEST_BACKUP" || exit 1
+archive_name_is_credible "$LATEST_BACKUP" "$AR_FD" || exit 1
 
 BACKUP_DATE=$(basename "$LATEST_BACKUP" | sed 's/minecraft_backup_//' | sed 's/\.tar\..*//' | tr '_' ' ')
 echo "[INFO] Most recent pre-update backup:"
@@ -68,19 +84,43 @@ echo "       Date: $BACKUP_DATE"
 echo "       Size: $(du -sh "$LATEST_BACKUP" | cut -f1)"
 echo
 echo "[WARN] This will:"
-echo "       1. Stop the server"
-echo "       2. Replace ALL server files in $SERVER_PATH (only after the archive checks out)"
-echo "       3. Restart the server"
+echo "       1. Unpack and check the archive next to the server directory"
+echo "       2. Stop the server"
+if [[ "$KEEP_MODE" == keep ]]; then
+  echo "       3. Replace ALL server files in $SERVER_PATH (the current ones are kept at ${SERVER_PATH%/}.pre-restore)"
+else
+  echo "       3. Replace ALL server files in $SERVER_PATH (the current ones are deleted)"
+fi
+echo "       4. Restart the server"
 
 if [[ "$SKIP_CONFIRMATION" != true ]]; then
   read -rp "Proceed with rollback? (y/N): " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { echo "[INFO] Rollback aborted."; exit 0; }
 fi
 
-# Check the archive before the server goes down: a bad archive must not cost
-# the players any downtime, let alone the world.
-echo "[INFO] Validating archive..."
-validate_archive "$LATEST_BACKUP" || exit 1
+# Staging is prepared while the server still runs (D8): a bad archive costs
+# the players no downtime, and the stop-swap-start window shrinks to seconds.
+STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
+SWAPPED=false
+_rollback_exit() {
+  local rc=$?
+  trap - EXIT
+  swap_recover
+  rm -rf -- "$STAGING_DIR"
+  $SWAPPED && rm -rf -- "${SERVER_PATH%/}/.mc-meta"
+  archive_close
+  release_operation_lock
+  exit "$rc"
+}
+trap _rollback_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+echo "[INFO] Unpacking and checking the archive..."
+extract_archive_fd "$AR_FD" "$AR_FORMAT" "$STAGING_DIR" || { echo "[ERROR] Aborting. The server was not stopped and its files were not changed." >&2; exit 1; }
+scan_staged_tree "$STAGING_DIR" || { echo "[ERROR] Aborting. The server was not stopped and its files were not changed." >&2; exit 1; }
+complete_staged_jars "$STAGING_DIR" "$SERVER_PATH"
+scan_staged_tree "$STAGING_DIR" strict || { echo "[ERROR] Aborting. The server was not stopped and its files were not changed." >&2; exit 1; }
 
 restart_after_failure() {
   echo "[WARN] Rollback failed; the server files were not changed. Starting the server again..."
@@ -106,27 +146,16 @@ fi
 
 notify_warning "rollback_start" "Server $INSTANCE_NAME is rolling back to backup from $BACKUP_DATE"
 
-# Extract next to the server directory and swap, so a failure leaves the
-# current files in place.
-STAGING_DIR="${SERVER_PATH%/}.restore-staging.$$"
-trap 'swap_recover; rm -rf -- "$STAGING_DIR" "${SERVER_PATH%/}/.mc-meta"; release_operation_lock' EXIT
-trap 'exit 130' INT TERM
-
 echo "[INFO] Restoring backup..."
-if ! extract_archive "$LATEST_BACKUP" "$STAGING_DIR"; then
+# Logs, crash reports and the event ledger are never in a backup (D5); taken
+# from the live tree now that it is quiet.
+# shellcheck disable=SC2086
+carry_over_live "$SERVER_PATH" "$STAGING_DIR" ${RESTORE_CARRY_OVER:-}
+if ! swap_server_dir "$STAGING_DIR" "$SERVER_PATH" "$KEEP_MODE"; then
   restart_after_failure
   exit 1
 fi
-complete_staged_jars "$STAGING_DIR" "$SERVER_PATH"
-# Extraction takes a while; confirm nothing started the server in the meantime.
-if ! require_server_stopped; then
-  echo "[ERROR] Aborting. Server files were not changed." >&2
-  exit 1
-fi
-if ! swap_server_dir "$STAGING_DIR" "$SERVER_PATH" "$($KEEP_OLD && echo keep)"; then
-  restart_after_failure
-  exit 1
-fi
+SWAPPED=true
 
 # Restart the server
 echo "[INFO] Starting server..."

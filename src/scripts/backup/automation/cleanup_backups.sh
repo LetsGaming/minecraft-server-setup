@@ -5,23 +5,31 @@ CLEANUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$CLEANUP_DIR/../../common/load_variables.sh"
 source "$CLEANUP_DIR/../../common/utils.sh"
 source "$CLEANUP_DIR/../../common/webhook.sh"
+BK_COMPONENT=cleanup
+source "$CLEANUP_DIR/../lib/bk_common.sh"
+source "$CLEANUP_DIR/../lib/bk_state.sh"
+source "$CLEANUP_DIR/../lib/bk_archive.sh"
+source "$CLEANUP_DIR/../lib/bk_space.sh"
 
-log() {
-  echo "[$(date +'%F %T')] $*"
-}
+log() { bk_log INFO "$*"; }
 
-# See backup.sh's identical helper: de-prioritizes I/O-heavy commands
-# (du here) so cleanup does not compete with the game server or the API
-# wrapper for CPU/disk.
-nice_run() {
-  if command -v ionice &>/dev/null; then
-    ionice -c2 -n7 nice -n 10 "$@"
-  elif command -v nice &>/dev/null; then
-    nice -n 10 "$@"
-  else
-    "$@"
-  fi
-}
+MAKE_ROOM=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --make-room)
+      if [[ ! "${2:-}" =~ ^[0-9]+$ ]]; then
+        bk_log ERROR "--make-room needs a number of bytes"
+        exit 1
+      fi
+      MAKE_ROOM="$2"; shift 2 ;;
+    --help)
+      echo "Usage: $0 [--make-room <bytes>]"
+      echo "Applies the retention policy; with --make-room evicts archives in tier order"
+      echo "until <bytes> are free (exit 73 when that is not possible)."
+      exit 0 ;;
+    *) bk_log ERROR "Unknown argument: $1"; exit 1 ;;
+  esac
+done
 
 # Deleting archives while a restore, rollback or upgrade reads them would pull
 # the file out from under it. Retention simply runs again after the next backup.
@@ -30,24 +38,29 @@ if ! acquire_operation_lock cleanup; then
   exit 0
 fi
 
-log "Starting backup cleanup..."
+bk_load_config || exit 1
+bk_probe_priority
+
 BACKUP_BASE="$BACKUPS_PATH"
-MAX_UPDATE_BACKUPS="${MAX_UPDATE_BACKUPS:-5}"
-# Archives of any type other than daily, weekly, monthly and update (the
-# default "general" one and custom ones made with backup.sh --archive <type>).
-# 0 keeps every one of them; the storage limit still applies.
-MAX_CUSTOM_BACKUPS="${MAX_CUSTOM_BACKUPS:-0}"
-
+# Sidecars written here vouch for archives, so the folder must be ours alone.
+if ! bk_private_dir "$BACKUP_BASE/.meta"; then
+  bk_log WARN "The sidecar folder $BACKUP_BASE/.meta is not private to this user; no sidecars are written by this run"
+  bk_archive_write_sidecar() { return 1; }
+fi
 KNOWN_ARCHIVE_TYPES=(daily weekly monthly update)
+# Legacy archives (no sidecar) are checked with a full decompression, which is
+# the expensive part of a cleanup run; at most this many per run.
+LEGACY_CHECKS_LEFT=2
 
-# remove_file <path>: delete one archive or jar. A file that cannot be removed
-# is reported and skipped; one bad file must not abort the whole run (set -e)
-# or hide the rest of the cleanup.
+# remove_file <path>: delete one archive or jar and its sidecar. A file that
+# cannot be removed is reported and skipped; one bad file must not abort the
+# whole run (set -e) or hide the rest of the cleanup.
 remove_file() {
   if rm -v -- "$1"; then
+    rm -f -- "$(bk_archive_sidecar_path "$1")" 2>/dev/null || true
     return 0
   fi
-  log "WARN: could not delete $1"
+  bk_log WARN "could not delete $1"
   return 1
 }
 
@@ -78,15 +91,45 @@ list_archives() {
   fi
 }
 
-# archive_is_valid <file>: not empty and the compressed stream is intact.
+# archive_is_valid <file>: not empty and the compressed stream is intact. The
+# sidecar written at publish time answers without reading the archive; an
+# archive from before sidecars existed is tested once, niced, and gets a
+# sidecar with its real hash so the next run does not test it again. The
+# sidecar is only written when the file's mtime backs the stamp in its name:
+# a renamed or planted archive must not acquire a trust record here.
 archive_is_valid() {
-  local file="$1"
-  [[ -s "$file" ]] || return 1
+  local file="$1" rc=0 sum
+  bk_archive_is_valid_quick "$file" || rc=$?
+  (( rc == 0 )) && return 0
+  (( rc == 1 )) && return 1
+  (( LEGACY_CHECKS_LEFT > 0 )) || return 1
+  LEGACY_CHECKS_LEFT=$((LEGACY_CHECKS_LEFT - 1))
+  # One open for the integrity test, the fstat and the hash, so the sidecar can
+  # only vouch for the inode that passed; the path must still name that inode
+  # when the sidecar is written.
+  local fd info owner mtime ident
+  exec {fd}<"$file" || return 1
   case "$file" in
-    *.tar.zst) zstd -t "$file" > /dev/null 2>&1 ;;
-    *.tar.gz) gzip -t "$file" > /dev/null 2>&1 ;;
-    *) return 1 ;;
+    *.tar.zst) bk_nice zstd -t <&"$fd" > /dev/null 2>&1 || { exec {fd}<&-; return 1; } ;;
+    *.tar.gz) bk_nice gzip -t <&"$fd" > /dev/null 2>&1 || { exec {fd}<&-; return 1; } ;;
+    *) exec {fd}<&-; return 1 ;;
   esac
+  if info="$(bk_fd_stat "$fd" '%u %Y %d:%i')"; then
+    owner="${info%% *}"; ident="${info##* }"; mtime="${info#* }"; mtime="${mtime%% *}"
+    if [[ "$owner" != "$(id -u)" ]]; then
+      log "No sidecar written for ${file#"$BACKUP_BASE"/}: it is owned by uid $owner, not by $(id -un)."
+    elif ! bk_name_backed_by_mtime "$file" "$mtime"; then
+      log "No sidecar written for ${file#"$BACKUP_BASE"/}: its mtime does not back the stamp in its name."
+    elif sum="$(bk_file_sha256 "/dev/fd/$fd")" && [[ "$(stat -c '%d:%i' -- "$file" 2>/dev/null)" == "$ident" ]]; then
+      bk_archive_write_sidecar "$file" "$sum  ${file##*/}" 2>/dev/null || true
+    else
+      log "No sidecar written for ${file#"$BACKUP_BASE"/}: the file changed under its name while it was being checked."
+    fi
+  else
+    log "No sidecar written for ${file#"$BACKUP_BASE"/}: this host cannot inspect an opened file through /dev/fd."
+  fi
+  exec {fd}<&-
+  return 0
 }
 
 # protected_archive <dir>: the newest valid archive of a tier, which is never
@@ -127,11 +170,12 @@ delete_old_archives() {
   local type="$1"
   local max_var="$2"
   local dir="$BACKUP_BASE/archives/$type"
-  local max_value="${!max_var}"
+  local max_value="${!max_var:-}"
 
+  # A bad value skips this tier only; the rest of the cleanup still runs.
   [[ "$max_value" =~ ^[0-9]+$ ]] || {
-    log "ERROR: $max_var is not set or invalid (value: '$max_value')" >&2
-    exit 1
+    bk_log WARN "$max_var is not set or invalid (value: '$max_value'); skipping the $type count cap"
+    return 0
   }
   # 0 means no count limit (S-030); MAX_STORAGE_GB still applies.
   if (( max_value == 0 )); then
@@ -161,8 +205,8 @@ custom_archive_dirs() {
 delete_old_custom_archives() {
   local dir
   if [[ ! "$MAX_CUSTOM_BACKUPS" =~ ^[0-9]+$ ]]; then
-    log "ERROR: MAX_CUSTOM_BACKUPS is invalid (value: '$MAX_CUSTOM_BACKUPS')" >&2
-    exit 1
+    bk_log WARN "MAX_CUSTOM_BACKUPS is invalid (value: '$MAX_CUSTOM_BACKUPS'); skipping the custom count cap"
+    return 0
   fi
   if (( MAX_CUSTOM_BACKUPS == 0 )); then
     log "MAX_CUSTOM_BACKUPS is 0: keeping every general and custom archive (the storage limit still applies)."
@@ -192,42 +236,97 @@ delete_old_hourly_backups() {
 
 # Archives made before backup.sh kept real jars symlink into jars/, so a jar
 # there is only garbage once no remaining archive links to it. Every archive
-# folder counts, general and custom ones included: a jar referenced only by
-# one of those used to be deleted after a day (S-002).
-# Any archive that cannot be listed aborts the pruning: an unreadable archive
-# might be the one that references the jar. Jars younger than a day are kept so
-# a backup that has stored a jar but not yet finished its archive is safe.
+# folder counts, general and custom ones included (S-002). Any archive that
+# cannot be listed aborts the pruning: an unreadable archive might be the one
+# that references the jar. Jars younger than a day are kept so a backup that
+# has stored a jar but not yet finished its archive is safe.
+# Listing every archive means decompressing every one of them, so it happens
+# only when a jar is old enough to be a candidate, and at most once a day.
 prune_orphan_jars() {
   local jar_dir="$BACKUP_BASE/jars"
   [[ -d "$jar_dir" ]] || return 0
 
+  local -a candidates=()
+  mapfile -t candidates < <(find "$jar_dir" -maxdepth 1 -type f -name '*.jar' -mmin +1440 2>/dev/null)
+  if (( ${#candidates[@]} == 0 )); then
+    if [[ -z "$(ls -A "$jar_dir" 2>/dev/null)" ]]; then
+      rmdir -- "$jar_dir" 2>/dev/null && log "Removed the empty legacy jars/ folder."
+    fi
+    return 0
+  fi
+  local today
+  today="$(date +%F)"
+  if bk_state_flag_exists "jarscan_$today"; then
+    log "Orphaned jars were already checked today; skipping."
+    return 0
+  fi
+
   log "Checking for orphaned jars in: $jar_dir"
   declare -A referenced=()
-  local archive listing target
+  local archive target
   [[ -d "$BACKUP_BASE/archives" ]] && {
     while IFS= read -r archive; do
       [[ -n "$archive" ]] || continue
+      local tmp_list
+      tmp_list="$(mktemp "${TMPDIR:-/tmp}/jarscan.XXXXXX")"
       if [[ "$archive" == *.tar.zst ]]; then
-        listing=$(zstd -d "$archive" -c 2>/dev/null | tar -tvf - 2>/dev/null) \
-          || { log "WARN: cannot list $archive; skipping jar pruning."; return 0; }
+        ( set -o pipefail; bk_nice zstd -dc "$archive" 2>/dev/null | bk_nice tar -tvf - 2>/dev/null | sed -n 's/.* -> //p' > "$tmp_list" ) \
+          || { rm -f -- "$tmp_list"; bk_log WARN "cannot list $archive; skipping jar pruning."; return 0; }
       else
-        listing=$(tar -tvzf "$archive" 2>/dev/null) \
-          || { log "WARN: cannot list $archive; skipping jar pruning."; return 0; }
+        ( set -o pipefail; bk_nice tar -tvzf "$archive" 2>/dev/null | sed -n 's/.* -> //p' > "$tmp_list" ) \
+          || { rm -f -- "$tmp_list"; bk_log WARN "cannot list $archive; skipping jar pruning."; return 0; }
       fi
       while IFS= read -r target; do
         [[ -n "$target" ]] && referenced["${target##*/}"]=1
-      done < <(printf '%s\n' "$listing" | sed -n 's/.* -> //p')
-    done < <(find "$BACKUP_BASE/archives" -type f \( -name '*.tar.zst' -o -name '*.tar.gz' \) 2>/dev/null)
+      done < "$tmp_list"
+      rm -f -- "$tmp_list"
+    done < <(find "$BACKUP_BASE/archives" -type f \( -name 'minecraft_backup_*.tar.zst' -o -name 'minecraft_backup_*.tar.gz' \) 2>/dev/null)
   }
 
   local jar removed=0
-  while IFS= read -r jar; do
-    [[ -n "$jar" ]] || continue
+  for jar in "${candidates[@]}"; do
     [[ -n "${referenced[${jar##*/}]:-}" ]] && continue
     log "Deleting orphaned jar: $jar"
     remove_file "$jar" && removed=$((removed + 1))
-  done < <(find "$jar_dir" -maxdepth 1 -type f -name '*.jar' -mmin +1440 2>/dev/null)
+  done
   log "Removed $removed orphaned jar(s)."
+  bk_state_flag_touch "jarscan_$today"
+  if [[ -z "$(ls -A "$jar_dir" 2>/dev/null)" ]]; then
+    rmdir -- "$jar_dir" 2>/dev/null && log "Removed the empty legacy jars/ folder."
+  fi
+  return 0
+}
+
+# Restore and rollback only pick an archive by name when its sidecar (or its
+# mtime) backs the name. Archives from before sidecars existed get one here,
+# newest of each tier first, within the per-run budget of full checks.
+migrate_legacy_sidecars() {
+  local dir file
+  for dir in "$BACKUP_BASE/hourly" "$BACKUP_BASE"/archives/*/; do
+    [[ -d "$dir" ]] || continue
+    dir="${dir%/}"
+    (( LEGACY_CHECKS_LEFT > 0 )) || return 0
+    file="$(list_archives "$dir" | head -n1)"
+    [[ -n "$file" ]] || continue
+    bk_archive_is_valid_quick "$file" >/dev/null 2>&1 && continue
+    if archive_is_valid "$file"; then
+      log "Verified legacy archive and wrote its sidecar: ${file#"$BACKUP_BASE"/}"
+    fi
+  done
+  return 0
+}
+
+# The pre-restore copy a restore or rollback kept is deleted after
+# RESTORE_KEEP_OLD_DAYS (0 keeps it until the next restore replaces it).
+expire_pre_restore() {
+  local kept="${SERVER_PATH%/}.pre-restore" days="${RESTORE_KEEP_OLD_DAYS:-7}"
+  [[ -d "$kept" ]] || return 0
+  [[ "$days" =~ ^[0-9]+$ ]] && (( days > 0 )) || return 0
+  if [[ -n "$(find "$kept" -maxdepth 0 -mtime +"$((days - 1))" 2>/dev/null)" ]]; then
+    log "Deleting the pre-restore copy kept more than $days days ago: $kept"
+    rm -rf -- "$kept" || bk_log WARN "could not delete $kept"
+  fi
+  return 0
 }
 
 # Eviction order when the storage limit is exceeded: the cheapest-to-lose tier
@@ -243,25 +342,14 @@ storage_eviction_dirs() {
   echo "$BACKUP_BASE/archives/monthly"
 }
 
-enforce_storage_limit() {
-  [[ -z "$MAX_STORAGE_GB" || "$MAX_STORAGE_GB" -lt 1 ]] && {
-    log "MAX_STORAGE_GB not set or invalid, skipping the storage check."
-    return
-  }
-
-  local max_bytes=$((MAX_STORAGE_GB * 1024 * 1024 * 1024))
-  local current_bytes
-  # A backup being written (tmp_backup) and the legacy jars/ folder are not
-  # archives that eviction could free, and counting them would make a healthy
-  # run in flight look like an overflow.
-  current_bytes=$(nice_run du -sb --exclude=tmp_backup --exclude=jars "$BACKUP_BASE" | cut -f1)
-
-  log "Current backup usage: $((current_bytes / 1024 / 1024)) MB (limit: ${MAX_STORAGE_GB} GB)"
-  log "Used space: $((current_bytes * 100 / (MAX_STORAGE_GB * 1024 * 1024 * 1024)))%"
-
-  (( current_bytes <= max_bytes )) && return
-
-  local dir file file_bytes keep
+# evict_until <bytes-to-free> <label>: deletes archives in eviction order until
+# that many bytes were freed, never the newest valid archive of a tier. A file
+# with more than one hard link frees nothing when deleted. Leaves the bytes
+# freed in EVICTED_BYTES; returns 1 when the target was not reached.
+EVICTED_BYTES=0
+evict_until() {
+  local target="$1" label="$2" freed=0 dir file file_bytes keep links
+  EVICTED_BYTES=0
   while IFS= read -r dir; do
     [[ -n "$dir" && -d "$dir" ]] || continue
     keep="$(protected_archive "$dir")"
@@ -271,23 +359,71 @@ enforce_storage_limit() {
         log "Keeping $file: it is the newest valid backup of its kind."
         continue
       fi
-      # A file's own size, subtracted from the running total, tells us the
-      # same thing a fresh `du -sb "$BACKUP_BASE"` would, without a full
-      # recursive walk of the whole backups tree after every single deletion.
-      file_bytes=$(stat -c%s "$file" 2>/dev/null || echo 0)
-      log "Deleting (to free space): $file"
+      file_bytes=$(bk_file_size "$file")
+      links=$(bk_link_count "$file")
+      (( links > 1 )) && file_bytes=0
+      log "Deleting ($label): $file"
       remove_file "$file" || continue
-      current_bytes=$((current_bytes - file_bytes))
-      (( current_bytes <= max_bytes )) && return
+      freed=$((freed + file_bytes))
+      EVICTED_BYTES=$freed
+      (( freed >= target )) && return 0
     done < <(list_archives "$dir" oldest-first)
   done < <(storage_eviction_dirs)
+  return 1
+}
 
-  log "WARN: still above the ${MAX_STORAGE_GB} GB limit after evicting every archive that may be evicted."
+enforce_storage_limit() {
+  [[ -z "${MAX_STORAGE_GB:-}" || ! "$MAX_STORAGE_GB" =~ ^[0-9]+$ || "$MAX_STORAGE_GB" -lt 1 ]] && {
+    log "MAX_STORAGE_GB not set or invalid, skipping the storage check."
+    return
+  }
+
+  local max_bytes=$((MAX_STORAGE_GB * 1024 * 1024 * 1024))
+  local current_bytes
+  # Staging (.stage), the sidecars (.meta), a legacy backup in flight
+  # (tmp_backup) and the legacy jars/ folder are not archives that eviction
+  # could free, and counting them would make a healthy run look like an overflow.
+  current_bytes=$(bk_nice du -sb --exclude=tmp_backup --exclude=jars --exclude=.stage --exclude=.meta "$BACKUP_BASE" | cut -f1)
+
+  log "Current backup usage: $((current_bytes / 1024 / 1024)) MB (limit: ${MAX_STORAGE_GB} GB)"
+  log "Used space: $((current_bytes * 100 / (MAX_STORAGE_GB * 1024 * 1024 * 1024)))%"
+
+  (( current_bytes <= max_bytes )) && return
+
+  if evict_until $((current_bytes - max_bytes)) "to free space"; then
+    return
+  fi
+  current_bytes=$((current_bytes - EVICTED_BYTES))
+  bk_log WARN "still above the ${MAX_STORAGE_GB} GB limit after evicting every archive that may be evicted."
   notify_warning "storage_warning" "Backups use $((current_bytes / 1024 / 1024)) MB, still above the ${MAX_STORAGE_GB} GB limit after evicting every archive that may be evicted."
   wait_for_notifications
 }
 
-# Apply policies
+# --make-room <bytes>: called by the backup preflight before a run that would
+# not fit. Evicts until that much is free on the backups filesystem.
+make_room() {
+  local want="$1" avail short
+  avail="$(bk_space_available "$BACKUP_BASE")" || { bk_log WARN "Cannot measure free space"; return 0; }
+  if (( avail >= want )); then
+    log "Already $(bk_human_bytes "$avail") free; nothing to evict."
+    return 0
+  fi
+  short=$((want - avail))
+  log "Need $(bk_human_bytes "$short") more free space; evicting in tier order."
+  if evict_until "$short" "to make room"; then
+    log "Freed $(bk_human_bytes "$EVICTED_BYTES")."
+    return 0
+  fi
+  bk_log ERROR "Could not free enough space: $(bk_human_bytes "$EVICTED_BYTES") freed, $(bk_human_bytes "$short") needed."
+  return "$BK_EX_NOSPACE"
+}
+
+if [[ -n "$MAKE_ROOM" ]]; then
+  make_room "$MAKE_ROOM"
+  exit $?
+fi
+
+log "Starting backup cleanup..."
 delete_old_hourly_backups
 delete_old_archives "daily"   "MAX_DAILY_BACKUPS"
 delete_old_archives "weekly"  "MAX_WEEKLY_BACKUPS"
@@ -295,6 +431,8 @@ delete_old_archives "monthly" "MAX_MONTHLY_BACKUPS"
 delete_old_archives "update"  "MAX_UPDATE_BACKUPS"
 delete_old_custom_archives
 prune_orphan_jars
+migrate_legacy_sidecars
+expire_pre_restore
 enforce_storage_limit
 
 log "Backup cleanup complete."
