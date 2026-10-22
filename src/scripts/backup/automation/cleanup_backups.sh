@@ -42,6 +42,11 @@ bk_load_config || exit 1
 bk_probe_priority
 
 BACKUP_BASE="$BACKUPS_PATH"
+# Sidecars written here vouch for archives, so the folder must be ours alone.
+if ! bk_private_dir "$BACKUP_BASE/.meta"; then
+  bk_log WARN "The sidecar folder $BACKUP_BASE/.meta is not private to this user; no sidecars are written by this run"
+  bk_archive_write_sidecar() { return 1; }
+fi
 KNOWN_ARCHIVE_TYPES=(daily weekly monthly update)
 # Legacy archives (no sidecar) are checked with a full decompression, which is
 # the expensive part of a cleanup run; at most this many per run.
@@ -271,6 +276,25 @@ prune_orphan_jars() {
   return 0
 }
 
+# Restore and rollback only pick an archive by name when its sidecar (or its
+# mtime) backs the name. Archives from before sidecars existed get one here,
+# newest of each tier first, within the per-run budget of full checks.
+migrate_legacy_sidecars() {
+  local dir file
+  for dir in "$BACKUP_BASE/hourly" "$BACKUP_BASE"/archives/*/; do
+    [[ -d "$dir" ]] || continue
+    dir="${dir%/}"
+    (( LEGACY_CHECKS_LEFT > 0 )) || return 0
+    file="$(list_archives "$dir" | head -n1)"
+    [[ -n "$file" ]] || continue
+    bk_archive_is_valid_quick "$file" >/dev/null 2>&1 && continue
+    if archive_is_valid "$file"; then
+      log "Verified legacy archive and wrote its sidecar: ${file#"$BACKUP_BASE"/}"
+    fi
+  done
+  return 0
+}
+
 # The pre-restore copy a restore or rollback kept is deleted after
 # RESTORE_KEEP_OLD_DAYS (0 keeps it until the next restore replaces it).
 expire_pre_restore() {
@@ -386,6 +410,7 @@ delete_old_archives "monthly" "MAX_MONTHLY_BACKUPS"
 delete_old_archives "update"  "MAX_UPDATE_BACKUPS"
 delete_old_custom_archives
 prune_orphan_jars
+migrate_legacy_sidecars
 expire_pre_restore
 enforce_storage_limit
 

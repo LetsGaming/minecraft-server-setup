@@ -172,4 +172,35 @@ test_rollback_carries_logs_over_from_the_live_tree() {
   assert_file_content "$T/server/logs/latest.log" current-log "logs/ survive the rollback"
 }
 
+
+# ── a renamed archive is not rolled back to silently ────────────────────────
+
+test_a_renamed_old_archive_with_a_forged_newer_stamp_is_refused() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" honest
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2025-06-01_00-00-00.tar.zst" old
+  # Someone who can rename files in the folder makes the old one look newest;
+  # the sidecar stays under the old name and the mtime says June.
+  mv "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2025-06-01_00-00-00.tar.zst" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  touch -d "2025-06-01 00:10:00" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 1 "$RC" "the rollback refuses"
+  assert_contains "$OUT" "Refusing to pick" "says why"
+  assert_contains "$OUT" "--file" "points at an explicit choice"
+  assert_not_logged "systemctl stop" "the server was never stopped"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_a_legacy_archive_whose_mtime_matches_its_name_is_accepted() {
+  setup
+  make_archive "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst" legacy
+  rm -rf "$T/backups/.meta"
+  touch -d "2026-01-01 00:20:00" "$T/backups/$UPDATE_DIR_REL/minecraft_backup_2026-01-01_00-00-00.tar.zst"
+  server_running
+  run_script "$ROLLBACK" --y
+  assert_rc 0 "$RC" "no sidecar, but the mtime backs the name"
+  assert_file_content "$T/server/world/level.dat" legacy "world restored"
+}
+
 run_tests

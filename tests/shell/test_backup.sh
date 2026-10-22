@@ -692,4 +692,53 @@ test_the_status_file_describes_the_last_run() {
   assert_contains "$j" '"stage":"stage"' "with the stage it failed at"
 }
 
+
+# ── the mirror must be private to this user ──────────────────────────────────
+
+mode_has_no_group_or_other_write() { # path
+  local m; m="$(stat -c %a "$1")"
+  (( (10#${m: -2:1} & 2) == 0 && (10#${m: -1:1} & 2) == 0 )) && echo yes || echo "no ($m)"
+}
+
+test_a_world_writable_mirror_is_tightened_before_use() {
+  setup
+  export BACKUP_STAGING_MODE=mirror
+  mkdir -p "$T/backups/.stage/mirror"
+  chmod 777 "$T/backups/.stage" "$T/backups/.stage/mirror"
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "backup exits 0"
+  assert_contains "$OUT" "Staging mode: mirror" "the mirror is used once private"
+  assert_eq yes "$(mode_has_no_group_or_other_write "$T/backups/.stage/mirror")" "the mirror is no longer writable by others"
+  assert_eq yes "$(mode_has_no_group_or_other_write "$T/backups/.stage")" "nor is .stage"
+  assert_eq yes "$(mode_has_no_group_or_other_write "$T/backups/.meta")" "nor is .meta"
+}
+
+test_a_mirror_that_cannot_be_made_private_is_not_used() {
+  setup
+  export BACKUP_STAGING_MODE=mirror
+  # An id that reports another uid stands in for a mirror owned by someone else.
+  cat > "$T/bin/id" <<SH
+#!/bin/bash
+[[ "\$1" == -u ]] && { echo 4242; exit 0; }
+exec "$(PATH="${PATH#"$T/bin:"}" command -v id)" "\$@"
+SH
+  chmod +x "$T/bin/id"
+  run_script "$BACKUP"
+  assert_nonzero "$RC" "the run fails rather than trusting a sidecar folder owned by someone else"
+  assert_contains "$OUT" "not private to this user" "says why"
+  rm -f "$T/bin/id"
+  # Only the mirror foreign: .meta is fine, so the run falls back to a fresh copy.
+  cat > "$T/bin/stat" <<SH
+#!/bin/bash
+if [[ "\$*" == *"$T/backups/.stage/mirror" ]]; then echo "4242 700"; exit 0; fi
+exec "$(PATH="${PATH#"$T/bin:"}" command -v stat)" "\$@"
+SH
+  chmod +x "$T/bin/stat"
+  run_script "$BACKUP"
+  assert_rc 0 "$RC" "backup exits 0"
+  assert_contains "$OUT" "using a fresh copy for this run" "falls back"
+  assert_contains "$OUT" "Staging mode: fresh" "and runs in fresh mode"
+  assert_exists "$(first_archive "$T/backups/hourly")" "archive written"
+}
+
 run_tests

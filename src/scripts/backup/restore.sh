@@ -208,6 +208,9 @@ else
 fi
 
 [[ -n "${BACKUP_TO_RESTORE:-}" && -e "$BACKUP_TO_RESTORE" ]] || { echo "[ERROR] No suitable backup found."; exit 1; }
+# A name chosen by the script, not the operator, must be backed by its sidecar
+# or its mtime; a renamed archive is not restored silently.
+[[ -n "$SPECIFIC_BACKUP" ]] || archive_name_is_credible "$BACKUP_TO_RESTORE" || exit 1
 # From here on every check and the extraction use the opened inode (S-004).
 archive_open_trusted "$BACKUP_TO_RESTORE" || exit 1
 
@@ -270,8 +273,10 @@ echo "[INFO] Restoring backup..."
 extract_archive_fd "$AR_FD" "$AR_FORMAT" "$STAGING_DIR" || exit 1
 scan_staged_tree "$STAGING_DIR" || exit 1
 # Hourly archives hold no jars, older archives hold dangling jar links (S-002,
-# S-003); either way the restored tree gets runnable jars before it goes live.
+# S-003); either way the restored tree gets runnable jars before it goes live,
+# and after that no symlink may leave the tree at all.
 complete_staged_jars "$STAGING_DIR" "$SERVER_PATH"
+scan_staged_tree "$STAGING_DIR" strict || exit 1
 # Logs, crash reports and the event ledger are never in a backup (D5); they
 # are taken from the live tree so a restore does not destroy them.
 # shellcheck disable=SC2086

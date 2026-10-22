@@ -36,16 +36,27 @@ bk_stage_reflink_works() {
 }
 
 # bk_stage_select: prints mirror|reflink|fresh from BACKUP_STAGING_MODE.
+# A mirror is only used when .stage and the mirror are private to this user
+# (bk_private_dir): a mirror another user can write to would carry planted
+# content into the next archive, since the quick check skips files whose size
+# and mtime are unchanged. Otherwise the run falls back to a fresh copy.
 bk_stage_select() {
+  local mode
   case "${BACKUP_STAGING_MODE:-auto}" in
-    mirror|fresh) echo "$BACKUP_STAGING_MODE" ;;
+    mirror|fresh) mode="$BACKUP_STAGING_MODE" ;;
     reflink)
-      if bk_stage_reflink_works; then echo reflink; else
+      if bk_stage_reflink_works; then mode=reflink; else
         bk_log WARN "BACKUP_STAGING_MODE=reflink but the backups filesystem cannot clone server files; using mirror"
-        echo mirror
+        mode=mirror
       fi ;;
-    *) if bk_stage_reflink_works; then echo reflink; else echo mirror; fi ;;
+    *) if bk_stage_reflink_works; then mode=reflink; else mode=mirror; fi ;;
   esac
+  bk_private_dir "$(bk_stage_dir)" >&2 || bk_log WARN "The staging folder $(bk_stage_dir) is not private to this user" >&2
+  if [[ "$mode" == mirror ]] && ! bk_private_dir "$(bk_stage_mirror_dir)" >&2; then
+    bk_log WARN "The staging mirror is not private to this user; using a fresh copy for this run" >&2
+    mode=fresh
+  fi
+  echo "$mode"
 }
 
 # bk_stage_build_excludes: rsync patterns, unanchored on purpose (anchoring

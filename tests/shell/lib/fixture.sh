@@ -119,6 +119,17 @@ SH
   chmod +x "$T/bin/node"
 }
 
+# write_sidecar <archive>: the .meta/ sidecar backup.sh writes at publish time,
+# for an archive inside the fixture's backups folder (restore and rollback only
+# pick an archive by name when its sidecar or its mtime backs the name).
+write_sidecar() {
+  local dest="$1" rel
+  [[ "$dest" == "$T/backups/"* ]] || return 0
+  rel="${dest#"$T/backups/"}"
+  mkdir -p "$T/backups/.meta/$(dirname "$rel")"
+  echo "fixture  $(basename "$dest")" > "$T/backups/.meta/$rel.sha256"
+}
+
 # make_archive <dest.tar.zst> <label>: archive of a world tagged <label>, in the
 # gzip container the zstd shim reads.
 make_archive() {
@@ -131,6 +142,7 @@ make_archive() {
   echo "$label-dotfile" > "$src/.restored_dotfile"
   mkdir -p "$(dirname "$dest")"
   "$REAL_TAR" -cf - -C "$src" . | compress_stream > "$dest"
+  write_sidecar "$dest"
   rm -rf "$src"
 }
 
@@ -138,6 +150,7 @@ make_archive() {
 make_archive_from() {
   mkdir -p "$(dirname "$1")"
   "$REAL_TAR" -cf - -C "$2" . | compress_stream > "$1"
+  write_sidecar "$1"
 }
 
 # make_archive_with_unit <dest.tar.zst> <label> <unit-name> <unit-text>: like
@@ -151,6 +164,7 @@ make_archive_with_unit() {
   echo "$text" > "$src/.mc-meta/systemd/$unit"
   mkdir -p "$(dirname "$dest")"
   "$REAL_TAR" -cf - -C "$src" . | compress_stream > "$dest"
+  write_sidecar "$dest"
   rm -rf "$src"
 }
 

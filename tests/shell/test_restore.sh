@@ -594,4 +594,59 @@ test_an_archive_with_an_internal_symlink_is_accepted() {
   assert_file_content "$T/server/world/level.dat" restored "world restored"
 }
 
+
+# ── a renamed archive is not picked silently ────────────────────────────────
+
+test_a_renamed_archive_with_a_forged_stamp_is_not_selected_silently() {
+  setup
+  make_archive "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" honest
+  make_archive "$T/backups/hourly/minecraft_backup_2025-06-01_00-00-00.tar.zst" old
+  mv "$T/backups/hourly/minecraft_backup_2025-06-01_00-00-00.tar.zst" "$T/backups/hourly/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  touch -d "2025-06-01 00:10:00" "$T/backups/hourly/minecraft_backup_2026-12-31_00-00-00.tar.zst"
+  run_script_tty "$RESTORE" --y
+  assert_rc 1 "$RC" "the default selection refuses"
+  assert_contains "$OUT" "Refusing to pick" "says why"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+  run_script "$RESTORE" --file minecraft_backup_2026-12-31_00-00-00.tar.zst --y
+  assert_rc 0 "$RC" "an explicit --file is the operator's call"
+  assert_file_content "$T/server/world/level.dat" old "and restores that file"
+}
+
+# ── only the exact legacy jar link form is tolerated, and never kept ────────
+
+jar_link_archive() { # link-name target: an archive with one jar symlink
+  local src; src="$(mktemp -d "$T/arch.XXXXXX")"
+  mkdir -p "$src/world/region"
+  echo restored > "$src/world/level.dat"; echo r > "$src/world/region/r.0.0.mca"
+  ln -s "$2" "$src/$1" 2>/dev/null && [[ -L "$src/$1" ]] || { rm -rf "$src"; return 1; }
+  make_archive_from "$T/backups/hourly/minecraft_backup_j.tar.zst" "$src"
+  rm -rf "$src"
+}
+
+test_a_jar_symlink_that_is_not_the_legacy_form_is_refused() {
+  setup
+  if ! jar_link_archive server.jar ../../../jars/other.jar; then skip "jar symlink" "this host cannot create real symlinks"; return; fi
+  run_script "$RESTORE" --file minecraft_backup_j.tar.zst --y
+  assert_rc 1 "$RC" "a jar link to another name is refused"
+  assert_contains "$OUT" "symlink" "says why"
+  jar_link_archive evil.jar ../../../../etc/jars/evil.jar
+  run_script "$RESTORE" --file minecraft_backup_j.tar.zst --y
+  assert_rc 1 "$RC" "a jar link with a path before jars/ is refused"
+  jar_link_archive server.jar /opt/jars/server.jar
+  run_script "$RESTORE" --file minecraft_backup_j.tar.zst --y
+  assert_rc 1 "$RC" "an absolute jar link is refused"
+  assert_file_content "$T/server/world/level.dat" current "world untouched"
+}
+
+test_a_legacy_jar_link_without_a_stored_jar_is_removed_not_kept() {
+  setup
+  if ! jar_link_archive server.jar ../../../jars/server.jar; then skip "jar symlink" "this host cannot create real symlinks"; return; fi
+  rm -f "$T/server/server.jar"
+  run_script "$RESTORE" --file minecraft_backup_j.tar.zst --y
+  assert_rc 0 "$RC" "the restore proceeds"
+  assert_contains "$OUT" "link was removed" "and says the jar is missing"
+  assert_missing "$T/server/server.jar" "no link into the backups folder survives"
+  assert_eq "" "$(find "$T/server" -type l)" "no symlink at all in the live tree"
+}
+
 run_tests

@@ -363,6 +363,7 @@ test_a_legacy_archive_without_sidecar_is_tested_once_and_gets_one() {
   set_var MAX_HOURLY_BACKUPS 1
   make_archive "$T/backups/hourly/minecraft_backup_2026-01-01_00-00-00.tar.zst" a
   make_archive "$T/backups/hourly/minecraft_backup_2026-01-02_00-00-00.tar.zst" b
+  rm -rf "$T/backups/.meta"   # archives from before sidecars existed
   run_script "$CLEANUP"
   assert_rc 0 "$RC" "cleanup succeeds"
   assert_logged "zstd -t" "the newest legacy archive is tested"

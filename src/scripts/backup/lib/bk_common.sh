@@ -149,6 +149,38 @@ bk_nice() {
   "${BK_NICE[@]}" "$@"
 }
 
+# bk_private_dir <dir>
+# Makes <dir> writable by this user alone and fails when that cannot be
+# verified. Setup grants the API wrapper's service user a default ACL on the
+# backups folder (so it can delete archives); a staging or sidecar directory
+# that inherited it would let that user plant content in the next archive or
+# vouch for a corrupt one, past the S-004 trust boundary.
+bk_private_dir() {
+  local dir="$1" info owner mode
+  mkdir -p -- "$dir" || return 1
+  chmod 700 -- "$dir" 2>/dev/null || true
+  if [[ "$(uname -s 2>/dev/null)" == Linux ]] && command -v setfacl >/dev/null 2>&1; then
+    setfacl -b -k -- "$dir" 2>/dev/null || true
+  fi
+  info="$(stat -c '%u %a' -- "$dir" 2>/dev/null)" || return 1
+  owner="${info%% *}"
+  mode="${info##* }"
+  [[ "$owner" == "$(id -u)" ]] || { bk_log WARN "$dir is owned by uid $owner, not by $(id -un)"; return 1; }
+  # Group and other must have no write bit; the owner digit is left alone so
+  # hosts that cannot represent 700 (Windows) still pass.
+  if [[ ! "$mode" =~ ^[0-7]?[0-7]?[0-7]?[0-7][0-7][0-7]$ ]] || (( (10#${mode: -2:1} & 2) != 0 || (10#${mode: -1:1} & 2) != 0 )); then
+    bk_log WARN "$dir has mode $mode and is writable by others"
+    return 1
+  fi
+  if [[ "$(uname -s 2>/dev/null)" == Linux ]] && command -v getfacl >/dev/null 2>&1; then
+    if getfacl -cp -- "$dir" 2>/dev/null | grep -Eq '^(user|group):[^:]+:|^default:'; then
+      bk_log WARN "$dir carries ACL entries for other users that could not be removed"
+      return 1
+    fi
+  fi
+  return 0
+}
+
 # bk_human_bytes <bytes>: 2.1 GiB style figure for log lines.
 bk_human_bytes() {
   local b="${1:-0}"

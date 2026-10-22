@@ -183,18 +183,28 @@ extract_archive() {
   return "$rc"
 }
 
-# scan_staged_tree <staging_dir>
+# is_legacy_jar_link <link> <target>
+# The exact form backup.sh wrote before S-002: a relative link made of only
+# ".." components followed by jars/<the link's own name>.
+is_legacy_jar_link() {
+  local link="$1" target="$2" name
+  name="${link##*/}"
+  [[ "$name" == *.jar ]] || return 1
+  [[ "$target" =~ ^(\.\./)+jars/([^/]+)$ && "${BASH_REMATCH[2]}" == "$name" ]]
+}
+
+# scan_staged_tree <staging_dir> [strict]
 # Refuses a restored tree holding a symlink that points outside it (an
 # absolute target, or a relative one that escapes), since the server would
-# follow it as its own user. The one exception is the jar link of archives
-# made before S-002 (<name>.jar -> .../jars/<name>.jar), which
-# complete_staged_jars replaces with a real file.
+# follow it as its own user. The one exception is the legacy jar link
+# (is_legacy_jar_link), which complete_staged_jars replaces or removes; with
+# "strict" (the pass after that) there is no exception.
 scan_staged_tree() {
-  local staging="$1" root link target resolved bad=0
+  local staging="$1" strict="${2:-}" root link target resolved bad=0
   root="$(realpath -m -- "$staging")"
   while IFS= read -r -d '' link; do
     target="$(readlink -- "$link")"
-    if [[ "$link" == *.jar && "$target" == */jars/*.jar ]]; then
+    if [[ "$strict" != strict ]] && is_legacy_jar_link "$link" "$target"; then
       continue
     fi
     if [[ "$target" == /* ]]; then
@@ -240,11 +250,12 @@ carry_over_live() {
 #    jars are carried over at their own paths, so the restored world starts on
 #    the same server and mods it ran with.
 #  - S-002: archives made before backup.sh kept real jars replaced jars with
-#    links into the backups' jars/ folder, which dangle once restored. Each
-#    such link is replaced by the real file: the current server's copy at the
-#    same path, else the stored copy in jars/.
+#    links into the backups' jars/ folder, which dangle once restored. Every
+#    such link is replaced by the real file (the current server's copy at the
+#    same path, else the stored copy in jars/) or removed, so no link into
+#    the backups folder survives into the live tree.
 complete_staged_jars() {
-  local staging="$1" server="${2%/}" link rel name src
+  local staging="$1" server="${2%/}" link rel name src target
   if [[ -z "$(find "$staging" -name '*.jar' \( -type f -o -type l \) -print -quit 2>/dev/null)" ]]; then
     if [[ -d "$server" ]]; then
       echo "[INFO] The archive has no jars (an hourly backup); keeping the current server's jars."
@@ -257,23 +268,55 @@ complete_staged_jars() {
     return 0
   fi
   while IFS= read -r -d '' link; do
-    [[ -e "$link" ]] && continue   # resolves: a link the server put there itself
+    target="$(readlink -- "$link")"
+    is_legacy_jar_link "$link" "$target" || continue   # anything else is for scan_staged_tree
     rel="${link#"$staging"/}"
     name="$(basename "$link")"
     src=""
     if [[ -f "$server/$rel" && ! -L "$server/$rel" ]]; then
       src="$server/$rel"
-    elif [[ -n "${BACKUPS_PATH:-}" && -f "$BACKUPS_PATH/jars/$name" ]]; then
+    elif [[ -n "${BACKUPS_PATH:-}" && -f "$BACKUPS_PATH/jars/$name" && ! -L "$BACKUPS_PATH/jars/$name" ]]; then
       src="$BACKUPS_PATH/jars/$name"
     fi
+    rm -f -- "$link"
     if [[ -n "$src" ]]; then
-      rm -f -- "$link"
       cp -p -- "$src" "$link"
     else
-      echo "[WARN] $rel points to a stored jar that no longer exists; the server may not start without it." >&2
+      echo "[WARN] $rel pointed to a stored jar that no longer exists; the link was removed and the server may not start without it." >&2
     fi
   done < <(find "$staging" -name '*.jar' -type l -print0 2>/dev/null)
   return 0
+}
+
+# archive_name_is_credible <file>
+# For an archive chosen by its name rather than by the operator: the name's
+# timestamp must be backed by something a renamer cannot forge. Either the
+# sidecar for this exact name exists in .meta/ (written by the backup user
+# only), or, for an archive from before sidecars, its mtime lies within two
+# hours of the stamp in its name. Anyone who can rename files in the backups
+# folder could otherwise make an old or planted archive the "newest".
+archive_name_is_credible() {
+  local file="$1" base rel side stamp epoch mtime diff
+  base="${file##*/}"
+  rel="${file#"${BACKUPS_PATH%/}"/}"
+  side="${BACKUPS_PATH%/}/.meta/${rel}.sha256"
+  if [[ -f "$side" ]] && grep -qF -- "  $base" "$side" 2>/dev/null; then
+    return 0
+  fi
+  local re='([0-9]{4})-([0-9]{2})-([0-9]{2})_([0-9]{2})-([0-9]{2})-([0-9]{2})'
+  if [[ "$base" =~ $re ]]; then
+    stamp="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}"
+    epoch="$(date -d "$stamp" +%s 2>/dev/null)" || epoch=""
+    mtime="$(stat -c %Y -- "$file" 2>/dev/null)" || mtime=""
+    if [[ "$epoch" =~ ^[0-9]+$ && "$mtime" =~ ^[0-9]+$ ]]; then
+      diff=$(( mtime - epoch )); (( diff < 0 )) && diff=$(( -diff ))
+      (( diff <= 7200 )) && return 0
+      _ar_error "Refusing to pick $base automatically: its name says $stamp but the file was last written $(( diff / 60 )) minutes away from that and no sidecar vouches for the name. Choose it explicitly with --file if it is the one you want."
+      return 1
+    fi
+  fi
+  _ar_error "Refusing to pick $base automatically: no sidecar vouches for the name. Choose it explicitly with --file if it is the one you want."
+  return 1
 }
 
 # Set by swap_server_dir while a swap is half done, for swap_recover.

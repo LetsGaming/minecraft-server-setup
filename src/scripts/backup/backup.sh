@@ -180,6 +180,8 @@ fi
 bk_log INFO "Backup directory: $BACKUP_DIR"
 bk_archive_remove_stale_parts
 bk_stage_remove_legacy_tmp
+# The sidecars vouch for archives, so only this user may write them.
+bk_private_dir "$(bk_state_meta_dir)" || bk_die 1 "The sidecar folder $(bk_state_meta_dir) is not private to this user"
 
 STAGING_MODE="$(bk_stage_select)"
 BK_STAGING="$STAGING_MODE"
