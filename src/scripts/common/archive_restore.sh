@@ -4,6 +4,7 @@
 # return non-zero; they never exit, so callers decide how to unwind.
 
 _ar_error() { echo "[ERROR] $*" >&2; }
+_ar_info() { echo "[INFO] $*"; }
 
 # resolve_backup_file <path> <tier_dir>
 # Prints the canonical path of a backup archive. <path> is either absolute or
@@ -37,16 +38,39 @@ resolve_backup_file() {
   printf '%s\n' "$resolved"
 }
 
+# list_backup_files <dir> [depth]
+# Backup archives under <dir> (exact names only, so partial files, sidecars and
+# anything else in the folder are never candidates), newest first by the
+# timestamp in the file name; a name without one is placed by its mtime.
+# Prints "<epoch> <path>" per line.
+list_backup_files() {
+  local dir="$1" depth="${2:-1}" file base epoch
+  local re='([0-9]{4})-([0-9]{2})-([0-9]{2})_([0-9]{2})-([0-9]{2})-([0-9]{2})'
+  [[ -d "$dir" ]] || return 0
+  while IFS= read -r file; do
+    base="${file##*/}"
+    if [[ "$base" =~ $re ]]; then
+      epoch="$(date -d "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]} ${BASH_REMATCH[4]}:${BASH_REMATCH[5]}:${BASH_REMATCH[6]}" +%s 2>/dev/null)" \
+        || epoch="$(stat -c %Y -- "$file" 2>/dev/null || echo 0)"
+    else
+      epoch="$(stat -c %Y -- "$file" 2>/dev/null || echo 0)"
+    fi
+    printf '%s %s\n' "$epoch" "$file"
+  done < <(find "$dir" -mindepth 1 -maxdepth "$depth" -type f \
+             \( -name 'minecraft_backup_*.tar.zst' -o -name 'minecraft_backup_*.tar.gz' \) 2>/dev/null) |
+    sort -k1,1nr -k2
+}
+
 # validate_archive <file>
 # Fails unless the whole archive decompresses and lists cleanly, so a corrupt
-# or truncated file is caught before anything on disk is touched.
+# or truncated file is caught before anything on disk is touched. One pass:
+# zstd checks the frame checksums while tar lists.
 validate_archive() {
   local file="$1"
   case "$file" in
     *.tar.zst)
-      zstd -t "$file" >/dev/null 2>&1 || { _ar_error "Archive failed zstd integrity test: $file"; return 1; }
-      ( set -o pipefail; zstd -d "$file" -c | tar -tf - >/dev/null ) 2>/dev/null \
-        || { _ar_error "Archive contents cannot be listed: $file"; return 1; }
+      ( set -o pipefail; zstd -dc "$file" | tar -tf - >/dev/null ) 2>/dev/null \
+        || { _ar_error "Archive failed its integrity check: $file"; return 1; }
       ;;
     *.tar.gz)
       ( set -o pipefail; tar -tzf "$file" >/dev/null ) 2>/dev/null \
@@ -59,21 +83,13 @@ validate_archive() {
   esac
 }
 
-# extract_archive <file> <dest_dir>
-# Extracts into a fresh directory. On failure the partial directory is removed.
-extract_archive() {
-  local file="$1" dest="$2"
-  rm -rf -- "$dest"
-  mkdir -p -- "$dest" || return 1
-  case "$file" in
-    *.tar.zst) ( set -o pipefail; zstd -d "$file" -c | tar -xf - -C "$dest" ) ;;
-    *.tar.gz)  tar -xzf "$file" -C "$dest" ;;
-    *)         _ar_error "Unsupported backup file format: $file"; false ;;
-  esac || {
-    _ar_error "Extraction failed: $file"
-    rm -rf -- "$dest"
-    return 1
-  }
+# archive_format <file>: zst | gz, or failure for anything else.
+archive_format() {
+  case "$1" in
+    *.tar.zst) echo zst ;;
+    *.tar.gz) echo gz ;;
+    *) _ar_error "Unsupported backup file format: $1"; return 1 ;;
+  esac
 }
 
 # archive_is_trusted <file>
@@ -88,6 +104,133 @@ archive_is_trusted() {
     _ar_error "Refusing $file: it is owned by uid $owner, not by $(id -un). Only archives this user made are restored."
     return 1
   fi
+}
+
+# archive_open_trusted <file>
+# Opens the archive once and binds every later check and the extraction to
+# that inode (AR_FD), so a file swapped under the same name after the check,
+# during the confirmation prompt for example, changes nothing. The opened
+# inode must be owned by the running user or root, and may be a hardlink only
+# inside archives/ (one archive serves several tiers there).
+AR_FD=""
+archive_open_trusted() {
+  local file="$1" info owner links
+  AR_FORMAT="$(archive_format "$file")" || return 1
+  exec {AR_FD}<"$file" || { _ar_error "Cannot open $file"; AR_FD=""; return 1; }
+  info="$(stat -L -c '%u %h %F' "/dev/fd/$AR_FD" 2>/dev/null)" || info="$(stat -L -c '%u %h %F' -- "$file" 2>/dev/null)" || {
+    _ar_error "Cannot read the owner of $file"
+    archive_close
+    return 1
+  }
+  owner="${info%% *}"
+  links="${info#* }"; links="${links%% *}"
+  if [[ "$info" != *"regular"* ]]; then
+    _ar_error "Refusing $file: not a regular file"
+    archive_close
+    return 1
+  fi
+  if [[ "$owner" != "$(id -u)" && "$owner" != 0 ]]; then
+    _ar_error "Refusing $file: it is owned by uid $owner, not by $(id -un). Only archives this user made are restored."
+    archive_close
+    return 1
+  fi
+  if [[ "$links" =~ ^[0-9]+$ ]] && (( links > 1 )) && [[ "$file" != "${BACKUPS_PATH%/}/archives/"* ]]; then
+    _ar_error "Refusing $file: it has $links hard links and is not under archives/"
+    archive_close
+    return 1
+  fi
+  return 0
+}
+
+archive_close() {
+  if [[ -n "$AR_FD" ]]; then
+    exec {AR_FD}<&-
+    AR_FD=""
+  fi
+}
+
+# extract_archive_fd <fd> <format zst|gz> <dest_dir>
+# Extracts from an already opened archive into a fresh directory. An archive
+# that does not decompress fails here, before anything live is touched, so no
+# separate validation pass is needed. On failure the partial directory is
+# removed.
+extract_archive_fd() {
+  local fd="$1" format="$2" dest="$3"
+  rm -rf -- "$dest"
+  mkdir -p -- "$dest" || return 1
+  case "$format" in
+    zst) ( set -o pipefail; zstd -dc <&"$fd" | tar -xf - -C "$dest" ) ;;
+    gz)  tar -xzf - -C "$dest" <&"$fd" ;;
+    *)   _ar_error "Unsupported backup file format"; false ;;
+  esac || {
+    _ar_error "Extraction failed: the archive does not decompress and unpack cleanly"
+    rm -rf -- "$dest"
+    return 1
+  }
+}
+
+# extract_archive <file> <dest_dir>
+# Path-based form kept for callers that have not moved to the opened-fd form.
+extract_archive() {
+  local file="$1" dest="$2" format
+  format="$(archive_format "$file")" || return 1
+  local fd
+  exec {fd}<"$file" || { _ar_error "Cannot open $file"; return 1; }
+  local rc=0
+  extract_archive_fd "$fd" "$format" "$dest" || rc=1
+  exec {fd}<&-
+  (( rc == 0 )) || _ar_error "Extraction failed: $file"
+  return "$rc"
+}
+
+# scan_staged_tree <staging_dir>
+# Refuses a restored tree holding a symlink that points outside it (an
+# absolute target, or a relative one that escapes), since the server would
+# follow it as its own user. The one exception is the jar link of archives
+# made before S-002 (<name>.jar -> .../jars/<name>.jar), which
+# complete_staged_jars replaces with a real file.
+scan_staged_tree() {
+  local staging="$1" root link target resolved bad=0
+  root="$(realpath -m -- "$staging")"
+  while IFS= read -r -d '' link; do
+    target="$(readlink -- "$link")"
+    if [[ "$link" == *.jar && "$target" == */jars/*.jar ]]; then
+      continue
+    fi
+    if [[ "$target" == /* ]]; then
+      _ar_error "Refusing the archive: ${link#"$staging"/} is a symlink to an absolute path ($target)"
+      bad=1
+      continue
+    fi
+    resolved="$(realpath -m -- "$(dirname -- "$link")/$target")"
+    if [[ "$resolved" != "$root" && "$resolved" != "$root"/* ]]; then
+      _ar_error "Refusing the archive: ${link#"$staging"/} is a symlink that leaves the restored tree ($target)"
+      bad=1
+    fi
+  done < <(find "$staging" -type l -print0 2>/dev/null)
+  return "$bad"
+}
+
+# carry_over_live <server_dir> <staging_dir> <name...>
+# Copies entries the archive never contained (logs, crash reports, the event
+# ledger) from the live tree into the staged one, when the staged tree lacks
+# them, so a restore does not destroy them.
+carry_over_live() {
+  local server="${1%/}" staging="$2" name
+  shift 2
+  [[ -d "$server" ]] || return 0
+  for name in "$@"; do
+    [[ -n "$name" ]] || continue
+    [[ "$name" == */* || "$name" == .. ]] && continue
+    [[ -e "$server/$name" || -L "$server/$name" ]] || continue
+    [[ -e "$staging/$name" || -L "$staging/$name" ]] && continue
+    if cp -a --reflink=auto -- "$server/$name" "$staging/$name" 2>/dev/null || cp -a -- "$server/$name" "$staging/$name"; then
+      _ar_info "Carried over $name from the current server files"
+    else
+      echo "[WARN] Could not carry over $name from the current server files" >&2
+    fi
+  done
+  return 0
 }
 
 # complete_staged_jars <staging_dir> <server_dir>
@@ -136,37 +279,48 @@ complete_staged_jars() {
 # Set by swap_server_dir while a swap is half done, for swap_recover.
 _SWAP_SERVER=""
 _SWAP_OLD=""
+_SWAP_TRASH=""
 
 # swap_recover
 # For an EXIT/INT trap (S-031): when a signal lands between the two renames of
 # swap_server_dir, the server directory is gone and the original is only at
-# <server>.pre-restore.<pid>. Put it back.
+# <server>.pre-restore.<pid>. Put it back. A trash tree whose deletion was
+# interrupted is deleted again.
 swap_recover() {
   if [[ -n "$_SWAP_OLD" && -e "$_SWAP_OLD" && ! -e "$_SWAP_SERVER" ]]; then
     mv -- "$_SWAP_OLD" "$_SWAP_SERVER" \
       && echo "[WARN] Restore interrupted; the original server files were put back." >&2 \
       || _ar_error "Restore interrupted; the original server files are at: $_SWAP_OLD"
   fi
+  if [[ -n "$_SWAP_TRASH" && -e "$_SWAP_TRASH" ]]; then
+    rm -rf -- "$_SWAP_TRASH" 2>/dev/null || true
+  fi
   _SWAP_OLD=""
   _SWAP_SERVER=""
+  _SWAP_TRASH=""
 }
 
-# swap_server_dir <staging_dir> <server_dir>
+# swap_server_dir <staging_dir> <server_dir> [keep|discard]
 # Replaces <server_dir> with <staging_dir> by renaming, so the server directory
 # is either the old contents or the new ones, never a half-written mix. If the
 # second rename fails the original is moved back. Both paths must live on the
 # same filesystem (the staging directory is created next to the server dir).
 #
-# With a third argument "keep", the replaced tree is not deleted but renamed to
+# With "keep" (the default), the replaced tree is renamed to
 # <server_dir>.pre-restore (a copy from an earlier run is replaced), so a wrong
-# archive can be undone by hand. Without it the old tree is deleted.
+# archive can be undone by hand; cleanup_backups.sh removes it after
+# RESTORE_KEEP_OLD_DAYS. With "discard" the old tree is deleted.
 swap_server_dir() {
-  local staging="$1" server="${2%/}" keep="${3:-}" old
+  local staging="$1" server="${2%/}" keep="${3:-keep}" old
   old="$server.pre-restore.$$"
 
   _SWAP_SERVER="$server"
   if [[ -e "$server" ]]; then
     chmod --reference="$server" -- "$staging" 2>/dev/null || true
+    # A restore run as root would otherwise hand the server a root-owned tree.
+    if [[ "$(id -u)" == 0 ]]; then
+      chown --reference="$server" -- "$staging" 2>/dev/null || true
+    fi
     _SWAP_OLD="$old"
     mv -- "$server" "$old" || { _SWAP_OLD=""; _ar_error "Could not move the current server directory aside"; return 1; }
   fi
@@ -179,16 +333,26 @@ swap_server_dir() {
     return 1
   fi
   _SWAP_OLD=""
-  if [[ "$keep" == keep && -e "$old" ]]; then
-    rm -rf -- "$server.pre-restore"
+  [[ -e "$old" ]] || return 0
+  if [[ "$keep" != discard ]]; then
+    _SWAP_TRASH="$server.pre-restore.trash.$$"
+    [[ -e "$server.pre-restore" ]] && mv -- "$server.pre-restore" "$_SWAP_TRASH" 2>/dev/null
     if mv -- "$old" "$server.pre-restore"; then
+      touch -- "$server.pre-restore" 2>/dev/null || true
       echo "[INFO] The previous server files were kept at: $server.pre-restore"
     else
       echo "[WARN] Could not rename the previous server files; they are at: $old" >&2
     fi
+    [[ -e "$_SWAP_TRASH" ]] && rm -rf -- "$_SWAP_TRASH"
+    _SWAP_TRASH=""
     return 0
   fi
-  rm -rf -- "$old"
+  # Renamed to a trash name first so an interrupted deletion is finished by
+  # swap_recover instead of leaving <server>.pre-restore.<pid> behind forever.
+  _SWAP_TRASH="$server.pre-restore.trash.$$"
+  mv -- "$old" "$_SWAP_TRASH" 2>/dev/null || _SWAP_TRASH="$old"
+  rm -rf -- "$_SWAP_TRASH"
+  _SWAP_TRASH=""
 }
 
 # server_is_running
