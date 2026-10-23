@@ -1,5 +1,7 @@
 # Minecraft Server Setup
 
+![License: MIT](https://img.shields.io/badge/license-MIT-green) ![Platform: Ubuntu / Debian](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-orange) ![Shell: Bash 4.3+](https://img.shields.io/badge/bash-4.3%2B-blue)
+
 ## What is this
 
 This tool turns a fresh Ubuntu or Debian computer into a Minecraft server that your friends can join. It installs what the server needs, sets the server up, starts it automatically when the machine boots and makes regular backups. You do not need to know how to edit configuration files or how much memory to give the server: the tool looks at your machine and picks safe values.
@@ -13,6 +15,8 @@ git clone https://github.com/LetsGaming/minecraft-server-setup.git
 cd minecraft-server-setup
 bash main.sh
 ```
+
+Something not working? See [docs/troubleshooting.md](docs/troubleshooting.md).
 
 Run it as a normal user with `sudo` rights, not as root. Setup installs whatever is missing, asks a few questions (or uses safe defaults), and then sets up the server, the systemd service and the backups. Anything it changes for safety (for example a smaller memory size or a different port) is shown in a clearly marked block and repeated before you confirm.
 
@@ -303,6 +307,7 @@ If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. A name in the l
 | Terms used across the docs | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
 | Retiring the bundled web interface | [docs/retiring-web-interface.md](docs/retiring-web-interface.md) |
 | Which API wrapper release is installed, and bumping it | [docs/wrapper-release.md](docs/wrapper-release.md) |
+| Connection, Node.js, backup and service problems | [docs/troubleshooting.md](docs/troubleshooting.md) |
 
 ## Upgrading to 4.0
 
