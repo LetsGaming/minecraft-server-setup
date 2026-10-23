@@ -1,6 +1,6 @@
 # Minecraft Server Setup
 
-![License: MIT](https://img.shields.io/badge/license-MIT-green) ![Platform: Ubuntu / Debian](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-orange) ![Shell: Bash 4.3+](https://img.shields.io/badge/bash-4.3%2B-blue)
+[![Release](https://img.shields.io/github/v/release/LetsGaming/minecraft-server-setup)](https://github.com/LetsGaming/minecraft-server-setup/releases) ![License: MIT](https://img.shields.io/badge/license-MIT-green) ![Platform: Ubuntu / Debian](https://img.shields.io/badge/platform-Ubuntu%20%7C%20Debian-orange) ![Shell: Bash 4.3+](https://img.shields.io/badge/bash-4.3%2B-blue)
 
 ## What is this
 
