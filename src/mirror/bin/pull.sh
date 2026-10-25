@@ -97,7 +97,7 @@ pull_dim() {
   # Root-anchored filters: only the three chunk folders and region files in
   # them can ever reach the cache, whatever the export side contains.
   rsync -rt --delete-delay --partial-dir=.rsync-partial \
-    --timeout="$MIRROR_RSYNC_TIMEOUT" --bwlimit="$MIRROR_BWLIMIT_KIB" -e "$(ssh_cmd)" \
+    --timeout="$MIRROR_RSYNC_TIMEOUT" --bwlimit="$MIRROR_BWLIMIT_KIB" --max-size="$MIRROR_MAX_FILE_SIZE" -e "$(ssh_cmd)" \
     --include='/region/' --include='/entities/' --include='/poi/' \
     --include='/*/r.*.*.mca' --exclude='*' \
     "$MIRROR_REMOTE:snapshots/$stamp/$dim/" "$CACHE/$dim/"
@@ -318,6 +318,12 @@ main() {
   files="$(mirror_manifest_get files "$m")"
   bytes="$(mirror_manifest_get bytes "$m")"
   [[ "$files" =~ ^[0-9]+$ && "$bytes" =~ ^[0-9]+$ ]] || mirror_die "$EX_STALE" "the manifest lacks files/bytes"
+  # More digits than these would wrap around in the shell arithmetic below and
+  # could make a huge snapshot look small to the space check.
+  ((${#files} <= 9 && ${#bytes} <= 15)) || mirror_die "$EX_STALE" "the manifest sizes are not plausible (files=$files bytes=$bytes)"
+  if ((MIRROR_MAX_SNAPSHOT_GB > 0 && bytes > MIRROR_MAX_SNAPSHOT_GB * 1024 * 1024 * 1024)); then
+    mirror_die "$EX_STALE" "the snapshot is $((bytes / 1073741824)) GiB, over MIRROR_MAX_SNAPSHOT_GB=$MIRROR_MAX_SNAPSHOT_GB"
+  fi
 
   # Space is checked before anything is deleted. The previous rollback is last
   # night's mirror and worthless once a new snapshot is due, so it counts as

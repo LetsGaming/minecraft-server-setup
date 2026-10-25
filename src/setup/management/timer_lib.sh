@@ -16,6 +16,8 @@
 #   SYSTEMD_USABLE     true or false forces the answer of systemd_usable
 
 : "${SYSTEMD_UNIT_DIR:=/etc/systemd/system}"
+TIMER_EXEC_ARGS=()
+TIMER_STOPPOST_ARGS=()
 
 # systemd_usable: true when systemd is the running init and systemctl exists.
 # Containers and WSL without systemd are not, and keep using cron.
@@ -82,10 +84,24 @@ timer_restart_calendar() {
   fi
 }
 
+# _timer_exec_line <log> <script> [args...]: `/usr/bin/bash -c` wrapper that opens
+# the log as the server user and then runs the script with its arguments.
+# ($$ is a literal $ for systemd; $0 is the log, "$@" the script and its arguments.)
+_timer_exec_line() {
+  local log="$1" word line
+  shift
+  line="/usr/bin/bash -c 'exec >>\"\$\$0\" 2>&1; exec /usr/bin/bash \"\$\$@\"' $(timer_quote "$log")"
+  for word in "$@"; do line+=" $(timer_quote "$word")"; done
+  printf '%s' "$line"
+}
+
 # timer_render_service <description> <script> <logfile> [<working-dir>]
 # The oneshot service the timer starts. Output is appended to the log file the
 # cron line used (O_APPEND keeps the copy-truncate rotation of run_backup.sh
 # safe). TimeoutStartSec is a ceiling only; the scripts have their own timeouts.
+# TIMER_EXEC_ARGS (an array) holds extra arguments for the script and
+# TIMER_STOPPOST_ARGS (script first) an optional ExecStopPost; both are read from
+# the caller's shell and default to none.
 timer_render_service() {
   local desc="$1" script="$2" log="$3" workdir="${4:-}" node_dir path_value
   node_dir="$(dirname "$(command -v node 2> /dev/null || echo /usr/bin/node)")"
@@ -104,7 +120,10 @@ timer_render_service() {
     # systemd itself: StandardOutput=append: is opened as root, so a symlink the
     # server user planted in its own logs folder would make root append to any
     # file. ($$ is a literal $ for systemd; $0 and $1 are the log and the script.)
-    echo "ExecStart=/usr/bin/bash -c 'exec >>\"\$\$0\" 2>&1; exec /usr/bin/bash \"\$\$1\"' $(timer_quote "$log") $(timer_quote "$script")"
+    echo "ExecStart=$(_timer_exec_line "$log" "$script" "${TIMER_EXEC_ARGS[@]}")"
+    if ((${#TIMER_STOPPOST_ARGS[@]} > 0)); then
+      echo "ExecStopPost=$(_timer_exec_line "$log" "${TIMER_STOPPOST_ARGS[@]}")"
+    fi
     echo "TimeoutStartSec=3h"
   }
 }
@@ -142,15 +161,15 @@ _timer_write_if_changed() {
   echo changed
 }
 
-# timer_install <suffix> <description> <script> <calendar> <logfile> [persistent] [workdir]
+# timer_install <suffix> <description> <script> <calendar> <logfile> [persistent] [workdir] [random-delay-sec]
 # Writes <instance>-<suffix>.service and .timer, reloads systemd and enables the
 # timer. Safe to run again: unchanged units are left alone.
 timer_install() {
-  local suffix="$1" desc="$2" script="$3" calendar="$4" log="$5" persistent="${6:-false}" workdir="${7:-}"
+  local suffix="$1" desc="$2" script="$3" calendar="$4" log="$5" persistent="${6:-false}" workdir="${7:-}" delay="${8:-0}"
   local name state_s state_t
   name="$(timer_unit_name "$suffix")" || return 1
   state_s="$(timer_render_service "$desc" "$script" "$log" "$workdir" | _timer_write_if_changed "$SYSTEMD_UNIT_DIR/$name.service")" || return 1
-  state_t="$(timer_render_timer "$desc" "$calendar" "$persistent" | _timer_write_if_changed "$SYSTEMD_UNIT_DIR/$name.timer")" || return 1
+  state_t="$(timer_render_timer "$desc" "$calendar" "$persistent" "$delay" | _timer_write_if_changed "$SYSTEMD_UNIT_DIR/$name.timer")" || return 1
   if [[ "$state_s" == changed || "$state_t" == changed ]]; then
     _timer_sudo systemctl daemon-reload || return 1
   fi

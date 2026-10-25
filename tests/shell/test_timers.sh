@@ -93,6 +93,30 @@ test_the_service_has_no_sandboxing_that_would_break_sudo_or_screen() {
   assert_not_contains "$unit" "ProtectSystem" "no read-only system folders"
 }
 
+test_a_job_can_have_arguments_and_an_exec_stop_post() {
+  setup
+  local unit
+  unit="$(
+    source "$MGMT/timer_lib.sh"
+    TIMER_EXEC_ARGS=(--scripts-dir "/srv/a b/scripts")
+    TIMER_STOPPOST_ARGS=("/x/pull.sh" --scripts-dir "/srv/a b/scripts" --recover)
+    timer_render_service "Pull" "/x/pull.sh" "/x/logs/pull.log" "/x"
+  )"
+  assert_contains "$unit" '"/x/pull.sh" "--scripts-dir" "/srv/a b/scripts"' "the arguments follow the script, each quoted"
+  assert_contains "$unit" 'ExecStopPost=/usr/bin/bash -c' "an ExecStopPost is written"
+  assert_contains "$unit" '"--recover"' "with its own arguments"
+  assert_contains "$unit" 'exec /usr/bin/bash "$$@"' "the wrapper passes the script and its arguments through"
+  unit="$(source "$MGMT/timer_lib.sh"; timer_render_service "Pull" "/x/pull.sh" "/x/logs/pull.log")"
+  assert_not_contains "$unit" "ExecStopPost" "no ExecStopPost when none is given"
+}
+
+test_a_timer_install_can_carry_a_random_delay() {
+  setup
+  in_lib timer_install pull "Pull" "$R/scripts/testinst/backup/automation/run_backup.sh" "*-*-* 05:15:00" "$R/scripts/testinst/backup/logs/pull.log" true "$R/scripts/testinst" 300 > /dev/null
+  assert_contains "$(cat "$T/units/testinst-pull.timer")" "RandomizedDelaySec=300s" "the delay reaches the timer"
+  assert_contains "$(cat "$T/units/testinst-pull.timer")" "Persistent=true" "and so does the catch-up setting"
+}
+
 test_the_timer_fires_on_the_calendar_without_catching_up_by_default() {
   setup
   local unit

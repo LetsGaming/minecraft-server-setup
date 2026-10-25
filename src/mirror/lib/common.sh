@@ -53,6 +53,9 @@ mirror_load() {
   MIRROR_PARITY="${MIRROR_PARITY:-warn}"
   MIRROR_WORLDGEN_MODS="${MIRROR_WORLDGEN_MODS:-c2me|terralith|tectonic|lithostitched|nullscape|incendium|biomesoplenty|worldgen}"
   MIRROR_MIN_REGION_RATIO_PCT="${MIRROR_MIN_REGION_RATIO_PCT:-50}"
+  # 0 means no cap on the snapshot size; a region file is never legitimately near 2 GiB.
+  MIRROR_MAX_SNAPSHOT_GB="${MIRROR_MAX_SNAPSHOT_GB:-0}"
+  MIRROR_MAX_FILE_SIZE="${MIRROR_MAX_FILE_SIZE:-2G}"
   MIRROR_WARN_SECONDS="${MIRROR_WARN_SECONDS:-60}"
   MIRROR_STOP_TIMEOUT="${MIRROR_STOP_TIMEOUT:-360}"
   MIRROR_START_TIMEOUT="${MIRROR_START_TIMEOUT:-300}"

@@ -140,6 +140,30 @@ test_a_differing_worldgen_mod_set_warns_and_can_refuse() {
   assert_not_contains "$OUT" "worldgen mods differ" "nothing reported"
 }
 
+test_implausible_manifest_sizes_are_refused_before_any_arithmetic_wraps() {
+  pull_setup || return 0
+  sed -i "s/^bytes=.*/bytes=99999999999999999999/" "$T/src/mirror/export/LATEST"
+  run_job tgt "$PULL_SH"
+  assert_rc 65 "$RC" "a 20-digit size is refused"
+  assert_contains "$OUT" "not plausible" "and called implausible"
+  assert_eq "" "$(calls)" "the server was never stopped"
+}
+
+test_a_configured_snapshot_cap_refuses_a_bigger_snapshot() {
+  pull_setup || return 0
+  sed -i "s/^bytes=.*/bytes=3221225472/" "$T/src/mirror/export/LATEST"
+  mirror_set "$T/tgt" MIRROR_MAX_SNAPSHOT_GB 2
+  run_job tgt "$PULL_SH"
+  assert_rc 65 "$RC" "3 GiB is over a 2 GiB cap"
+  assert_contains "$OUT" "MIRROR_MAX_SNAPSHOT_GB" "and names the setting"
+}
+
+test_the_transfer_caps_the_size_of_a_single_file() {
+  pull_setup || return 0
+  run_job tgt "$PULL_SH"
+  assert_logged "--max-size=2G" "rsync is told the largest region file it may fetch"
+}
+
 test_an_old_snapshot_is_refused() {
   pull_setup || return 0
   local f="$T/src/mirror/export/LATEST"
