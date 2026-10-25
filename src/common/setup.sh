@@ -7,6 +7,9 @@ set -e
 # exists once it is deployed), and the service starts only when both are done.
 setup_api_wrapper() {
   local svc scripts_dir node_path bash_path
+  # The wrapper refuses to start without a key; --api-server on a config that has
+  # none (the Default route writes an empty one) would deploy a crash loop.
+  run_or_echo "node \"$SCRIPT_DIR/src/setup/management/ensure_api_key.js\" \"$SCRIPT_DIR/variables.json\""
   svc=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.SERVICE_USER || '')" 2>/dev/null)
   if [ -z "$svc" ]; then
     run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_api_server_service.js\""
