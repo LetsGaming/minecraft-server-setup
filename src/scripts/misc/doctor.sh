@@ -70,40 +70,66 @@ check_service() {
   fi
 }
 
-check_cron() {
-  local tab rc=0
-  if ! command -v crontab > /dev/null 2>&1; then
-    report SKIP cron "crontab not found"
-    return
-  fi
+# The scheduled jobs run from systemd timers (<instance>-backup.timer and
+# <instance>-restart.timer); hosts without systemd use cron lines instead. A job
+# that has both would run twice, which is worth a warning.
+CRON_TAB=""
+CRON_TAB_READABLE=false
+read_cron_tab() {
+  local rc=0
+  command -v crontab > /dev/null 2>&1 || return 0
   if [[ "$(id -un)" == "$USER" ]]; then
-    tab="$(crontab -l 2>&1)" || rc=$?
+    CRON_TAB="$(crontab -l 2>&1)" || rc=$?
   else
-    tab="$(sudo -n crontab -u "$USER" -l 2>&1)" || rc=$?
+    CRON_TAB="$(sudo -n crontab -u "$USER" -l 2>&1)" || rc=$?
   fi
   if [[ $rc -ne 0 ]]; then
-    if printf '%s' "$tab" | grep -qi 'no crontab'; then
-      tab=""
+    if printf '%s' "$CRON_TAB" | grep -qi 'no crontab'; then
+      CRON_TAB=""
     else
-      report SKIP cron "cannot read the crontab of $USER without sudo"
-      return
+      CRON_TAB=""
+      return 0
     fi
   fi
+  CRON_TAB_READABLE=true
+}
 
-  local backup_job restart_job
-  backup_job="$(printf '%q' "$SCRIPTS_DIR/backup/automation/run_backup.sh")"
-  if printf '%s\n' "$tab" | grep -qF -- "$backup_job"; then
-    report OK cron "hourly backup job present"
-  else
-    report FAIL cron "no hourly backup job for $USER; backups are not running"
-  fi
-  if [[ "${RESTART_ENABLED:-false}" == true ]]; then
-    restart_job="$(printf '%q' "$SCRIPTS_DIR/backup/automation/scheduled_restart.sh")"
-    if printf '%s\n' "$tab" | grep -qF -- "$restart_job"; then
-      report OK cron "scheduled restart job present"
-    else
-      report FAIL cron "RESTART_ENABLED is true but there is no scheduled restart job for $USER"
+timer_enabled() { [[ "$(systemctl is-enabled "$1" 2> /dev/null)" == enabled ]]; }
+
+# check_job <name> <timer-suffix> <script> <when-missing: FAIL text>
+check_job() {
+  local name="$1" suffix="$2" script="$3" missing="$4" unit timer=false cron=false next result
+  unit="$INSTANCE_NAME-$suffix"
+  if command -v systemctl > /dev/null 2>&1 && timer_enabled "$unit.timer"; then timer=true; fi
+  if [[ "$CRON_TAB_READABLE" == true ]] && printf '%s\n' "$CRON_TAB" | grep -qF -- "$(printf '%q' "$script")"; then cron=true; fi
+
+  if [[ "$timer" == true && "$cron" == true ]]; then
+    report WARN schedule "the $name runs from $unit.timer and from a crontab line, so it runs twice; run migrate.sh to drop the cron line"
+  elif [[ "$timer" == true ]]; then
+    next="$(systemctl show -p NextElapseUSecRealtime --value "$unit.timer" 2> /dev/null)"
+    result="$(systemctl show -p Result --value "$unit.service" 2> /dev/null)"
+    report OK schedule "$name runs from $unit.timer${next:+ (next: $next)}"
+    if [[ -n "$result" && "$result" != success ]]; then
+      report WARN schedule "the last $name run of $unit.service ended with '$result'"
     fi
+  elif [[ "$cron" == true ]]; then
+    report OK schedule "$name runs from a crontab line (no systemd timer)"
+  else
+    report FAIL schedule "$missing"
+  fi
+}
+
+check_schedule() {
+  read_cron_tab
+  if ! command -v systemctl > /dev/null 2>&1 && [[ "$CRON_TAB_READABLE" != true ]]; then
+    report SKIP schedule "neither systemctl nor a readable crontab"
+    return
+  fi
+  check_job "hourly backup" backup "$SCRIPTS_DIR/backup/automation/run_backup.sh" \
+    "no hourly backup timer or cron line for $USER; backups are not running"
+  if [[ "${RESTART_ENABLED:-false}" == true ]]; then
+    check_job "scheduled restart" restart "$SCRIPTS_DIR/backup/automation/scheduled_restart.sh" \
+      "RESTART_ENABLED is true but there is no scheduled restart timer or cron line for $USER"
   fi
 }
 
@@ -280,7 +306,7 @@ check_xaero_config() {
 
 echo "Doctor: $INSTANCE_NAME"
 check_service
-check_cron
+check_schedule
 check_storage
 check_last_backup
 check_sudoers

@@ -24,7 +24,7 @@ test_a_healthy_instance_passes() {
   setup
   run_script "$DOCTOR"
   assert_rc 0 "$RC" "no failures"
-  assert_contains "$OUT" "[OK] cron: hourly backup job present" "backup job found"
+  assert_contains "$OUT" "[OK] schedule: hourly backup runs from a crontab line" "a host with only a cron line is fine"
   assert_contains "$OUT" "[OK] crash-loop-limits" "start limits found"
   assert_contains "$OUT" "[SKIP] sudoers" "no service user, nothing to check"
   assert_contains "$OUT" "[SKIP] wrapper" "wrapper not enabled"
@@ -36,7 +36,7 @@ test_a_missing_backup_job_fails() {
   export CRONTAB_SHIM_TEXT="0 4 * * * echo unrelated"
   run_script "$DOCTOR"
   assert_rc 1 "$RC" "the run fails"
-  assert_contains "$OUT" "[FAIL] cron: no hourly backup job" "says which job is missing"
+  assert_contains "$OUT" "[FAIL] schedule: no hourly backup timer or cron line" "says which job is missing"
 }
 
 test_a_user_without_a_crontab_fails_the_backup_check() {
@@ -44,7 +44,7 @@ test_a_user_without_a_crontab_fails_the_backup_check() {
   export CRONTAB_SHIM_NONE=1
   run_script "$DOCTOR"
   assert_rc 1 "$RC" "the run fails"
-  assert_contains "$OUT" "[FAIL] cron" "an empty crontab has no backup job"
+  assert_contains "$OUT" "[FAIL] schedule" "an empty crontab has no backup job"
 }
 
 test_an_enabled_restart_schedule_needs_its_job() {
@@ -52,7 +52,41 @@ test_an_enabled_restart_schedule_needs_its_job() {
   set_var RESTART_ENABLED true
   run_script "$DOCTOR"
   assert_rc 1 "$RC" "the run fails"
-  assert_contains "$OUT" "no scheduled restart job" "the restart job is missing"
+  assert_contains "$OUT" "no scheduled restart timer or cron line" "the restart job is missing"
+}
+
+test_a_timer_counts_and_shows_its_next_run() {
+  setup
+  export CRONTAB_SHIM_NONE=1 SYSTEMCTL_SHIM_UNITS="testinst-backup.timer"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a timer is enough"
+  assert_contains "$OUT" "[OK] schedule: hourly backup runs from testinst-backup.timer (next: Mon 2026-10-26 04:20:00 UTC)" "the timer and its next run are shown"
+  assert_not_contains "$OUT" "[WARN] schedule" "nothing to warn about"
+}
+
+test_a_timer_and_a_cron_line_together_warn_about_running_twice() {
+  setup
+  export SYSTEMCTL_SHIM_UNITS="testinst-backup.timer"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a warning does not fail the run"
+  assert_contains "$OUT" "[WARN] schedule: the hourly backup runs from testinst-backup.timer and from a crontab line" "says it runs twice"
+  assert_contains "$OUT" "migrate.sh" "and what to do"
+}
+
+test_a_failed_last_timer_run_is_a_warning() {
+  setup
+  export CRONTAB_SHIM_NONE=1 SYSTEMCTL_SHIM_UNITS="testinst-backup.timer" SYSTEMCTL_SHIM_RESULT="exit-code"
+  run_script "$DOCTOR"
+  assert_contains "$OUT" "[WARN] schedule: the last hourly backup run of testinst-backup.service ended with 'exit-code'" "the failed run is reported"
+}
+
+test_an_enabled_restart_schedule_is_satisfied_by_its_timer() {
+  setup
+  set_var RESTART_ENABLED true
+  export CRONTAB_SHIM_NONE=1 SYSTEMCTL_SHIM_UNITS="testinst-backup.timer testinst-restart.timer"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "both timers present"
+  assert_contains "$OUT" "scheduled restart runs from testinst-restart.timer" "the restart timer is found"
 }
 
 test_storage_over_the_limit_fails_and_near_it_warns() {

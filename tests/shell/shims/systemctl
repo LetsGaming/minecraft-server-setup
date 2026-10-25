@@ -17,7 +17,27 @@ case "$1" in
     exit 1
     ;;
   cat) printf '%s\n' "${SYSTEMCTL_SHIM_UNIT:-}" ;;
-  is-enabled) echo enabled; exit 0 ;;
+  is-enabled)
+    # A timer is enabled only when the test lists it; everything else (the
+    # instance service) is enabled, as before.
+    case "${2:-}" in
+      *.timer)
+        for u in ${SYSTEMCTL_SHIM_UNITS:-}; do
+          if [[ "$2" == "$u" ]]; then echo enabled; exit 0; fi
+        done
+        echo disabled; exit 1
+        ;;
+    esac
+    echo enabled; exit 0
+    ;;
+  show)
+    # show -p <Property> --value <unit>
+    case "${3:-}" in
+      NextElapseUSecRealtime) echo "${SYSTEMCTL_SHIM_NEXT:-Mon 2026-10-26 04:20:00 UTC}" ;;
+      Result) echo "${SYSTEMCTL_SHIM_RESULT:-success}" ;;
+    esac
+    exit 0
+    ;;
   start|restart) touch "$SHIM_STATE/screen_running" ;;
   is-active)
     if [[ -e "$SHIM_STATE/screen_running" ]]; then echo active; exit 0; fi

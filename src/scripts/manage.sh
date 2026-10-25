@@ -11,7 +11,7 @@ set -e
 #   restart <instance>  Restart a specific instance
 #   backup <instance>   Run backup for a specific instance
 #   list                List all configured instances
-#   doctor [instance]   Health check (cron, service, storage, sudoers, wrapper); run with sudo
+#   doctor [instance]   Health check (schedule, service, storage, sudoers, wrapper); run with sudo
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -51,7 +51,7 @@ Commands:
   restart <instance>  Restart a specific instance (player-aware)
   backup <instance>   Run backup for a specific instance
   update <instance>   Check for updates for a specific instance
-  doctor [instance]   Check cron jobs, service, storage, sudoers and the wrapper
+  doctor [instance]   Check scheduled jobs, service, storage, sudoers and the wrapper
                       (read-only; run as an admin with sudo; --test-webhook sends a test)
 
 Examples:
