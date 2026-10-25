@@ -121,7 +121,7 @@ bk_stage_refresh() {
       [[ "$full" == 1 ]] && verify=(--checksum)
       : > "$(bk_stage_marker)"
       set +e
-      ( cd "$server" && bk_nice rsync -a --delete --delete-excluded --numeric-ids "${follow[@]}" "${verify[@]}" "${ex[@]}" -- ./ "$root/" )
+      ( cd "$server" && bk_nice rsync -a --chmod=Dgo-w,Fgo-w --delete --delete-excluded --numeric-ids "${follow[@]}" "${verify[@]}" "${ex[@]}" -- ./ "$root/" )
       rc=$?
       set -e
       if (( rc == 24 )); then
@@ -153,7 +153,7 @@ bk_stage_refresh() {
         BK_TAR_EXCLUDES=("${BK_EXCLUDES[@]}")
       else
         set +e
-        ( cd "$server" && bk_nice rsync -a --numeric-ids "${follow[@]}" "${ex[@]}" -- ./ "$root/" )
+        ( cd "$server" && bk_nice rsync -a --chmod=Dgo-w,Fgo-w --numeric-ids "${follow[@]}" "${ex[@]}" -- ./ "$root/" )
         rc=$?
         set -e
         if (( rc == 24 )); then
