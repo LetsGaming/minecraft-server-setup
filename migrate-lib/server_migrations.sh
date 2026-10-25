@@ -27,6 +27,7 @@
 SERVER_MIGRATIONS=(
   instance_start_script
   unit_start_limits
+  cron_to_timers
 )
 
 SM_PENDING=()
@@ -157,6 +158,156 @@ sm_unit_start_limits_apply() {
   _sm_say warn "could not write $unit without a password. Run:"
   _sm_say info "  sudo cp '$patched' '$unit' && sudo systemctl daemon-reload"
   return 3
+}
+
+# ── cron to systemd timers ──────────────────────────────────────────────────
+#
+# Setup used to put the hourly backup (and the scheduled restart) in the server
+# owner's crontab. They are systemd timers now (src/setup/management/timer_lib.sh).
+# This moves an existing install over: the timers are written and verified
+# first, and only then are exactly the suite's cron lines for this instance
+# removed. Other crontab lines are never touched, the old crontab is kept, and a
+# schedule that is not the suite's own is left for the operator (a manual step)
+# instead of being guessed at. The server is not restarted.
+
+_sm_cron_script() { echo "$SM_SCRIPTS_DIR/backup/automation/$1"; }
+
+# The crontab line quoting create_*_job.sh used: printf %q, with % escaped.
+_sm_cron_quote() {
+  local q
+  q="$(printf '%q' "$1")"
+  printf '%s\n' "${q//%/\\%}"
+}
+
+# Prints the owner's crontab; fails when it cannot be read (no crontab is empty).
+_sm_read_crontab() {
+  local out rc=0
+  out="$(crontab -l 2>&1)" || rc=$?
+  if [[ $rc -eq 0 ]]; then printf '%s\n' "$out"; return 0; fi
+  printf '%s' "$out" | grep -qi 'no crontab' && return 0
+  return 1
+}
+
+# The suite's cron line for <script-name> in the crontab text on stdin.
+_sm_cron_line_for() {
+  local q
+  q="$(_sm_cron_quote "$(_sm_cron_script "$1")")"
+  grep -F -- "$q" || true
+}
+
+_sm_restart_settings() { # prints "enabled interval"
+  local vars="$SM_SCRIPTS_DIR/common/variables.txt" enabled interval
+  enabled="$(sed -n 's/^RESTART_ENABLED="\(.*\)"$/\1/p' "$vars" 2> /dev/null | tail -n 1)"
+  interval="$(sed -n 's/^RESTART_INTERVAL_HOURS="\(.*\)"$/\1/p' "$vars" 2> /dev/null | tail -n 1)"
+  echo "${enabled:-false} ${interval:-12}"
+}
+
+_sm_timers_usable() {
+  [[ -f "$SM_SOURCE_ROOT/src/setup/management/timer_lib.sh" ]] || return 1
+  ( SYSTEMD_UNIT_DIR="$(_sm_unit_dir)"; source "$SM_SOURCE_ROOT/src/setup/management/timer_lib.sh"; systemd_usable )
+}
+
+sm_cron_to_timers_describe() {
+  echo "scheduled jobs: the hourly backup and the scheduled restart move from the crontab to systemd timers (timers are verified before the cron lines are removed; the server is not restarted)"
+}
+
+sm_cron_to_timers_check() {
+  local tab
+  _sm_timers_usable || return 1
+  tab="$(_sm_read_crontab 2> /dev/null)" || return 1
+  [[ -n "$(printf '%s\n' "$tab" | _sm_cron_line_for run_backup.sh)" || -n "$(printf '%s\n' "$tab" | _sm_cron_line_for scheduled_restart.sh)" ]]
+}
+
+# One job: <name> <script-name> <unit-suffix> <expected five cron fields> <calendar> <log>.
+# Prints a reason and returns 3 for a schedule that is not the suite's own, 1 on failure.
+_sm_move_job() {
+  local label="$1" script="$2" suffix="$3" fields="$4" calendar="$5" log="$6" line actual
+  line="$(printf '%s\n' "$_SM_TAB" | _sm_cron_line_for "$script" | head -n 1)"
+  [[ -n "$line" ]] || return 0
+  actual="$(printf '%s\n' "$line" | awk '{ print $1, $2, $3, $4, $5 }')"
+  if [[ "$actual" != "$fields" ]]; then
+    _sm_say warn "the crontab runs the $label on '$actual', not the suite's '$fields'; it is left in place."
+    _sm_say info "  To use a timer, create it with an OnCalendar of your choice (see docs/migrations.md), then delete that cron line."
+    return 3
+  fi
+  (
+    export INSTANCE_NAME="$SM_INSTANCE_NAME" USER="${USER:-$(id -un)}" SYSTEMD_UNIT_DIR="$(_sm_unit_dir)" TIMER_SUDO="${SM_SUDO-sudo -n}"
+    source "$SM_SOURCE_ROOT/src/setup/management/timer_lib.sh"
+    mkdir -p "$(dirname "$log")"
+    timer_install "$suffix" "$label of $INSTANCE_NAME" "$(_sm_cron_script "$script")" "$calendar" "$log" false "$SM_SCRIPTS_DIR" > /dev/null
+  ) || return 1
+  if ! systemctl is-enabled "${SM_INSTANCE_NAME}-${suffix}.timer" > /dev/null 2>&1; then
+    # Not usable: take the units back out so a failed run leaves nothing half-installed.
+    (
+      export INSTANCE_NAME="$SM_INSTANCE_NAME" SYSTEMD_UNIT_DIR="$(_sm_unit_dir)" TIMER_SUDO="${SM_SUDO-sudo -n}"
+      source "$SM_SOURCE_ROOT/src/setup/management/timer_lib.sh"
+      timer_remove "$suffix"
+    ) > /dev/null 2>&1 || true
+    _sm_say warn "the $suffix timer could not be enabled; the cron line stays."
+    return 1
+  fi
+  _SM_MOVED+=("$script")
+  return 0
+}
+
+sm_cron_to_timers_apply() {
+  local rc=0 enabled interval cal sudo_cmd keep dir remaining
+  _SM_MOVED=()
+  _SM_TAB="$(_sm_read_crontab)" || { _sm_say warn "the crontab cannot be read; nothing was changed."; return 1; }
+  sudo_cmd="${SM_SUDO-sudo -n}"
+  # shellcheck disable=SC2086  # SM_SUDO is a command with its own arguments
+  if [[ -n "$sudo_cmd" ]] && ! $sudo_cmd true > /dev/null 2>&1; then
+    _sm_say warn "writing systemd units needs sudo without a password. As an admin, run:"
+    _sm_say info "  bash $SM_SOURCE_ROOT/migrate.sh $SM_SCRIPTS_DIR   (or install the timers by hand, see docs/migrations.md)"
+    return 3
+  fi
+
+  local manual=false
+  _sm_move_job "hourly backup" run_backup.sh backup "20 * * * *" "*-*-* *:20:00" "$SM_SCRIPTS_DIR/backup/logs/backup.log" || { rc=$?; [[ $rc -eq 3 ]] && manual=true || return 1; }
+
+  read -r enabled interval <<< "$(_sm_restart_settings)"
+  if [[ -n "$(printf '%s\n' "$_SM_TAB" | _sm_cron_line_for scheduled_restart.sh)" ]]; then
+    local fields
+    if [[ "$enabled" == true ]] && cal="$(
+      source "$SM_SOURCE_ROOT/src/setup/management/timer_lib.sh"; timer_restart_calendar "$interval"
+    )"; then
+      interval=$((10#$interval))
+      if ((interval <= 24)); then fields="0 */$interval * * *"; else fields="0 0 */$((interval / 24)) * *"; fi
+      _sm_move_job "scheduled restart" scheduled_restart.sh restart "$fields" "$cal" "$SM_SCRIPTS_DIR/backup/logs/restart.log" || { rc=$?; [[ $rc -eq 3 ]] && manual=true || return 1; }
+    else
+      _sm_say warn "the crontab has a scheduled restart line but RESTART_ENABLED/RESTART_INTERVAL_HOURS do not describe a valid schedule; it is left in place."
+      manual=true
+    fi
+  fi
+
+  if [[ ${#_SM_MOVED[@]} -gt 0 ]]; then
+    dir="$SM_SCRIPTS_DIR/common/migration-backups"
+    mkdir -p "$dir" || return 1
+    keep="$dir/crontab.$(_sm_stamp)"
+    printf '%s\n' "$_SM_TAB" > "$keep" || return 1
+    remaining="$_SM_TAB"
+    local script q
+    for script in "${_SM_MOVED[@]}"; do
+      q="$(_sm_cron_quote "$(_sm_cron_script "$script")")"
+      remaining="$(printf '%s\n' "$remaining" | grep -vF -- "$q" || true)"
+    done
+    if [[ -n "${remaining//[[:space:]]/}" ]]; then
+      printf '%s\n' "$remaining" | crontab - || { crontab "$keep" 2> /dev/null; return 1; }
+    else
+      crontab -r 2> /dev/null || true
+    fi
+    for script in "${_SM_MOVED[@]}"; do
+      if _sm_read_crontab | _sm_cron_line_for "$script" | grep -q .; then
+        crontab "$keep" 2> /dev/null
+        _sm_say warn "the cron line for $script is still there after the edit; the old crontab was put back."
+        return 1
+      fi
+    done
+    _sm_say info "previous crontab kept as $keep"
+  fi
+
+  [[ "$manual" == true ]] && return 3
+  return 0
 }
 
 # ── runner ──────────────────────────────────────────────────────────────────

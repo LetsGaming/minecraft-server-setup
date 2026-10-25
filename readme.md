@@ -53,7 +53,7 @@ Setup does not configure your router and cannot tell whether it is configured. A
 - **Backup System:** Grandfather-father-son rotation with zstd compression, archive validation, configurable retention, and crash-safe auto-save handling.
 - **Server Rollback:** One-command rollback to the most recent pre-update backup.
 - **Smart Restart:** Player-aware restarts that skip warnings when nobody is online.
-- **Scheduled Restarts:** Configurable automatic restart cron with player-count awareness.
+- **Scheduled Restarts:** Configurable automatic restart on a systemd timer with player-count awareness.
 - **Mod Conflict Detection:** Update checker warns about incompatible mods before applying changes.
 - **Preflight Check:** `--check` flag validates config, tools, disk space, and API keys without running setup.
 - **Multi-Instance CLI (`manage.sh`):** Status overview, start/stop/restart/backup across multiple server instances from the shell.
@@ -62,7 +62,7 @@ Setup does not configure your router and cannot tell whether it is configured. A
 
 ## Prerequisites
 
-- **OS:** Linux with systemd and cron (Ubuntu/Debian recommended)
+- **OS:** Linux with systemd (Ubuntu/Debian recommended). The backup and restart jobs run as systemd timers; on a host without a running systemd (a container, WSL) setup falls back to cron lines, which is why `cron` is still installed
 - **Bash:** 4.3+
 - **Tools:** setup installs only what is missing, with `apt`, before it asks anything: `curl`, `screen`, `unzip`, `cron`, `rsync`, `zstd`, `jq`, `acl` (`setfacl`), Node.js with `npm`, and `whiptail` on the Guided route only. It runs `npm ci --omit=dev` for you, so there is no `npm install` step. It does not upgrade the system unless you set `MC_SETUP_UPGRADE_SYSTEM=true`.
 - **Node.js 18+:** setup applies this policy. An installed Node 18 or newer is used as is. Otherwise, if the distribution's own `nodejs` package is 18 or newer, that package is installed. Otherwise (for example Ubuntu 22.04 or Debian 11) Node 22 would come from the NodeSource apt repository, which is a third-party repository, so setup only does that when you pass `--allow-nodesource`. Without the flag it stops and prints the manual commands.
@@ -256,7 +256,7 @@ sudo bash manage.sh doctor survival --test-webhook
 Run it as an admin with sudo. It prints one `OK`, `WARN`, `FAIL` or `SKIP` line per check and exits 1 when any check fails:
 
 - the systemd unit is enabled and running, and has crash-loop limits in `[Unit]` (`migrate.sh` adds them to older units)
-- the hourly backup cron job (and the restart job when `RESTART_SCHEDULE.ENABLED`) is in the server user's crontab
+- the hourly backup job (and the restart job when `RESTART_SCHEDULE.ENABLED`) is scheduled: a `<instance>-backup.timer` (and `<instance>-restart.timer`) that is enabled and whose last run succeeded, or a crontab line on a host without systemd; it warns when a job has both and would run twice
 - backup usage against `MAX_STORAGE_GB` (warns from 90%, fails above 100%) and free disk space where the backups live (warns under 5 GB)
 - the last backup run recorded in `.meta/last_backup.json` (fails when it failed, warns when the last success is 3 hours old or more)
 - the wrapper's sudoers file passes `visudo -c` (skipped without an `API_SERVER.SERVICE_USER`)

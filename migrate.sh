@@ -11,7 +11,8 @@ set -euo pipefail
 # ║  — a copy of everything removed stays in the pre-migration  ║
 # ║  backup archive. Does NOT touch:                            ║
 # ║    - World data, mods, server.jar, server.properties        ║
-# ║    - Cron jobs                                              ║
+# ║    - Cron lines other than the suite's own (those move to   ║
+# ║      systemd timers, see the migrations below)              ║
 # ║    - systemd units, except the migrations below             ║
 # ║    - Your variables.txt values (only adds new fields)       ║
 # ║    - downloaded_versions.json                               ║

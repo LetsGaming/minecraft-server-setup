@@ -47,7 +47,7 @@ setup() {
   source "$ROOT/migrate-lib/server_migrations.sh"
 }
 
-test_an_old_install_has_both_migrations_pending() {
+test_an_old_install_has_the_file_migrations_pending() {
   setup
   sm_plan > /dev/null
   assert_eq "instance_start_script unit_start_limits" "${SM_PENDING[*]}" "both are detected from the real files"
@@ -229,6 +229,122 @@ test_migrate_help_documents_the_migrations() {
   assert_contains "$out" "--no-server-migrations" "the skip flag is documented"
   assert_contains "$out" "--list-server-migrations" "and the list flag"
   assert_contains "$out" "World data, mods, server.jar and server.properties are not touched" "and what is never touched"
+}
+
+# ── cron to systemd timers ───────────────────────────────────────────────────
+
+# A crontab that keeps what is written to it, and systemd as the shim sees it.
+cron_setup() {
+  setup
+  export SYSTEMD_USABLE=true SYSTEMCTL_SHIM_UNITS="testinst-backup.timer testinst-restart.timer"
+  mkdir -p "$SM_SCRIPTS_DIR/backup/logs"
+  cat > "$T/bin/crontab" <<'SH'
+#!/bin/bash
+f="$SHIM_STATE/crontab"
+case "$1" in
+  -l) [[ -f "$f" ]] || { echo "no crontab for tester" >&2; exit 1; }; cat "$f" ;;
+  -r) rm -f "$f" ;;
+  -) cat > "$f" ;;
+  *) cp "$1" "$f" ;;
+esac
+SH
+  chmod +x "$T/bin/crontab"
+}
+
+backup_line() { printf '20 * * * * bash %s >> %s 2>&1\n' "$SM_SCRIPTS_DIR/backup/automation/run_backup.sh" "$SM_SCRIPTS_DIR/backup/logs/backup.log"; }
+restart_line() { printf '0 */6 * * * bash %s >> %s 2>&1\n' "$SM_SCRIPTS_DIR/backup/automation/scheduled_restart.sh" "$SM_SCRIPTS_DIR/backup/logs/restart.log"; }
+
+test_the_cron_migration_is_pending_only_when_the_suites_cron_lines_exist() {
+  cron_setup
+  sm_plan > /dev/null
+  assert_not_contains " ${SM_PENDING[*]} " " cron_to_timers " "no crontab, nothing to move"
+  printf '5 5 * * * unrelated\n' > "$SHIM_STATE/crontab"
+  sm_plan > /dev/null
+  assert_not_contains " ${SM_PENDING[*]} " " cron_to_timers " "an unrelated cron line is not the suite's"
+  { printf '5 5 * * * unrelated\n'; backup_line; } > "$SHIM_STATE/crontab"
+  sm_plan > /dev/null
+  assert_contains " ${SM_PENDING[*]} " " cron_to_timers " "the suite's backup line makes it pending"
+  SYSTEMD_USABLE=false sm_plan > /dev/null
+  assert_not_contains " ${SM_PENDING[*]} " " cron_to_timers " "a host without systemd keeps cron"
+}
+
+test_the_backup_cron_line_becomes_a_timer_and_other_lines_stay() {
+  cron_setup
+  { printf '5 5 * * * unrelated\n'; backup_line; } > "$SHIM_STATE/crontab"
+  sm_plan > /dev/null
+  sm_apply > /dev/null
+  assert_eq "cron_to_timers" "$(printf '%s\n' "${SM_APPLIED[@]}" | grep cron_to_timers)" "applied"
+  assert_exists "$SM_UNIT_DIR/testinst-backup.timer" "the timer is installed"
+  assert_contains "$(cat "$SM_UNIT_DIR/testinst-backup.timer")" "OnCalendar=*-*-* *:20:00" "at minute 20, like the cron line"
+  assert_file_content "$SHIM_STATE/crontab" "5 5 * * * unrelated" "only the suite's line is gone"
+  assert_eq 1 "$(ls "$SM_SCRIPTS_DIR"/common/migration-backups/crontab.* 2> /dev/null | wc -l | tr -d '[:space:]')" "the old crontab is kept"
+  assert_contains "$(cat "$SM_SCRIPTS_DIR"/common/migration-backups/crontab.*)" "run_backup.sh" "and has the old line"
+  sm_plan > /dev/null
+  assert_not_contains " ${SM_PENDING[*]} " " cron_to_timers " "a second run has nothing to do"
+}
+
+test_an_emptied_crontab_is_removed_not_left_blank() {
+  cron_setup
+  backup_line > "$SHIM_STATE/crontab"
+  sm_plan > /dev/null
+  sm_apply > /dev/null
+  assert_missing "$SHIM_STATE/crontab" "no crontab is left when nothing else was in it"
+}
+
+test_the_restart_cron_line_follows_the_configured_interval() {
+  cron_setup
+  printf 'RESTART_ENABLED="true"\nRESTART_INTERVAL_HOURS="6"\n' >> "$SM_SCRIPTS_DIR/common/variables.txt"
+  { backup_line; restart_line; } > "$SHIM_STATE/crontab"
+  sm_plan > /dev/null
+  sm_apply > /dev/null
+  assert_contains "$(cat "$SM_UNIT_DIR/testinst-restart.timer")" "OnCalendar=*-*-* 00/6:00:00" "every 6 hours"
+  assert_missing "$SHIM_STATE/crontab" "both lines are gone"
+}
+
+test_a_schedule_that_is_not_the_suites_is_left_for_the_operator() {
+  cron_setup
+  printf '5 * * * * bash %s >> /dev/null 2>&1\n' "$SM_SCRIPTS_DIR/backup/automation/run_backup.sh" > "$SHIM_STATE/crontab"
+  sm_plan > /dev/null
+  sm_apply > /dev/null
+  assert_eq "cron_to_timers" "${SM_MANUAL[*]}" "reported as a manual step"
+  assert_missing "$SM_UNIT_DIR/testinst-backup.timer" "no timer was guessed"
+  assert_contains "$(cat "$SHIM_STATE/crontab")" "5 * * * *" "the operator's line is untouched"
+}
+
+test_without_sudo_the_migration_asks_for_a_manual_step_and_changes_nothing() {
+  cron_setup
+  backup_line > "$SHIM_STATE/crontab"
+  export SM_SUDO="false"
+  sm_plan > /dev/null
+  sm_apply > /dev/null
+  assert_contains " ${SM_MANUAL[*]} " " cron_to_timers " "reported as a manual step"
+  assert_missing "$SM_UNIT_DIR/testinst-backup.timer" "no unit was written"
+  assert_contains "$(cat "$SHIM_STATE/crontab")" "run_backup.sh" "the cron line stays"
+}
+
+test_a_timer_that_cannot_be_enabled_keeps_cron_and_leaves_no_units() {
+  cron_setup
+  export SYSTEMCTL_SHIM_UNITS=""
+  backup_line > "$SHIM_STATE/crontab"
+  sm_plan > /dev/null
+  sm_apply > /dev/null
+  assert_eq "cron_to_timers" "${SM_FAILED[*]}" "reported as failed"
+  assert_missing "$SM_UNIT_DIR/testinst-backup.timer" "the timer file is taken back out"
+  assert_missing "$SM_UNIT_DIR/testinst-backup.service" "and its service"
+  assert_contains "$(cat "$SHIM_STATE/crontab")" "run_backup.sh" "backups keep running from cron"
+}
+
+test_an_unreadable_crontab_changes_nothing() {
+  cron_setup
+  cat > "$T/bin/crontab" <<'SH'
+#!/bin/bash
+echo "crontab: cannot open your crontab: Permission denied" >&2
+exit 1
+SH
+  chmod +x "$T/bin/crontab"
+  sm_plan > /dev/null
+  assert_not_contains " ${SM_PENDING[*]} " " cron_to_timers " "an unreadable crontab is never treated as the suite's"
+  assert_missing "$SM_UNIT_DIR/testinst-backup.timer" "no timer"
 }
 
 run_tests
