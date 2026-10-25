@@ -42,6 +42,9 @@
     "SKIP_IF_EMPTY": true,
     "WARN_SECONDS": 30
   },
+  "MIRROR": {
+    "ENABLED": false
+  },
   "JAVA": {
     "SERVER": {
       "VANILLA": {

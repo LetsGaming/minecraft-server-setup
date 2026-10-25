@@ -104,6 +104,31 @@ for (const key of OPTIONAL_BACKUP_KEYS) {
   if (BACKUPS[key] !== undefined) lines.push(`${key}=${q(BACKUPS[key])}`);
 }
 
+// The optional mirror: written only when it is switched on, so an install that
+// never heard of it gets the same variables.txt as before. mirror.sh setup keeps
+// its own managed block in the same file; whichever comes last wins.
+const MIRROR = vars.MIRROR || {};
+if (MIRROR.ENABLED === true) {
+  const MIRROR_KEYS = {
+    ROLE: "MIRROR_ROLE",
+    REMOTE: "MIRROR_REMOTE",
+    SSH_PORT: "MIRROR_SSH_PORT",
+    SOURCE_MODE: "MIRROR_SOURCE_MODE",
+    EXPORT_AT: "MIRROR_EXPORT_AT",
+    PULL_AT: "MIRROR_PULL_AT",
+    BWLIMIT_KIB: "MIRROR_BWLIMIT_KIB",
+    PARITY: "MIRROR_PARITY",
+    MIN_REGION_RATIO_PCT: "MIRROR_MIN_REGION_RATIO_PCT",
+    MAX_SNAPSHOT_GB: "MIRROR_MAX_SNAPSHOT_GB",
+    KEEP_SNAPSHOTS: "MIRROR_KEEP_SNAPSHOTS",
+  };
+  lines.push(`MIRROR_ENABLED=${q(true)}`);
+  for (const [key, name] of Object.entries(MIRROR_KEYS)) {
+    if (MIRROR[key] !== undefined) lines.push(`${name}=${q(MIRROR[key])}`);
+  }
+  if (Array.isArray(MIRROR.DIMS)) lines.push(`MIRROR_DIMS=${q(MIRROR.DIMS.join(" "))}`);
+}
+
 const variablesContent = lines.join("\n");
 
 // Ensure directory exists

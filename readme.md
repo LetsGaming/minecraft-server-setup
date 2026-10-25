@@ -289,6 +289,8 @@ Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhook
 | `rollback_start`, `rollback_complete` | A rollback began and finished |
 | `update_start` | A version upgrade began |
 | `update_complete`, `update_failed` | A version upgrade or update finished or failed |
+| `mirror_export_failed` | Only with the optional creative mirror: the survival server's nightly export failed |
+| `mirror_sync_complete`, `mirror_sync_failed` | Only with the optional creative mirror: the creative server's nightly refresh finished or failed (an interrupted swap that was repaired is reported as complete) |
 
 If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. A name in the list that no script sends is accepted, but setup warns about it.
 

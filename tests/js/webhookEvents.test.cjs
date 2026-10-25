@@ -25,7 +25,7 @@ function sentEvents() {
   const found = new Map();
   const add = (name, file) => found.set(name, file);
   const patterns = [
-    /\bnotify(?:_success|_error|_warning)?[ \t]+"?([a-z]+(?:_[a-z]+)+)"?/g,
+    /\b(?:mirror_)?notify(?:_success|_error|_warning)?[ \t]+"?([a-z]+(?:_[a-z]+)+)"?/g,
     /sendWebhook\(\s*[\w.]+,\s*"([a-z_]+)"/g,
     /"notify",\s*"([a-z_]+)"/g,
   ];
