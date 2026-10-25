@@ -109,7 +109,9 @@ check_cron() {
 
 check_storage() {
   if [[ ! -d "$BACKUPS_PATH" ]]; then
-    report FAIL storage "backups folder $BACKUPS_PATH does not exist"
+    # The first backup creates it, so a fresh install has none yet; a folder that is
+    # still missing after backups should have run shows up in last-backup too.
+    report WARN storage "backups folder $BACKUPS_PATH does not exist yet (the first backup creates it)"
     return
   fi
   local used_bytes max_bytes pct

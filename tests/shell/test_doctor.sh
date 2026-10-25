@@ -68,12 +68,13 @@ test_storage_over_the_limit_fails_and_near_it_warns() {
   assert_contains "$OUT" "[WARN] storage" "reported as a warning"
 }
 
-test_a_missing_backups_folder_fails() {
+test_a_missing_backups_folder_only_warns_before_the_first_backup() {
   setup
   rm -rf "$T/backups"
   run_script "$DOCTOR"
-  assert_rc 1 "$RC" "the run fails"
-  assert_contains "$OUT" "does not exist" "names the problem"
+  assert_rc 0 "$RC" "a fresh install is not a failure"
+  assert_contains "$OUT" "[WARN] storage: backups folder" "says the folder is missing"
+  assert_contains "$OUT" "does not exist yet" "and that the first backup creates it"
 }
 
 test_a_unit_without_start_limits_warns() {
