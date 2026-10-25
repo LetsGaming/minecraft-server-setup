@@ -100,10 +100,12 @@ timer_render_service() {
     echo "Group=$USER"
     [[ -n "$workdir" ]] && echo "WorkingDirectory=$workdir"
     echo "Environment=$(timer_quote "PATH=$path_value")"
-    echo "ExecStart=/usr/bin/bash $(timer_quote "$script")"
+    # The log is opened by this shell after systemd has dropped to User=, never by
+    # systemd itself: StandardOutput=append: is opened as root, so a symlink the
+    # server user planted in its own logs folder would make root append to any
+    # file. ($$ is a literal $ for systemd; $0 and $1 are the log and the script.)
+    echo "ExecStart=/usr/bin/bash -c 'exec >>\"\$\$0\" 2>&1; exec /usr/bin/bash \"\$\$1\"' $(timer_quote "$log") $(timer_quote "$script")"
     echo "TimeoutStartSec=3h"
-    echo "StandardOutput=append:${log//%/%%}"
-    echo "StandardError=append:${log//%/%%}"
   }
 }
 
