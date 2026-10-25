@@ -50,6 +50,9 @@ summary_print() {
   printf '  %-20s %s\n' "Backups:" "$backups"
   printf '  %-20s %s\n' "Scheduled restarts:" "$(_summary_onoff "${ANSWERS[RESTART_SCHEDULE.ENABLED]-false}")"
   printf '  %-20s %s\n' "Management API:" "$(_summary_onoff "${ANSWERS[API_SERVER.ENABLED]-false}")"
+  if [ "${ANSWERS[MIRROR.ENABLED]-false}" = true ]; then
+    printf '  %-20s %s\n' "Creative mirror:" "${ANSWERS[MIRROR.ROLE]-target}"
+  fi
 
   if [ "$(corrections_count)" -gt 0 ]; then
     echo

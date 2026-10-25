@@ -254,6 +254,7 @@ test_guided_applies_safety_rules_to_typed_answers() {
 1|
 0|
 1|
+1|
 EOF
   export WHIPTAIL_SHIM_REPLIES="$T/replies"
   local out
@@ -457,6 +458,7 @@ test_main_guided_answers_survive_into_the_pipeline() {
 1|
 1|
 0|
+1|
 1|
 EOF
   export WHIPTAIL_SHIM_REPLIES="$T/replies"

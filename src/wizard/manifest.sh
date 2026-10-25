@@ -86,4 +86,18 @@ wizard_manifest() {
   _wm api_wrapper API_SERVER.ENABLED bool yesno false guided "" "" \
     "Management API" \
     "The API wrapper is a small web service that lets other programs start, stop and manage the server. Most people do not need it, so it is off by default."
+
+  _wm mirror_enabled MIRROR.ENABLED bool yesno false guided "" "" \
+    "Creative mirror" \
+    "A creative mirror is a second server where players build in creative mode on a copy of this survival world, refreshed every night. It is optional and off by default; answering yes sets up this server as one half of it. See docs/mirror.md."
+
+  _wm mirror_role MIRROR.ROLE string \
+    "radiolist:source=This is the survival server (it publishes its world)|target=This is the creative server (it copies the survival world)" \
+    target guided validate_one_of:source:target mirror_enabled=true \
+    "Mirror role" \
+    "The survival server publishes its world files for the night; the creative server fetches them. Choose which one this machine is."
+
+  _wm mirror_remote MIRROR.REMOTE string input "" guided validate_mirror_remote mirror_role=target \
+    "Survival server address" \
+    "Where the survival server is, written as mcsync@address. The read-only account mcsync is created there by the mirror setup. For a new creative server, set the same seed as the survival world (the Minecraft seed option) before you continue."
 }

@@ -45,8 +45,8 @@ EOF
 }
 
 # Answers for the steps from the player slots to the end (whitelist no, no optional mods,
-# backups yes, no restarts, no webhook, no api wrapper).
-TAIL_REPLIES=$'0|A Minecraft Server\n0|normal\n1|\n0|\n0|\n1|\n0|\n1|'
+# backups yes, no restarts, no webhook, no api wrapper, no creative mirror).
+TAIL_REPLIES=$'0|A Minecraft Server\n0|normal\n1|\n0|\n0|\n1|\n0|\n1|\n1|'
 
 # Prints the run's output followed by rc=<n>. Usage: drive <stdin-text>
 drive() {
@@ -58,6 +58,42 @@ drive() {
 }
 
 cfg() { jq -c "$1" "$T/repo/variables.json"; }
+
+test_guided_mirror_answers_are_written_as_the_mirror_block_and_shown_in_the_summary() {
+  setup
+  export NODE_SHIM_RC=1
+  printf '%s\n' "0|my-world" "0|vanilla" "0|latest" "0|2G" "0|6" > "$T/replies"
+  # the tail with its last answer (mirror: no) replaced by yes, target, an address
+  printf '%s\n' "${TAIL_REPLIES%$'\n1|'}" "0|" "0|target" "0|mcsync@192.168.1.20" >> "$T/replies"
+  local out
+  out="$(drive $'y\ny\n')"
+  assert_contains "$out" "rc=0" "finishes"
+  assert_eq '{"ENABLED":true,"ROLE":"target","REMOTE":"mcsync@192.168.1.20"}' "$(cfg .MIRROR)" "the block is written from the answers"
+  assert_contains "$out" "Creative mirror:     target" "the summary names the role"
+}
+
+test_guided_mirror_off_leaves_the_block_inert_and_asks_nothing_more() {
+  setup
+  export NODE_SHIM_RC=1
+  printf '%s\n' "0|my-world" "0|vanilla" "0|latest" "0|2G" "0|6" > "$T/replies"
+  printf '%s\n' "$TAIL_REPLIES" >> "$T/replies"
+  local out
+  out="$(drive $'y\ny\n')"
+  assert_contains "$out" "rc=0" "finishes"
+  assert_eq '{"ENABLED":false}' "$(cfg .MIRROR)" "the block is the inert one from the example"
+  assert_not_contains "$out" "Creative mirror:" "the summary does not mention it"
+}
+
+test_guided_mirror_asks_again_for_an_address_that_is_not_mcsync_at_something() {
+  setup
+  export NODE_SHIM_RC=1
+  printf '%s\n' "0|my-world" "0|vanilla" "0|latest" "0|2G" "0|6" > "$T/replies"
+  printf '%s\n' "${TAIL_REPLIES%$'\n1|'}" "0|" "0|target" "0|survival.example" "0|root@survival.example" "0|mcsync@survival.example" >> "$T/replies"
+  local out
+  out="$(drive $'y\ny\n')"
+  assert_contains "$out" "rc=0" "finishes once a valid address is given"
+  assert_eq '"mcsync@survival.example"' "$(cfg .MIRROR.REMOTE)" "only the valid address was kept"
+}
 
 test_guided_flow_end_to_end() {
   setup
