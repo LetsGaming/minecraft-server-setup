@@ -304,6 +304,27 @@ check_xaero_config() {
   fi
 }
 
+# The optional creative mirror: skipped unless it is switched on for this instance.
+# When it is, the mirror's own doctor does the checking and its lines are shown
+# here with a mirror- prefix. Nothing else in the suite needs the mirror.
+check_mirror() {
+  if [[ "${MIRROR_ENABLED:-false}" != true ]]; then
+    report SKIP mirror "not configured"
+    return
+  fi
+  local entry="$SCRIPTS_DIR/../../mirror/mirror.sh" out line
+  if [[ ! -f "$entry" ]]; then
+    report WARN mirror "MIRROR_ENABLED is true but the mirror is not installed ($entry is missing); run mirror.sh setup"
+    return
+  fi
+  out="$(bash "$entry" doctor --scripts-dir "$SCRIPTS_DIR" 2>&1)" || true
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^\[(OK|WARN|FAIL|SKIP)\]\ ([^:]+):\ (.*)$ ]]; then
+      report "${BASH_REMATCH[1]}" "mirror-${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    fi
+  done <<< "$out"
+}
+
 echo "Doctor: $INSTANCE_NAME"
 check_service
 check_schedule
@@ -312,6 +333,7 @@ check_last_backup
 check_sudoers
 check_wrapper
 check_xaero_config
+check_mirror
 check_webhook
 
 echo "Summary: $N_OK ok, $N_WARN warnings, $N_FAIL failed, $N_SKIP skipped"

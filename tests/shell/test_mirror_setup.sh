@@ -307,6 +307,28 @@ test_pin_host_refuses_a_fingerprint_that_does_not_match_and_a_missing_one_withou
   assert_nonzero "$RC" "a host with a space is refused"
 }
 
+test_manage_mirror_delegates_to_the_installed_mirror_and_says_so_when_there_is_none() {
+  setup
+  local base="$T/mc"
+  mkdir -p "$base/scripts/inst/common"
+  # deployed layout: <target>/scripts/<instance>/manage.sh, the mirror at <target>/mirror
+  cp "$REPO_ROOT/src/scripts/manage.sh" "$base/scripts/inst/manage.sh"
+  cp "$T/scripts/common/variables.txt" "$base/scripts/inst/common/variables.txt"
+  OUT="$(bash "$base/scripts/inst/manage.sh" mirror status inst 2>&1 < /dev/null)"; RC=$?
+  assert_rc 1 "$RC" "without the mirror the command fails politely"
+  assert_contains "$OUT" "The creative mirror is not installed. It is optional" "and says the mirror is optional"
+  mkdir -p "$base/mirror"
+  { echo '#!/bin/bash'; echo 'echo "mirror-called: $*"'; } > "$base/mirror/mirror.sh"
+  OUT="$(bash "$base/scripts/inst/manage.sh" mirror status inst --extra 2>&1 < /dev/null)"; RC=$?
+  assert_rc 0 "$RC" "with the mirror installed it is delegated to"
+  assert_contains "$OUT" "mirror-called: status --scripts-dir $base/scripts/inst --extra" "the command, the instance's scripts folder and the extra arguments are passed on"
+  OUT="$(bash "$base/scripts/inst/manage.sh" mirror status 2>&1 < /dev/null)"; RC=$?
+  assert_rc 1 "$RC" "a missing instance is a usage error"
+  OUT="$(bash "$base/scripts/inst/manage.sh" mirror status nosuch 2>&1 < /dev/null)"; RC=$?
+  assert_rc 1 "$RC" "an unknown instance is refused"
+  assert_contains "$OUT" "not found" "and called not found"
+}
+
 test_doctor_is_silent_about_an_instance_without_a_mirror_and_flags_missing_pieces_otherwise() {
   setup
   inst src source

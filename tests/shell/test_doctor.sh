@@ -130,6 +130,48 @@ test_sudoers_files_are_checked_with_visudo() {
   assert_contains "$OUT" "[FAIL] sudoers" "reported as sudoers"
 }
 
+test_the_mirror_check_is_skipped_unless_the_mirror_is_switched_on() {
+  setup
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "an instance without a mirror is healthy"
+  assert_contains "$OUT" "[SKIP] mirror: not configured" "the mirror check is skipped, not failed"
+}
+
+test_an_enabled_mirror_that_is_not_installed_is_a_warning() {
+  setup
+  set_var MIRROR_ENABLED true
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a warning does not fail the run"
+  assert_contains "$OUT" "[WARN] mirror: MIRROR_ENABLED is true but the mirror is not installed" "named"
+}
+
+test_an_enabled_mirror_reports_through_its_own_doctor_with_a_prefix() {
+  setup
+  set_var MIRROR_ENABLED true
+  # the mirror lives two folders above the scripts folder; here that is the test root
+  mkdir -p "$T/../mirror-doctor-$$"
+  local base="$T/../mirror-doctor-$$"
+  mkdir -p "$base/mirror"
+  cat > "$base/mirror/mirror.sh" <<'SH'
+#!/bin/bash
+echo "[OK] timer: the pull timer is enabled"
+echo "[FAIL] snapshot: the newest snapshot is 40h old"
+echo "some other line"
+SH
+  # point the check at it through the same relative path the real layout has
+  mkdir -p "$base/mc/scripts"
+  rm -rf "$base/mc/scripts/testinst"
+  cp -r "$T/scripts" "$base/mc/scripts/testinst"
+  mkdir -p "$base/mc/mirror"
+  cp "$base/mirror/mirror.sh" "$base/mc/mirror/mirror.sh"
+  OUT="$(cd "$base/mc/scripts/testinst" && bash "$DOCTOR" 2>&1 < /dev/null)"; RC=$?
+  rm -rf "$base"
+  assert_rc 1 "$RC" "a failure in the mirror fails the run"
+  assert_contains "$OUT" "[OK] mirror-timer: the pull timer is enabled" "its lines carry a mirror- prefix"
+  assert_contains "$OUT" "[FAIL] mirror-snapshot: the newest snapshot is 40h old" "and its failure counts"
+  assert_not_contains "$OUT" "some other line" "other output is not shown as a result"
+}
+
 test_an_old_node_for_the_wrapper_warns_but_does_not_fail() {
   setup
   set_var API_SERVER_ENABLED true

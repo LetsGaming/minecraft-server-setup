@@ -53,6 +53,9 @@ Commands:
   update <instance>   Check for updates for a specific instance
   doctor [instance]   Check scheduled jobs, service, storage, sudoers and the wrapper
                       (read-only; run as an admin with sudo; --test-webhook sends a test)
+  mirror <command> <instance> [args...]
+                      The optional creative mirror (status, doctor, export, pull, test, ...);
+                      only works once mirror.sh setup has been run for the instance
 
 Examples:
   $0 list
@@ -196,6 +199,25 @@ case "$COMMAND" in
       bash "$(get_instance_scripts_dir "$doctor_instance")/misc/doctor.sh" $test_flag || doctor_rc=1
     done
     exit "$doctor_rc"
+    ;;
+  mirror)
+    # manage.sh mirror <command> <instance> [args...]: here INSTANCE is the mirror
+    # command and the instance is the first argument. The mirror is optional and
+    # lives next to the scripts folder; nothing else in the suite needs it.
+    mirror_command="$INSTANCE"
+    mirror_instance="${1:-}"
+    [[ $# -gt 0 ]] && shift
+    if [[ -z "$mirror_command" || -z "$mirror_instance" ]]; then
+      echo "[ERROR] Usage: $0 mirror <command> <instance> [args...]"
+      exit 1
+    fi
+    require_instance "$mirror_instance"
+    mirror_entry="$(dirname "$(dirname "$SCRIPT_DIR")")/mirror/mirror.sh"
+    if [[ ! -f "$mirror_entry" ]]; then
+      echo "[mirror] The creative mirror is not installed. It is optional; see docs/mirror.md and run mirror.sh setup source|target."
+      exit 1
+    fi
+    exec bash "$mirror_entry" "$mirror_command" --scripts-dir "$(get_instance_scripts_dir "$mirror_instance")" "$@"
     ;;
   help|--help|-h)
     print_help
