@@ -40,6 +40,7 @@ const downloadedVersionsPath = path.resolve(
 //   modLoader  Mod loader (e.g. fabric). Falls back to downloaded_versions.json.
 // Serialized with other mod changes and with restore, rollback and upgrade
 // (S-024): re-runs this script under the instance's operation lock.
+require("./lib/args").exitOnHelp("Usage: node add-mod.js <slug-or-project-id> [--slug=...] [--mcVersion=...] [--modLoader=...]");
 require("./lib/opLock").guardModOperation();
 const { readManifest, writeManifest } = require("./lib/manifest");
 const { parseArgs } = require("./lib/args");

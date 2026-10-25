@@ -38,7 +38,8 @@
 const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
-const { parseArgs } = require("./lib/args");
+const { parseArgs, exitOnHelp } = require("./lib/args");
+exitOnHelp("Usage: node upgrade-server.js <version> [--expect-unavailable=a,b] [--countdown=<seconds>] [--start-timeout=<seconds>] [--prune-plan=<id>]");
 
 /** Ceilings for each step of the job (S-015). Generous: a timeout here means wedged. */
 const STEP_TIMEOUT_MS = {

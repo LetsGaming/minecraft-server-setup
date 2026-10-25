@@ -12,6 +12,7 @@
 
 // Serialized with other mod changes and with restore, rollback and upgrade
 // (S-024): re-runs this script under the instance's operation lock.
+require("./lib/args").exitOnHelp("Usage: node update-mod.js <slug> [--json]");
 require("./lib/opLock").guardModOperation();
 const { parseArgs } = require("./lib/args");
 const { runUpdates, emitJson, failWith, JSON_MODE } = require("./update-mods.js");

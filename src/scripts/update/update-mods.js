@@ -323,6 +323,7 @@ async function main() {
 module.exports = { runUpdates, emitJson, failWith, JSON_MODE };
 
 if (require.main === module) {
+  require("./lib/args").exitOnHelp("Usage: node update-mods.js [mcVersion] [--mcVersion=<ver>] [--migrate] [--json]");
   // Serialized with other mod changes and with restore, rollback and upgrade
   // (S-024): re-runs this script under the instance's operation lock.
   require("./lib/opLock").guardModOperation();
