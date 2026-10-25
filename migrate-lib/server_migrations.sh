@@ -231,7 +231,8 @@ _sm_move_job() {
     return 3
   fi
   (
-    export INSTANCE_NAME="$SM_INSTANCE_NAME" USER="${USER:-$(id -un)}" SYSTEMD_UNIT_DIR="$(_sm_unit_dir)" TIMER_SUDO="${SM_SUDO-sudo -n}"
+    local unit_dir; unit_dir="$(_sm_unit_dir)"
+    export INSTANCE_NAME="$SM_INSTANCE_NAME" USER="${USER:-$(id -un)}" SYSTEMD_UNIT_DIR="$unit_dir" TIMER_SUDO="${SM_SUDO-sudo -n}"
     source "$SM_SOURCE_ROOT/src/setup/management/timer_lib.sh"
     mkdir -p "$(dirname "$log")"
     timer_install "$suffix" "$label of $INSTANCE_NAME" "$(_sm_cron_script "$script")" "$calendar" "$log" false "$SM_SCRIPTS_DIR" > /dev/null
@@ -239,7 +240,8 @@ _sm_move_job() {
   if ! systemctl is-enabled "${SM_INSTANCE_NAME}-${suffix}.timer" > /dev/null 2>&1; then
     # Not usable: take the units back out so a failed run leaves nothing half-installed.
     (
-      export INSTANCE_NAME="$SM_INSTANCE_NAME" SYSTEMD_UNIT_DIR="$(_sm_unit_dir)" TIMER_SUDO="${SM_SUDO-sudo -n}"
+      local unit_dir; unit_dir="$(_sm_unit_dir)"
+      export INSTANCE_NAME="$SM_INSTANCE_NAME" SYSTEMD_UNIT_DIR="$unit_dir" TIMER_SUDO="${SM_SUDO-sudo -n}"
       source "$SM_SOURCE_ROOT/src/setup/management/timer_lib.sh"
       timer_remove "$suffix"
     ) > /dev/null 2>&1 || true
