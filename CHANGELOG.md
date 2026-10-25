@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **An optional creative mirror (`mirror.sh`, `docs/mirror.md`).** A second server where players build in creative mode on a nightly copy of the survival world, with flat build plots beside it. The survival server exports an immutable snapshot of its chunk folders (a short save-off window, or none with `stage` mode); the creative server pulls it over SSH with a read-only `rrsync` account and swaps the chunk folders in a few seconds. It installs on servers that already run (`mirror.sh setup source|target`, which never restarts them) or together with a new one (`--mirror-source`, `--mirror-target`, the `MIRROR` block of `variables.json`, a Guided wizard question). `mirror.sh prepare` readies a new creative server (seed, creative mode, pinned FabricPlots and Dimensional Inventories with a checked SHA-512, pools). Pairing is `authorize` plus `pin-host`, and `mirror.sh test` checks that writes, shell commands, path escapes and a wrong host key are refused. Safety behaviour: refuses a snapshot that is empty, much smaller or of another Minecraft version, stops a transfer that outgrows its manifest, checks disk space before deleting anything, rolls back a server that does not start, and puts a swap that was killed half way back consistently. `manage.sh mirror ...` and `manage.sh doctor` show it; without it nothing in the suite changes. Webhook events `mirror_export_failed`, `mirror_sync_complete`, `mirror_sync_failed`.
+
 ### Changed
 
 - **Breaking: setup now installs a vanilla/Fabric server by default; `--modpack` selects a CurseForge modpack.** The `--vanilla` flag is removed (an unknown flag now stops with an error) and `npm run setup:vanilla` is replaced by `npm run setup:modpack`. Anyone who ran plain `main.sh` for a modpack must now pass `--modpack`. `main.sh --check` only reports the CurseForge settings when `--modpack` is given.

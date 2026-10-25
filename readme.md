@@ -59,6 +59,7 @@ Setup does not configure your router and cannot tell whether it is configured. A
 - **Multi-Instance CLI (`manage.sh`):** Status overview, start/stop/restart/backup across multiple server instances from the shell.
 - **Remote control via the API wrapper:** Optional HTTP service (`API_SERVER`) that exposes these scripts to the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot and its web dashboard — console, backups, rollback, and live logs, without a second panel on this host.
 - **Maintenance Mode:** MOTD swap, non-admin kick monitoring, automatic cleanup on exit.
+- **Creative mirror (optional):** a second server where players build in creative mode on a nightly copy of your survival world, with flat build plots next to it. Set up on existing servers or together with a new one; nothing else in the suite depends on it. See [docs/mirror.md](docs/mirror.md).
 
 ## Prerequisites
 
@@ -204,6 +205,8 @@ Options (`--help` lists them):
 | `--no-service` | Skip creating the systemd service |
 | `--no-backup` | Skip creating the backup job |
 | `--api-server` | Set up the minecraft-bot API wrapper service |
+| `--mirror-source` | Also set this server up as the survival side of the optional creative mirror ([docs/mirror.md](docs/mirror.md)) |
+| `--mirror-target` | Also prepare this server as the creative side of the mirror; needs `MIRROR.REMOTE` in `variables.json` |
 | `--modpack` | Set up a CurseForge modpack server instead of the default vanilla/Fabric server |
 | `--y` | Skip the prompts and take the defaults. This **accepts the EULA** |
 | `--default` | Run the Default route: safe defaults, almost no questions. Without a terminal it needs `--agree-eula` |
@@ -305,6 +308,7 @@ If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. A name in the l
 | Running the wrapper as its own unprivileged user | [docs/service-user.md](docs/service-user.md) |
 | Bringing an installed server up to the current suite (`migrate.sh`) | [docs/migrations.md](docs/migrations.md) |
 | Moving to a new Minecraft version | [docs/upgrade.md](docs/upgrade.md) |
+| A creative server that mirrors the survival world nightly (optional) | [docs/mirror.md](docs/mirror.md) |
 | Deleting unused chunks before an upgrade | [docs/chunk-pruning.md](docs/chunk-pruning.md), [benchmarks](docs/prune-benchmarks.md) |
 | Terms used across the docs | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
 | Retiring the bundled web interface | [docs/retiring-web-interface.md](docs/retiring-web-interface.md) |

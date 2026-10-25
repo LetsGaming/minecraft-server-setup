@@ -194,7 +194,7 @@ else
   }
 }
 JSON
-  say "Dimensional Inventories pools written: plots, mirror and the Nether and End each keep their own inventory, all creative"
+  say "Dimensional Inventories pools written: the plots, the mirrored overworld and the Nether with the End (one pool) each keep their own inventory, all creative"
 fi
 
 say "done. On a 26.3 server white-list defaults to true: add players or set it on purpose."
