@@ -230,8 +230,11 @@ _rollback_paths() {
   return 0
 }
 
+# Units this run may create. The backup and restart jobs are a service plus a
+# timer each; the removal below handles both files of a name.
 _rollback_units() {
-  printf '%s\n' "$INSTANCE_NAME" "${TARGET_DIR_NAME}-api-server" "${TARGET_DIR_NAME}-manager"
+  printf '%s\n' "$INSTANCE_NAME" "${TARGET_DIR_NAME}-api-server" "${TARGET_DIR_NAME}-manager" \
+    "${INSTANCE_NAME}-backup" "${INSTANCE_NAME}-restart"
 }
 
 # Call once, after the config is validated and before the first change.
@@ -245,7 +248,7 @@ snapshot_setup_state() {
     if [[ -e "$p" ]]; then _PRE_PATH_EXISTED["$p"]=true; else _PRE_PATH_EXISTED["$p"]=false; fi
   done < <(_rollback_paths)
   while IFS= read -r u; do
-    if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" ]]; then _PRE_UNIT_EXISTED["$u"]=true; else _PRE_UNIT_EXISTED["$u"]=false; fi
+    if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" || -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.timer" ]]; then _PRE_UNIT_EXISTED["$u"]=true; else _PRE_UNIT_EXISTED["$u"]=false; fi
   done < <(_rollback_units)
   local api_config="$base/services/api-server/api-server-config.json"
   if [[ -f "$api_config" ]]; then
@@ -283,16 +286,19 @@ run_rollback() {
 
   # Units this run installed. A unit that existed before (the shared
   # api-server unit of an earlier instance) is left running and in place.
-  local u removed_unit=false
+  local u ext removed_unit=false
   while IFS= read -r u; do
     [[ "${_PRE_UNIT_EXISTED[$u]:-true}" == false ]] || continue
-    if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" ]]; then
-      log "Removing service: ${u}.service"
-      sudo systemctl stop    "${u}.service" 2>/dev/null || true
-      sudo systemctl disable "${u}.service" 2>/dev/null || true
-      sudo rm -f "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service"
-      removed_unit=true
-    fi
+    # The timer goes first so it cannot start its service again.
+    for ext in timer service; do
+      if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.${ext}" ]]; then
+        log "Removing ${ext}: ${u}.${ext}"
+        sudo systemctl stop    "${u}.${ext}" 2>/dev/null || true
+        sudo systemctl disable "${u}.${ext}" 2>/dev/null || true
+        sudo rm -f "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.${ext}"
+        removed_unit=true
+      fi
+    done
   done < <(_rollback_units)
   [[ "$removed_unit" == true ]] && { sudo systemctl daemon-reload 2>/dev/null || true; }
 
