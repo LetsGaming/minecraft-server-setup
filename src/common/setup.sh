@@ -28,6 +28,60 @@ setup_api_wrapper() {
   run_or_echo "sudo systemctl restart \"${TARGET_DIR_NAME}-api-server.service\""
 }
 
+# The optional creative mirror (docs/mirror.md): set up from the MIRROR block of
+# variables.json, or from --mirror-source / --mirror-target. It runs after the
+# install already counts as a success, so it can never roll the install back. On a
+# target a failure also blocks the automatic start: the first start would create a
+# world with the wrong seed and no plot dimension.
+run_mirror_setup() {
+  local role="" remote host seed scripts_dir cmd
+  local -a args
+  if [[ "${MIRROR_SOURCE:-false}" == true && "${MIRROR_TARGET:-false}" == true ]]; then
+    warn "--mirror-source and --mirror-target cannot be used together; the mirror was not set up."
+    return 0
+  fi
+  [[ "${MIRROR_SOURCE:-false}" == true ]] && role=source
+  [[ "${MIRROR_TARGET:-false}" == true ]] && role=target
+  if [[ -z "$role" ]]; then
+    role=$(node -e "const m=require('$SCRIPT_DIR/variables.json').MIRROR||{};console.log(m.ENABLED===true?(m.ROLE||''):'')" 2> /dev/null || true)
+  fi
+  [[ "$role" == source || "$role" == target ]] || return 0
+
+  scripts_dir="$MAIN_DIR/$TARGET_DIR_NAME/scripts/$INSTANCE_NAME"
+  log "Setting up the creative mirror ($role)..."
+  args=(setup "$role" --scripts-dir "$scripts_dir")
+  if [[ "$role" == target ]]; then
+    remote=$(node -e "const m=require('$SCRIPT_DIR/variables.json').MIRROR||{};console.log(m.REMOTE||'')" 2> /dev/null || true)
+    host="${remote#mcsync@}"
+    if [[ -z "$host" ]]; then
+      warn "A mirror target needs MIRROR.REMOTE (mcsync@address of the survival server) in variables.json; the mirror was not set up."
+      warn "The server is not started, so it does not create the wrong world. Run mirror.sh setup target and mirror.sh prepare, then start it."
+      NO_START=true
+      return 0
+    fi
+    args+=(--source "$host")
+  fi
+  printf -v cmd '%q ' bash "$SCRIPT_DIR/mirror.sh" "${args[@]}"
+  if ! run_or_echo "$cmd"; then
+    warn "Setting up the creative mirror failed (see above); the server itself is installed."
+    [[ "$role" == target ]] && NO_START=true
+    return 0
+  fi
+  if [[ "$role" == target ]]; then
+    seed=$(node -e "console.log(String((require('$SCRIPT_DIR/variables.json').JAVA.SERVER||{}).SEED||''))" 2> /dev/null || true)
+    args=(prepare --scripts-dir "$scripts_dir")
+    [[ -z "$seed" ]] || args+=(--seed "$seed")
+    printf -v cmd '%q ' bash "$SCRIPT_DIR/mirror.sh" "${args[@]}"
+    if ! run_or_echo "$cmd"; then
+      warn "Preparing the creative server failed (see above). It was NOT started, so no world exists yet."
+      warn "Fix the problem, run 'mirror.sh prepare --instance $INSTANCE_NAME', then start the server."
+      NO_START=true
+      return 0
+    fi
+  fi
+  log "The mirror still has to be paired with the other server: see docs/mirror.md."
+}
+
 # variables.json holds this install's secrets, so it is not tracked by git
 # (S-028); a fresh clone has only variables.example.json. Create the live file
 # from it on the first run and stop, so it is edited before anything happens.

@@ -34,6 +34,8 @@ declare -A ARG_OPTS=(
   ["--y"]="ACCEPT_ALL=false|Accept all defaults and skip prompts"
   ["--check"]="CHECK_ONLY=false|Validate config and environment without running setup"
   ["--modpack"]="MODPACK=false|Set up a CurseForge modpack server instead of a vanilla/Fabric server"
+  ["--mirror-source"]="MIRROR_SOURCE=false|Also set this server up as the survival side of the optional creative mirror"
+  ["--mirror-target"]="MIRROR_TARGET=false|Also prepare this server as the creative side of the optional creative mirror (needs MIRROR.REMOTE in variables.json)"
   ["--default"]="DEFAULT_ROUTE=false|Quick setup with safe defaults and almost no questions"
   ["--guided"]="GUIDED_ROUTE=false|Guided setup wizard with explanations for each choice"
   ["--allow-nodesource"]="ALLOW_NODESOURCE=false|Allow adding the NodeSource apt repository when Node.js is too old"
@@ -95,6 +97,8 @@ run_post_mod_config
 run_optional_setup
 # Mark success before cleanup/start so those failures don't trigger rollback
 _SETUP_SUCCESS=true
+# Optional and after the success mark: a mirror problem never rolls the install back.
+run_mirror_setup
 run_server_cleanup
 maybe_start_server
 
