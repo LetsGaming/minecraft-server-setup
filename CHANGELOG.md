@@ -5,6 +5,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: setup now installs a vanilla/Fabric server by default; `--modpack` selects a CurseForge modpack.** The `--vanilla` flag is removed (an unknown flag now stops with an error) and `npm run setup:vanilla` is replaced by `npm run setup:modpack`. Anyone who ran plain `main.sh` for a modpack must now pass `--modpack`. `main.sh --check` only reports the CurseForge settings when `--modpack` is given.
+
 ### Security
 
 - **A failed setup run no longer deletes the whole install.** The rollback removed the entire base directory, so a failure while adding a second instance (or any re-run) took every instance, world and default backup with it. Setup now records what exists before its first change and rolls back only the paths and units it created, puts the crontab back exactly and restores the shared wrapper's config. `TARGET_DIR_NAME` must be a plain folder name (`src/common/setup.sh`, `src/setup/common/loadVariables.js`).

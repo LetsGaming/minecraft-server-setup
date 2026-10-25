@@ -33,7 +33,7 @@ declare -A ARG_OPTS=(
   ["--verbose"]="VERBOSE=false|Print additional logging info"
   ["--y"]="ACCEPT_ALL=false|Accept all defaults and skip prompts"
   ["--check"]="CHECK_ONLY=false|Validate config and environment without running setup"
-  ["--vanilla"]="VANILLA=false|Set up a vanilla/Fabric server instead of a modpack"
+  ["--modpack"]="MODPACK=false|Set up a CurseForge modpack server instead of a vanilla/Fabric server"
   ["--default"]="DEFAULT_ROUTE=false|Quick setup with safe defaults and almost no questions"
   ["--guided"]="GUIDED_ROUTE=false|Guided setup wizard with explanations for each choice"
   ["--allow-nodesource"]="ALLOW_NODESOURCE=false|Allow adding the NodeSource apt repository when Node.js is too old"

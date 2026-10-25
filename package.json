@@ -9,7 +9,7 @@
   },
   "scripts": {
     "setup": "bash main.sh",
-    "setup:vanilla": "bash main.sh --vanilla",
+    "setup:modpack": "bash main.sh --modpack",
     "check": "bash main.sh --check"
   },
   "dependencies": {

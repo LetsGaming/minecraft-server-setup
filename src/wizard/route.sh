@@ -104,10 +104,10 @@ wizard_apply_flags() {
   EULA=true
   ACCEPT_ALL=true
   case "${ANSWERS[server_kind]-fabric}" in
-    modpack) VANILLA=false ;;
-    *) VANILLA=true ;;
+    modpack) MODPACK=true ;;
+    *) MODPACK=false ;;
   esac
-  export NO_START NO_SERVICE NO_BACKUP SETUP_API_SERVER EULA ACCEPT_ALL VANILLA
+  export NO_START NO_SERVICE NO_BACKUP SETUP_API_SERVER EULA ACCEPT_ALL MODPACK
 }
 
 _WZ_CF_FILE=""

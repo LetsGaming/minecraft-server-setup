@@ -112,7 +112,7 @@ run_vanilla_setup() {
 }
 
 run_server_setup() {
-  if [ "$VANILLA" = true ]; then run_vanilla_setup; else run_modpack_setup; fi
+  if [ "$MODPACK" = true ]; then run_modpack_setup; else run_vanilla_setup; fi
 }
 
 run_post_mod_config() {
@@ -132,7 +132,7 @@ run_post_mod_config() {
 }
 
 run_server_cleanup() {
-  if [ "$VANILLA" = true ]; then run_vanilla_cleanup; else run_modpack_cleanup; fi
+  if [ "$MODPACK" = true ]; then run_modpack_cleanup; else run_vanilla_cleanup; fi
 }
 
 run_setup_startup() {
@@ -465,10 +465,12 @@ run_preflight_check() {
     fi
   done
 
-  # 5. Check CurseForge API config (for modpack mode)
+  # 5. Check CurseForge API config (only needed with --modpack)
   echo "[CHECK] CurseForge config..."
   local cf_config="$SCRIPT_DIR/src/setup/download/json/curseforge_variables.json"
-  if [ -f "$cf_config" ]; then
+  if [ "${MODPACK:-false}" != true ]; then
+    echo "  - skipped (vanilla/Fabric setup; use --modpack for a CurseForge pack)"
+  elif [ -f "$cf_config" ]; then
     local api_key pack_id
     api_key=$(node -e "console.log(require('$cf_config').api_key)" 2>/dev/null)
     pack_id=$(node -e "console.log(require('$cf_config').pack_id)" 2>/dev/null)

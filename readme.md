@@ -158,7 +158,7 @@ bash <target>/scripts/<instance>/misc/xaero_config.sh apply <server_dir>
 
 Restart the server afterwards for the change to take effect.
 
-For modpack setup, also configure:
+For modpack setup (`--modpack`), also configure:
 - [`curseforge_variables.json`](./src/setup/download/json/curseforge_variables.example.json) — API key and pack ID. This file is git-ignored (it holds your API key). Copy the template first:
   ```bash
   cp src/setup/download/json/curseforge_variables.example.json \
@@ -178,11 +178,11 @@ bash main.sh
 # Read-only check of config, tools and disk space (separate from the three routes)
 sudo -u <user> bash main.sh --check
 
-# Power-user route: run setup from your own variables.json (modpack server; use sudo -u <user> to run it as another user)
+# Power-user route: run setup from your own variables.json (vanilla/Fabric server; use sudo -u <user> to run it as another user)
 sudo -u <user> bash main.sh
 
-# Vanilla/Fabric server
-sudo -u <user> bash main.sh --vanilla
+# CurseForge modpack server instead (needs curseforge_variables.json)
+sudo -u <user> bash main.sh --modpack
 
 # With minecraft-bot API wrapper (for remote bot deployments)
 sudo -u <user> bash main.sh --api-server
@@ -204,7 +204,7 @@ Options (`--help` lists them):
 | `--no-service` | Skip creating the systemd service |
 | `--no-backup` | Skip creating the backup job |
 | `--api-server` | Set up the minecraft-bot API wrapper service |
-| `--vanilla` | Set up a vanilla/Fabric server instead of a modpack |
+| `--modpack` | Set up a CurseForge modpack server instead of the default vanilla/Fabric server |
 | `--y` | Skip the prompts and take the defaults. This **accepts the EULA** |
 | `--default` | Run the Default route: safe defaults, almost no questions. Without a terminal it needs `--agree-eula` |
 | `--guided` | Run the Guided route: the whiptail wizard. Needs a terminal |

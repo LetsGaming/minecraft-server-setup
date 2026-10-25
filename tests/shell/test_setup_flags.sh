@@ -45,29 +45,34 @@ test_the_flag_still_works_when_disabled_in_config() {
   assert_eq "flag=true asked=0" "$(prompt_result true)" "--api-server is kept and not asked again"
 }
 
-# Which setup and cleanup function a run picks for VANILLA.
-dispatch_result() { # VANILLA value
+# Which setup and cleanup function a run picks for MODPACK.
+dispatch_result() { # MODPACK value
   (
     run_modpack_setup() { echo -n "modpack-setup "; }
     run_vanilla_setup() { echo -n "vanilla-setup "; }
     run_modpack_cleanup() { echo -n "modpack-cleanup "; }
     run_vanilla_cleanup() { echo -n "vanilla-cleanup "; }
     source <(sed -n '/^run_server_setup()/,/^}/p;/^run_server_cleanup()/,/^}/p' "$REPO/src/common/setup.sh")
-    VANILLA="$1"
+    MODPACK="$1"
     run_server_setup; run_server_cleanup
   )
 }
 
-test_a_modpack_run_uses_the_modpack_setup_and_cleanup() {
-  assert_eq "modpack-setup modpack-cleanup " "$(dispatch_result false)" "default is the modpack"
+test_a_default_run_uses_the_vanilla_setup_and_cleanup() {
+  assert_eq "vanilla-setup vanilla-cleanup " "$(dispatch_result false)" "default is vanilla/Fabric"
 }
 
-test_the_vanilla_flag_switches_setup_and_cleanup() {
-  assert_eq "vanilla-setup vanilla-cleanup " "$(dispatch_result true)" "--vanilla picks the vanilla pair"
+test_the_modpack_flag_switches_setup_and_cleanup() {
+  assert_eq "modpack-setup modpack-cleanup " "$(dispatch_result true)" "--modpack picks the modpack pair"
 }
 
-test_main_declares_the_vanilla_flag_and_the_old_script_is_gone() {
-  assert_contains "$(grep -- '"--vanilla"' "$REPO/main.sh")" "VANILLA=false" "flag is declared with a false default"
+test_an_unset_modpack_variable_means_vanilla() {
+  assert_eq "vanilla-setup vanilla-cleanup " "$(dispatch_result "")" "unset MODPACK falls back to vanilla"
+}
+
+test_main_declares_the_modpack_flag_and_drops_the_vanilla_flag() {
+  assert_contains "$(grep -- '"--modpack"' "$REPO/main.sh")" "MODPACK=false" "flag is declared with a false default"
+  assert_eq "" "$(grep -- '"--vanilla"' "$REPO/main.sh" || true)" "--vanilla is no longer declared"
   assert_missing "$REPO/main-vanilla.sh" "main-vanilla.sh is removed"
 }
 
