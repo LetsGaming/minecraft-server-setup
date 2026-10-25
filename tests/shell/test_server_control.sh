@@ -311,6 +311,18 @@ test_the_player_count_reads_the_servers_reply_after_the_command() {
   assert_eq "Alex, Steve" "$OUT" "the names too"
 }
 
+test_the_player_count_reads_the_26_3_system_chat_reply() {
+  setup
+  server_running
+  export SCREEN_SHIM_SAVE_LOG="$LOG"
+  export SCREEN_SHIM_LIST_REPLY="[00:00:05] [Server thread/INFO]: System chat: There are 1 of a max of 20 players online: Alex"
+  OUT="$(in_scripts get_player_count 2>&1)"; RC=$?
+  assert_rc 0 "$RC" "the 26.3 reply is recognised"
+  assert_eq "1" "$OUT" "the count"
+  OUT="$(in_scripts get_player_list 2>&1)"
+  assert_eq "Alex" "$OUT" "and the name"
+}
+
 test_an_unanswered_list_is_an_unknown_count_not_zero() {
   setup
   server_running

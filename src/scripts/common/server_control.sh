@@ -225,9 +225,10 @@ strip_log_prefix() {
 # ── Player info ──
 
 # The server's own answer to /list in the log: its bracketed tags, then the
-# sentence at the start of the message. A chat line starts with <name> and
-# /say with [Server], so neither can pass for it.
-_LIST_REPLY_RE='^(\[[^]]*\][[:space:]]*)+: There are [0-9]+(/| of a max of )[0-9]+ players online'
+# sentence at the start of the message (Minecraft 26.3 puts "System chat: " in
+# front of it). A chat line starts with <name> and /say with [Server], so
+# neither can pass for it.
+_LIST_REPLY_RE='^(\[[^]]*\][[:space:]]*)+: (System chat: )?There are [0-9]+(/| of a max of )[0-9]+ players online'
 
 # _list_reply_since <byte-offset>
 # The last /list answer written to the log after the offset, if any.
