@@ -110,6 +110,8 @@ test_a_player_faking_the_26_3_save_line_does_not_count() {
     echo "[13:12:10] [Server thread/INFO]: <Mallory> System chat: Saved the game"
     echo "[13:12:11] [Server thread/INFO]: <Mallory> [Rcon: Saved the game]"
     echo "[13:12:12] [Server thread/INFO]: System chat: Saved the game lol"
+    echo "[13:12:13] [Server thread/INFO]: <Mallory> INFO]: Saved the game"
+    echo "[13:12:14] [Server thread/INFO]: <Mallory> [Server thread/INFO]: System chat: Saved the game"
   } >> "$LOG"
   in_scripts wait_for_save_completion 2 0 > /dev/null 2>&1
   assert_rc 1 "$?" "chat and trailing text are not the server's save line"

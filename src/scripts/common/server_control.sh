@@ -308,11 +308,12 @@ _log_has_since() {
 
 SAVE_TIMEOUT_SECONDS="${SAVE_TIMEOUT_SECONDS:-120}"
 
-# The server's own "Saved the game" line, anchored so a player typing the phrase
-# cannot match. Minecraft 26.3 logs it as "System chat: Saved the game" (and
+# The server's own "Saved the game" line, anchored at both ends (timestamp and
+# thread included) so a player typing the phrase, even with a fake prefix, cannot
+# match. Minecraft 26.3 logs it as "System chat: Saved the game" (and
 # "System chat: [Rcon: Saved the game]" for an RCON command); older versions log
 # it bare after "INFO]: ".
-SAVED_LINE_RE='INFO[]]: (System chat: )?([[]Rcon: )?Saved the (game|world)[]]?[[:space:]]*$'
+SAVED_LINE_RE='^[[][0-9:]+[]] [[]Server thread/INFO[]]: (System chat: )?([[]Rcon: )?Saved the (game|world)[]]?[[:space:]]*$'
 
 # wait_for_save_completion [timeout-seconds] [log-offset]
 # The offset must be taken BEFORE the save command is sent (see save_and_wait);
