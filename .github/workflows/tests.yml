@@ -42,3 +42,11 @@ jobs:
         env:
           MC_TEST_REAL_TOOLS: "1"
         run: bash tests/shell/run.sh test_backup.sh test_restore.sh test_rollback.sh test_cleanup.sh test_run_backup.sh
+
+      # Debian and Ubuntu create a user's files group-writable (umask 002); the
+      # suites above run under the runner's 022, which hid a staging mirror that
+      # came back group-writable after a refresh.
+      - name: Backup suites under umask 002
+        env:
+          MC_TEST_REAL_TOOLS: "1"
+        run: bash -c 'umask 002 && bash tests/shell/run.sh test_backup.sh test_run_backup.sh'
