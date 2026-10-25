@@ -84,6 +84,37 @@ test_a_player_typing_saved_does_not_count_as_a_save() {
   assert_rc 1 "$?" "chat is not the server's save line (S-009)"
 }
 
+test_wait_for_save_accepts_the_26_3_console_line() {
+  setup
+  server_running
+  : > "$LOG"
+  echo "[13:12:10] [Server thread/INFO]: System chat: Saved the game" >> "$LOG"
+  in_scripts wait_for_save_completion 2 0 > /dev/null 2>&1
+  assert_rc 0 "$?" "26.3 logs the save as a system chat line"
+}
+
+test_wait_for_save_accepts_the_26_3_rcon_line() {
+  setup
+  server_running
+  : > "$LOG"
+  echo "[13:12:10] [Server thread/INFO]: System chat: [Rcon: Saved the game]" >> "$LOG"
+  in_scripts wait_for_save_completion 2 0 > /dev/null 2>&1
+  assert_rc 0 "$?" "an RCON-issued save is logged with the Rcon prefix"
+}
+
+test_a_player_faking_the_26_3_save_line_does_not_count() {
+  setup
+  server_running
+  : > "$LOG"
+  {
+    echo "[13:12:10] [Server thread/INFO]: <Mallory> System chat: Saved the game"
+    echo "[13:12:11] [Server thread/INFO]: <Mallory> [Rcon: Saved the game]"
+    echo "[13:12:12] [Server thread/INFO]: System chat: Saved the game lol"
+  } >> "$LOG"
+  in_scripts wait_for_save_completion 2 0 > /dev/null 2>&1
+  assert_rc 1 "$?" "chat and trailing text are not the server's save line"
+}
+
 test_save_and_wait_catches_a_save_that_finishes_instantly() {
   setup
   server_running

@@ -308,6 +308,12 @@ _log_has_since() {
 
 SAVE_TIMEOUT_SECONDS="${SAVE_TIMEOUT_SECONDS:-120}"
 
+# The server's own "Saved the game" line, anchored so a player typing the phrase
+# cannot match. Minecraft 26.3 logs it as "System chat: Saved the game" (and
+# "System chat: [Rcon: Saved the game]" for an RCON command); older versions log
+# it bare after "INFO]: ".
+SAVED_LINE_RE='INFO[]]: (System chat: )?([[]Rcon: )?Saved the (game|world)[]]?[[:space:]]*$'
+
 # wait_for_save_completion [timeout-seconds] [log-offset]
 # The offset must be taken BEFORE the save command is sent (see save_and_wait);
 # a save that finishes quickly would otherwise be written before the wait
@@ -337,7 +343,7 @@ wait_for_save_completion() {
   for ((waited = 0; waited < timeout; waited++)); do
     # The server's own line only (S-009): the old bare "Saved" also matched
     # any player who typed the word in chat.
-    if _log_has_since "$offset" '\]: Saved the (game|world)'; then
+    if _log_has_since "$offset" "$SAVED_LINE_RE"; then
       echo "Save completed."
       return 0
     fi
