@@ -16,8 +16,9 @@
 #   SYSTEMD_USABLE     true or false forces the answer of systemd_usable
 
 : "${SYSTEMD_UNIT_DIR:=/etc/systemd/system}"
-TIMER_EXEC_ARGS=()
-TIMER_STOPPOST_ARGS=()
+# Arrays the caller sets before sourcing (or calling) must survive being sourced.
+[[ -v TIMER_EXEC_ARGS ]] || TIMER_EXEC_ARGS=()
+[[ -v TIMER_STOPPOST_ARGS ]] || TIMER_STOPPOST_ARGS=()
 
 # systemd_usable: true when systemd is the running init and systemctl exists.
 # Containers and WSL without systemd are not, and keep using cron.

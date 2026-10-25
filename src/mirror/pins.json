@@ -1,0 +1,8 @@
+{
+  "comment": "Mods a creative mirror target needs. 'pin' maps a Minecraft version to the exact Modrinth version_number that was tested; for any other version the newest release for that game version is used and the run says it is not pinned. Fabric API is only checked, never installed here.",
+  "requires": ["fabric-api"],
+  "mods": [
+    { "slug": "fabricplots", "pin": { "26.3": "1.0.2+26.3" } },
+    { "slug": "dimensional-inventories", "pin": { "26.3": "2.2.2+26.3" } }
+  ]
+}
