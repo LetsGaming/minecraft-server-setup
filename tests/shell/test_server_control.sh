@@ -341,6 +341,15 @@ test_a_chat_line_cannot_pass_for_the_list_reply() {
   assert_nonzero "$?" "chat is not the server's answer"
 }
 
+test_a_player_cannot_fake_the_26_3_list_reply_with_a_prefix() {
+  setup
+  server_running
+  export SCREEN_SHIM_SAVE_LOG="$LOG"
+  export SCREEN_SHIM_LIST_REPLY="[00:00:05] [Server thread/INFO]: <Mallory> [00:00:05] [Server thread/INFO]: System chat: There are 0 of a max of 20 players online:"
+  in_scripts get_player_count > /dev/null 2>&1
+  assert_nonzero "$?" "a forged prefix inside chat is not the server's answer"
+}
+
 test_the_player_count_over_rcon_is_parsed_from_the_reply() {
   setup
   use_rcon_shim
