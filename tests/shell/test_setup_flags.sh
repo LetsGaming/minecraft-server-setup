@@ -123,4 +123,13 @@ test_preflight_reports_each_required_tool() {
   done
 }
 
+test_preflight_finds_tools_that_only_live_in_the_sbin_directories() {
+  setup; write_variables false
+  local out sbin="$T/sbin"
+  mkdir -p "$sbin"
+  { echo '#!/bin/sh'; echo 'exit 0'; } > "$sbin/cron"; chmod +x "$sbin/cron"
+  out="$( ( export PREFLIGHT_EXTRA_PATH="$sbin"; source "$REPO/src/common/setup.sh"; run_preflight_check ) 2>&1 < /dev/null || true )"
+  assert_contains "$out" "✓ cron" "a tool outside PATH but in the sbin directories counts as present"
+}
+
 run_tests

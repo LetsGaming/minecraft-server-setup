@@ -459,8 +459,10 @@ run_preflight_check() {
 
   # 4. Check required tools
   echo "[CHECK] Required tools..."
+  # cron and setfacl live in /usr/sbin, which a normal user's PATH can lack.
+  local tool_path="$PATH:${PREFLIGHT_EXTRA_PATH:-/usr/sbin:/sbin}"
   for tool in screen rsync zstd tar curl jq unzip cron setfacl; do
-    if command -v "$tool" &>/dev/null; then
+    if PATH="$tool_path" command -v "$tool" &>/dev/null; then
       echo "  ✓ $tool"
     else
       echo "  ✗ $tool not found"
