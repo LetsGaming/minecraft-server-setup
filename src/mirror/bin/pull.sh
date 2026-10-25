@@ -45,6 +45,7 @@ STOPPED_MARKER="$SYNC_ROOT/STOPPED_BY_SYNC"
 APPLIED="$SYNC_ROOT/APPLIED"
 WORLD=""
 WAS_RUNNING=1
+CACHE_CAP=0
 
 validate_config() {
   local v
@@ -100,7 +101,21 @@ pull_dim() {
     --timeout="$MIRROR_RSYNC_TIMEOUT" --bwlimit="$MIRROR_BWLIMIT_KIB" --max-size="$MIRROR_MAX_FILE_SIZE" -e "$(ssh_cmd)" \
     --include='/region/' --include='/entities/' --include='/poi/' \
     --include='/*/r.*.*.mca' --exclude='*' \
-    "$MIRROR_REMOTE:snapshots/$stamp/$dim/" "$CACHE/$dim/"
+    "$MIRROR_REMOTE:snapshots/$stamp/$dim/" "$CACHE/$dim/" &
+  local pid=$! rc=0
+  # The manifest is only a claim. While the transfer runs, the cache may not grow
+  # past what the manifest declared (plus the cache's earlier content and a little
+  # slack); a source that sends more is stopped, not trusted to stop itself.
+  while kill -0 "$pid" 2> /dev/null; do
+    sleep 2
+    if ((CACHE_CAP > 0)) && (($(du -sb "$CACHE" 2> /dev/null | cut -f1) > CACHE_CAP)); then
+      kill "$pid" 2> /dev/null || true
+      wait "$pid" 2> /dev/null || true
+      mirror_die 1 "the source is sending more than its manifest declared (the cache passed ${CACHE_CAP} bytes); the transfer was stopped and the server was not touched"
+    fi
+  done
+  wait "$pid" || rc=$?
+  return "$rc"
 }
 
 server_active() {
@@ -116,6 +131,7 @@ stop_server() {
     return 0
   fi
   WAS_RUNNING=1
+CACHE_CAP=0
   if ((MIRROR_WARN_SECONDS > 10)); then
     say "Mirror world refresh: server restarts in ${MIRROR_WARN_SECONDS} seconds."
     sleep $((MIRROR_WARN_SECONDS - 10))
@@ -298,7 +314,8 @@ main() {
   stamp="$(mirror_manifest_get snapshot "$m")"
   [[ "$stamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || mirror_die "$EX_STALE" "the manifest has no valid snapshot id"
   created="$(mirror_manifest_get created_epoch "$m")"
-  [[ "$created" =~ ^[0-9]+$ ]] || mirror_die "$EX_STALE" "the manifest has no created_epoch"
+  # Canonical decimal only: a leading zero would be read as octal by the shell.
+  [[ "$created" =~ ^(0|[1-9][0-9]*)$ ]] || mirror_die "$EX_STALE" "the manifest has no valid created_epoch"
   age=$((($(date +%s) - created) / 3600))
   ((age <= MIRROR_MAX_SNAPSHOT_AGE_H)) || mirror_die "$EX_STALE" "snapshot $stamp is ${age}h old (limit ${MIRROR_MAX_SNAPSHOT_AGE_H}h); is the export timer running?"
   dims=" $(mirror_manifest_get dims "$m") "
@@ -317,7 +334,7 @@ main() {
   fi
   files="$(mirror_manifest_get files "$m")"
   bytes="$(mirror_manifest_get bytes "$m")"
-  [[ "$files" =~ ^[0-9]+$ && "$bytes" =~ ^[0-9]+$ ]] || mirror_die "$EX_STALE" "the manifest lacks files/bytes"
+  [[ "$files" =~ ^(0|[1-9][0-9]*)$ && "$bytes" =~ ^(0|[1-9][0-9]*)$ ]] || mirror_die "$EX_STALE" "the manifest lacks valid files/bytes"
   # More digits than these would wrap around in the shell arithmetic below and
   # could make a huge snapshot look small to the space check.
   ((${#files} <= 9 && ${#bytes} <= 15)) || mirror_die "$EX_STALE" "the manifest sizes are not plausible (files=$files bytes=$bytes)"
@@ -345,6 +362,7 @@ main() {
   rm -rf -- "$ROLLBACK" "${INCOMING:?}"/*
   mirror_log INFO "pulling snapshot $stamp ($files files, $((bytes / 1048576)) MiB)"
   : > "$CACHE/.INCOMPLETE"
+  CACHE_CAP=$(($(du -sb "$CACHE" | cut -f1) + bytes + ${MIRROR_TRANSFER_SLACK_MB:-256} * 1048576))
   for dim in $MIRROR_DIMS; do
     with_retries pull_dim "$stamp" "$dim" || mirror_die 1 "rsync of $dim failed (rc=$?); the server was not touched"
   done

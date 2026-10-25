@@ -158,6 +158,33 @@ test_a_configured_snapshot_cap_refuses_a_bigger_snapshot() {
   assert_contains "$OUT" "MIRROR_MAX_SNAPSHOT_GB" "and names the setting"
 }
 
+test_a_non_canonical_manifest_number_is_refused() {
+  pull_setup || return 0
+  sed -i "s/^created_epoch=\(.*\)/created_epoch=0\1/" "$T/src/mirror/export/LATEST"
+  run_job tgt "$PULL_SH"
+  assert_rc 65 "$RC" "a leading zero (octal in the shell) is refused"
+  sed -i "s/^created_epoch=0/created_epoch=/; s/^files=\(.*\)/files=0\1/" "$T/src/mirror/export/LATEST"
+  run_job tgt "$PULL_SH"
+  assert_rc 65 "$RC" "so is one in the sizes"
+  assert_eq "" "$(calls)" "the server was never stopped"
+}
+
+test_a_source_that_sends_more_than_it_declared_is_stopped_during_the_transfer() {
+  pull_setup || return 0
+  # a 6 MiB region file, a manifest that declares 1000 bytes, and a slow link
+  mirror_world "$T/src/server" big 1
+  head -c 6291456 /dev/zero > "$T/src/server/world/dimensions/minecraft/overworld/region/r.0.0.mca"
+  SCREEN_SHIM_SAVE_LOG="$T/src/server/logs/latest.log" run_job src "$EXPORT_SH"
+  sed -i "s/^bytes=.*/bytes=1000/" "$T/src/mirror/export/LATEST"
+  mirror_set "$T/tgt" MIRROR_TRANSFER_SLACK_MB 0
+  mirror_set "$T/tgt" MIRROR_BWLIMIT_KIB 2000
+  run_job tgt "$PULL_SH"
+  assert_rc 1 "$RC" "the pull fails"
+  assert_contains "$OUT" "sending more than its manifest declared" "and says why"
+  assert_eq "" "$(calls)" "the server was never stopped"
+  assert_eq "tgt-region-0" "$(region r.0.0.mca)" "the mirror is untouched"
+}
+
 test_the_transfer_caps_the_size_of_a_single_file() {
   pull_setup || return 0
   run_job tgt "$PULL_SH"
