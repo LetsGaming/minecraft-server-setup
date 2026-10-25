@@ -76,6 +76,11 @@ if (!fs.existsSync(API_SERVER_ENTRY)) {
   }
 }
 
+{
+  const warning = require("../common/nodeEngine").engineWarning(path.join(API_SERVER_DIR, "package.json"));
+  if (warning) console.warn(`[api-server] WARNING: ${warning}`);
+}
+
 // ── Read instance paths from the deployed variables.txt ──────────────────
 
 // The suite's own reader, which undoes setup's escaping (S-030): the inline

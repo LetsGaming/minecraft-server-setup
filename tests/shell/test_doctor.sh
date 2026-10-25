@@ -96,6 +96,23 @@ test_sudoers_files_are_checked_with_visudo() {
   assert_contains "$OUT" "[FAIL] sudoers" "reported as sudoers"
 }
 
+test_an_old_node_for_the_wrapper_warns_but_does_not_fail() {
+  setup
+  set_var API_SERVER_ENABLED true
+  set_var API_SERVER_PORT 3030
+  set_var API_SERVER_KEY "secret-key-0123456789"
+  mkdir -p "$T/wrapper"
+  echo '{"engines":{"node":">=22"}}' > "$T/wrapper/package.json"
+  export DOCTOR_WRAPPER_DIR="$T/wrapper" DOCTOR_NODE_MAJOR=20
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a warning does not fail the run"
+  assert_contains "$OUT" "[WARN] wrapper-node: Node 20 is older than the >=22" "says which Node is needed"
+  export DOCTOR_NODE_MAJOR=22
+  run_script "$DOCTOR"
+  assert_not_contains "$OUT" "wrapper-node" "a new enough Node is silent"
+  unset DOCTOR_WRAPPER_DIR DOCTOR_NODE_MAJOR
+}
+
 test_wrapper_key_is_checked_and_kept_off_the_command_line() {
   setup
   set_var API_SERVER_ENABLED true

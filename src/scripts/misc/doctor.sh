@@ -194,6 +194,22 @@ api_status() {
     --connect-timeout 3 --max-time 5 --config - "http://127.0.0.1:${API_SERVER_PORT:-3000}$1" 2> /dev/null
 }
 
+# The wrapper declares the Node it needs in its package.json (engines.node,
+# ">=N"). A host with an older Node still runs it, so this only warns.
+# DOCTOR_WRAPPER_DIR and DOCTOR_NODE_MAJOR exist for the tests.
+check_wrapper_node() {
+  local pkg="${DOCTOR_WRAPPER_DIR:-$SCRIPTS_DIR/../../services/api-server}/package.json" range need have
+  [[ -f "$pkg" ]] || return 0
+  range="$(awk '/"engines"/ { f = 1 } f && /"node"/ { sub(/.*"node"[[:space:]]*:[[:space:]]*"/, ""); sub(/".*/, ""); print; exit }' "$pkg" 2> /dev/null)"
+  [[ "$range" =~ ^\>=[[:space:]]*([0-9]+) ]] || return 0
+  need="${BASH_REMATCH[1]}"
+  have="${DOCTOR_NODE_MAJOR:-$(node -p 'process.versions.node.split(".")[0]' 2> /dev/null)}"
+  [[ "$have" =~ ^[0-9]+$ ]] || return 0
+  if (( have < need )); then
+    report WARN wrapper-node "Node $have is older than the >=$need the wrapper asks for"
+  fi
+}
+
 check_wrapper() {
   if [[ "${API_SERVER_ENABLED:-false}" != true ]]; then
     report SKIP wrapper "API_SERVER is not enabled"
@@ -206,6 +222,7 @@ check_wrapper() {
     return
   fi
   report OK wrapper "answers on port ${API_SERVER_PORT:-3000}"
+  check_wrapper_node
   code="$(api_status "/instances/$INSTANCE_NAME/running")"
   case "$code" in
     200) report OK wrapper-key "the configured API key is accepted" ;;
