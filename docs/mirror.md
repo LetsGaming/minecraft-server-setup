@@ -83,17 +83,20 @@ An existing creative server only needs the pull wired in; its world already has 
 
 ## Set up with a new server
 
-For a new creative server, run the normal setup with the mirror switched on. Either flags:
+A source needs nothing but a flag, so the Default route is enough:
 
 ```bash
-bash main.sh --default --agree-eula --mirror-target
 bash main.sh --default --agree-eula --mirror-source
 ```
 
-or the optional block in `variables.json` (the Guided wizard asks for it; the Default route never does):
+A target must know the survival server and its seed, so it uses your own `variables.json` (the Power-user route). `--default` refuses to run when that file exists, and the Default route would have no `MIRROR.REMOTE`. Put the optional block in the file, set `JAVA.SERVER.SEED` to the survival world's `level-seed`, and run setup without `--default` (the `--mirror-target` flag is then optional). The Guided wizard asks for the same things.
 
 ```json
 "MIRROR": { "ENABLED": true, "ROLE": "target", "REMOTE": "mcsync@192.168.1.20" }
+```
+
+```bash
+bash main.sh --agree-eula
 ```
 
 A target needs `MIRROR.REMOTE` and, in `JAVA.SERVER.SEED`, the survival world's seed. The mirror setup runs after the install, so a problem with it never rolls the install back. **If the preparation of a target fails, the server is not started**, because the first start would create a world with the wrong seed. Fix it, then run `mirror.sh prepare` and start the server.
