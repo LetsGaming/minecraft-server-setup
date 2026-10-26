@@ -113,11 +113,21 @@ mirror_level_seed() {
   printf '%s\n' "${seed:-unknown}"
 }
 
-# The Minecraft version the server logged at its last start; "unknown" when the
-# log has no such line (a guarded pipeline: it must not abort a job under set -e).
+# The Minecraft version the server runs. The suite's own record comes first, then
+# the server's versions/ folder; the log is the last resort because Minecraft
+# rolls latest.log over (at midnight, or at a restart), so a server that has been
+# up for a day no longer has its "Starting minecraft server version" line there.
+# "unknown" when nothing says (guarded, so it never aborts a job under set -e).
 mirror_mc_version() {
-  local v
-  v="$(grep -oE 'Starting minecraft server version [^ ]+' "$LOG_FILE" 2> /dev/null | tail -n 1 | awk '{print $NF}')" || true
+  local v="" dirs
+  v="$(sed -n 's/.*"gameVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MIRROR_SCRIPTS_DIR/common/downloaded_versions.json" 2> /dev/null | head -n 1)" || true
+  if [[ -z "$v" && -d "$SERVER_DIR/versions" ]]; then
+    dirs="$(find "$SERVER_DIR/versions" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2> /dev/null)" || true
+    [[ -n "$dirs" && "$(printf '%s\n' "$dirs" | wc -l)" -eq 1 ]] && v="$dirs"
+  fi
+  if [[ -z "$v" ]]; then
+    v="$(grep -oE 'Starting minecraft server version [^ ]+' "$LOG_FILE" 2> /dev/null | tail -n 1 | awk '{print $NF}')" || true
+  fi
   printf '%s\n' "${v:-unknown}"
 }
 

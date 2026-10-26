@@ -126,6 +126,33 @@ test_a_stopped_server_is_copied_without_a_save_window() {
   assert_contains "$OUT" "server stopped" "the log says so"
 }
 
+test_the_version_comes_from_the_suites_record_before_the_server_log() {
+  mirror_setup || return 0
+  printf '{"gameVersion":"26.4","modLoader":"fabric"}' > "$T/src/scripts/common/downloaded_versions.json"
+  run_job src "$EXPORT_SH"
+  assert_eq "26.4" "$(manifest mc_version)" "downloaded_versions.json wins over the log (26.3)"
+}
+
+test_a_rolled_over_log_does_not_lose_the_version() {
+  mirror_setup || return 0
+  # Minecraft rolls latest.log at midnight: the start-up line is gone from it
+  echo "[00:00:00] [Server thread/INFO]: System chat: Saved the game" > "$T/src/server/logs/latest.log"
+  printf '{"gameVersion":"26.3"}' > "$T/src/scripts/common/downloaded_versions.json"
+  run_job src "$EXPORT_SH"
+  assert_eq "26.3" "$(manifest mc_version)" "the version is still known"
+}
+
+test_the_versions_folder_is_the_second_source_and_an_ambiguous_one_is_not_guessed() {
+  mirror_setup || return 0
+  echo "[00:00:00] [Server thread/INFO]: nothing useful" > "$T/src/server/logs/latest.log"
+  mkdir -p "$T/src/server/versions/26.2"
+  run_job src "$EXPORT_SH"
+  assert_eq "26.2" "$(manifest mc_version)" "a single versions/ folder names the version"
+  mkdir -p "$T/src/server/versions/26.1"
+  run_job src "$EXPORT_SH"
+  assert_eq "unknown" "$(manifest mc_version)" "two folders are not guessed between"
+}
+
 test_a_log_without_a_version_line_gives_unknown_not_a_silent_failure() {
   mirror_setup || return 0
   echo "[00:00:00] [Server thread/INFO]: nothing useful" > "$T/src/server/logs/latest.log"

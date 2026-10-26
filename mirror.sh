@@ -337,7 +337,8 @@ cmd_doctor() {
     target)
       [[ -r "$SSH_DIR/id_ed25519" ]] && report OK key "the SSH key exists" || report FAIL key "no SSH key at $SSH_DIR/id_ed25519"
       [[ -s "$SSH_DIR/known_hosts" ]] && report OK host-key "the source's host key is pinned" || report FAIL host-key "no host key is pinned; run mirror.sh pin-host"
-      if sudo -n -l 2> /dev/null | grep -q "systemctl stop $INSTANCE_NAME.service"; then report OK sudo "may stop and start $INSTANCE_NAME.service"; else report FAIL sudo "no sudoers rule for stop/start; run mirror.sh setup target"; fi
+      # `sudo -l <command>` answers for that exact command, whatever else the user may do.
+      if sudo -n -l "$(command -v systemctl)" stop "$INSTANCE_NAME.service" > /dev/null 2>&1; then report OK sudo "may stop and start $INSTANCE_NAME.service"; else report FAIL sudo "no sudoers rule for stop/start; run mirror.sh setup target"; fi
       if [[ -f "$SYNC_ROOT/APPLIED" ]]; then
         age=$((($(date +%s) - $(stat -c %Y "$SYNC_ROOT/APPLIED")) / 3600))
         if ((age > 30)); then report WARN applied "the last applied snapshot is ${age}h old"; else report OK applied "last applied ${age}h ago ($(cat "$SYNC_ROOT/APPLIED"))"; fi
