@@ -44,6 +44,8 @@ SWAP_JOURNAL="$SYNC_ROOT/SWAP_IN_PROGRESS"
 STOPPED_MARKER="$SYNC_ROOT/STOPPED_BY_SYNC"
 APPLIED="$SYNC_ROOT/APPLIED"
 WORLD=""
+PULL_EXTRAS=""
+PULL_MODS=0
 WAS_RUNNING=1
 CACHE_CAP=0
 
@@ -51,6 +53,7 @@ validate_config() {
   local v
   [[ -n "$MIRROR_REMOTE" ]] || mirror_die "$EX_CONFIG" "MIRROR_REMOTE is not set (user@host of the source)"
   mirror_validate_dims
+  mirror_validate_extras
   for v in "$MIRROR_SSH_KEY" "$MIRROR_KNOWN_HOSTS" "$SYNC_ROOT" "$SERVER_DIR"; do
     [[ "$v" != *[[:space:]]* ]] || mirror_die "$EX_CONFIG" "paths must not contain whitespace: $v"
   done
@@ -92,20 +95,18 @@ fetch_manifest() {
   rsync -t --timeout="$MIRROR_RSYNC_TIMEOUT" -e "$(ssh_cmd)" "$MIRROR_REMOTE:LATEST" "$SYNC_ROOT/LATEST.remote"
 }
 
-pull_dim() {
-  local stamp=$1 dim=$2
-  mkdir -p "$CACHE/$dim"
-  # Root-anchored filters: only the three chunk folders and region files in
-  # them can ever reach the cache, whatever the export side contains.
+# One rsync from the source's snapshot into the cache, with the cache watchdog:
+# the manifest is only a claim. While the transfer runs, the cache may not grow
+# past what the manifest declared (plus the cache's earlier content and a little
+# slack); a source that sends more is stopped, not trusted to stop itself.
+rsync_watched() { # <snapshot subpath> <cache dest> [extra rsync filters...]
+  local sub=$1 dest=$2
+  shift 2
+  mkdir -p "$dest"
   rsync -rt --delete-delay --partial-dir=.rsync-partial \
     --timeout="$MIRROR_RSYNC_TIMEOUT" --bwlimit="$MIRROR_BWLIMIT_KIB" --max-size="$MIRROR_MAX_FILE_SIZE" -e "$(ssh_cmd)" \
-    --include='/region/' --include='/entities/' --include='/poi/' \
-    --include='/*/r.*.*.mca' --exclude='*' \
-    "$MIRROR_REMOTE:snapshots/$stamp/$dim/" "$CACHE/$dim/" &
+    "$@" "$MIRROR_REMOTE:snapshots/$sub/" "$dest/" &
   local pid=$! rc=0
-  # The manifest is only a claim. While the transfer runs, the cache may not grow
-  # past what the manifest declared (plus the cache's earlier content and a little
-  # slack); a source that sends more is stopped, not trusted to stop itself.
   while kill -0 "$pid" 2> /dev/null; do
     sleep 2
     if ((CACHE_CAP > 0)) && (($(du -sb "$CACHE" 2> /dev/null | cut -f1) > CACHE_CAP)); then
@@ -117,6 +118,19 @@ pull_dim() {
   wait "$pid" || rc=$?
   return "$rc"
 }
+
+pull_dim() {
+  local stamp=$1 dim=$2
+  # Root-anchored filters: only the three chunk folders and region files in
+  # them can ever reach the cache, whatever the export side contains.
+  rsync_watched "$stamp/$dim" "$CACHE/$dim" \
+    --include='/region/' --include='/entities/' --include='/poi/' \
+    --include='/*/r.*.*.mca' --exclude='*'
+}
+
+pull_extra() { rsync_watched "$1/_extras/$2" "$CACHE/_extras/$2"; }
+
+pull_mods() { rsync_watched "$1/_mods" "$CACHE/_mods" --include='/*.jar' --exclude='*'; }
 
 server_active() {
   systemctl is-active --quiet "$INSTANCE_NAME.service" 2> /dev/null || session_running
@@ -166,6 +180,54 @@ start_server() {
 
 dim_path() { printf '%s/dimensions/%s/%s\n' "$WORLD" "$1" "$2"; }
 
+# Puts the rollback copies of the extra folders and the mods folder back. The
+# rejected ones go to the given failed folder for analysis.
+restore_aux() { # <failed dir>
+  local name live
+  for name in $MIRROR_EXTRAS; do
+    [[ -d "$ROLLBACK/_extras/$name" ]] || continue
+    live="$WORLD/$name"
+    if [[ -d "$live" ]]; then
+      mkdir -p "$1/_extras"
+      mv -T -- "$live" "$1/_extras/$name"
+    fi
+    mv -T -- "$ROLLBACK/_extras/$name" "$live"
+  done
+  if [[ -d "$ROLLBACK/_mods" ]]; then
+    if [[ -d "$SERVER_DIR/mods" ]]; then
+      mkdir -p "$1"
+      mv -T -- "$SERVER_DIR/mods" "$1/_mods"
+    fi
+    mv -T -- "$ROLLBACK/_mods" "$SERVER_DIR/mods"
+  fi
+}
+
+# Builds the mods folder to swap in: the source's jars (minus MIRROR_MODS_EXCLUDE)
+# plus this server's own jars that match MIRROR_KEEP_MODS, unless the source has
+# its own build of that mod. mods/disabled stays as it is.
+stage_mods() {
+  local jar alt dest="$INCOMING/_mods"
+  mkdir -p "$dest"
+  for jar in "$CACHE/_mods"/*.jar; do
+    [[ -f "$jar" && ! -L "$jar" ]] || continue
+    # A file name from the source becomes a path here: plain jar names only.
+    [[ "$(basename "$jar")" =~ ^[^-.\/[:cntrl:]][^\/[:cntrl:]]*\.jar$ ]] || mirror_die 1 "the source sent a mod with an unexpected file name; nothing was changed"
+    if [[ -n "$MIRROR_MODS_EXCLUDE" ]] && grep -qiE "$MIRROR_MODS_EXCLUDE" <<< "$(basename "$jar")"; then continue; fi
+    cp -a --reflink=auto -- "$jar" "$dest/"
+  done
+  local -a alts
+  IFS='|' read -ra alts <<< "$MIRROR_KEEP_MODS"
+  for alt in "${alts[@]}"; do
+    [[ -n "$alt" ]] || continue
+    if find "$dest" -maxdepth 1 -name '*.jar' -printf '%f\n' | grep -qiE -- "$alt"; then continue; fi
+    for jar in "$SERVER_DIR/mods"/*.jar; do
+      [[ -f "$jar" ]] || continue
+      if grep -qiE -- "$alt" <<< "$(basename "$jar")"; then cp -a --reflink=auto -- "$jar" "$dest/"; fi
+    done
+  done
+  [[ ! -d "$SERVER_DIR/mods/disabled" ]] || cp -a --reflink=auto -- "$SERVER_DIR/mods/disabled" "$dest/disabled"
+}
+
 # Moves the live chunk folders aside and the pre-staged ones in. Every step is
 # a rename on one filesystem; the journal lets --recover undo a partial swap.
 swap_in() {
@@ -180,6 +242,16 @@ swap_in() {
       mv -T -- "$INCOMING/$dim/$d" "$live"
     done
   done
+  local name
+  for name in $PULL_EXTRAS; do
+    mkdir -p "$ROLLBACK/_extras"
+    [[ -d "$WORLD/$name" ]] && mv -T -- "$WORLD/$name" "$ROLLBACK/_extras/$name"
+    mv -T -- "$INCOMING/_extras/$name" "$WORLD/$name"
+  done
+  if ((PULL_MODS)); then
+    [[ -d "$SERVER_DIR/mods" ]] && mv -T -- "$SERVER_DIR/mods" "$ROLLBACK/_mods"
+    mv -T -- "$INCOMING/_mods" "$SERVER_DIR/mods"
+  fi
   rm -f "$SWAP_JOURNAL"
 }
 
@@ -198,6 +270,7 @@ swap_back() {
       mv -T -- "$ROLLBACK/$dim/$d" "$live"
     done
   done
+  restore_aux "$FAILED/$tag"
   rm -f "$SWAP_JOURNAL"
 }
 
@@ -222,6 +295,7 @@ recover() {
         fi
       done
     done
+    restore_aux "$FAILED/recover"
     rm -f "$SWAP_JOURNAL"
   fi
   if [[ -e "$STOPPED_MARKER" ]] && ! server_active; then
@@ -266,6 +340,16 @@ check_parity() {
   lm="$(mirror_worldgen_mods)"
   local problem=""
   [[ -z "$rl" || "$rl" == "$ll" ]] || problem+="Fabric Loader differs (source $rl, here $ll). "
+  # When this run takes the source's mods, this server runs them after the swap, so
+  # only the ones left out on purpose (MIRROR_MODS_EXCLUDE) can still differ.
+  if ((PULL_MODS)); then
+    local left_out=""
+    if [[ -n "$MIRROR_MODS_EXCLUDE" && "$rm" != none ]]; then
+      left_out="$(tr '|' '\n' <<< "$rm" | grep -iE -- "$MIRROR_MODS_EXCLUDE" | paste -sd ' ' -)" || left_out=""
+    fi
+    [[ -z "$left_out" ]] || problem+="world-generation mods of the source are not installed here on purpose ($left_out). "
+    rm=""
+  fi
   [[ -z "$rm" || "$rm" == "$lm" ]] || problem+="worldgen mods differ (source: $rm; here: $lm). "
   [[ -z "$problem" ]] && return 0
   if [[ "$MIRROR_PARITY" == refuse ]]; then
@@ -326,6 +410,29 @@ main() {
     mirror_log INFO "snapshot $stamp already applied, nothing to do"
     exit 0
   fi
+  # The extra folders and the mods this run takes from the snapshot: only what is
+  # configured here and also offered there (the source never decides on its own).
+  local name xs mods_n aux_mb=0
+  PULL_EXTRAS="" PULL_MODS=0
+  xs=" $(mirror_manifest_get extras "$m") "
+  for name in $MIRROR_EXTRAS; do
+    if [[ "$xs" == *" $name "* ]]; then
+      PULL_EXTRAS+="${PULL_EXTRAS:+ }$name"
+      aux_mb=$((aux_mb + MIRROR_EXTRAS_MAX_MB))
+    else
+      mirror_log WARN "the snapshot has no extra folder $name; it is left as it is"
+    fi
+  done
+  if [[ "$MIRROR_SYNC_MODS" == true ]]; then
+    mods_n="$(mirror_manifest_get mods "$m")"
+    if [[ "$mods_n" =~ ^[1-9][0-9]{0,3}$ ]]; then
+      PULL_MODS=1
+      aux_mb=$((aux_mb + MIRROR_MODS_MAX_MB))
+    else
+      mirror_log WARN "the snapshot carries no mods (is MIRROR_EXPORT_MODS off there?); this server's mods are left as they are"
+    fi
+  fi
+
   check_parity "$m"
   seed="$(mirror_manifest_get level_seed "$m")"
   lseed="$(mirror_level_seed)"
@@ -350,7 +457,7 @@ main() {
   read -r _ cache_bytes < <(mirror_tree_stats "$CACHE")
   avail="$(mirror_avail_bytes "$SYNC_ROOT")"
   rb_bytes="$(du -sb "$ROLLBACK" 2> /dev/null | cut -f1)" || rb_bytes=0
-  need=$((bytes + (bytes > cache_bytes ? bytes - cache_bytes : 0) + ${MIRROR_SPACE_MARGIN_MB:-4096} * 1024 * 1024))
+  need=$((bytes + (bytes > cache_bytes ? bytes - cache_bytes : 0) + (${MIRROR_SPACE_MARGIN_MB:-4096} + aux_mb) * 1024 * 1024))
   ((avail + ${rb_bytes:-0} >= need)) ||
     mirror_die "$EX_NOSPACE" "need ~$((need / 1048576)) MiB in $SYNC_ROOT, have $((avail / 1048576)) MiB (plus $((${rb_bytes:-0} / 1048576)) MiB of old rollback); nothing was changed"
 
@@ -362,7 +469,7 @@ main() {
   rm -rf -- "$ROLLBACK" "${INCOMING:?}"/*
   mirror_log INFO "pulling snapshot $stamp ($files files, $((bytes / 1048576)) MiB)"
   : > "$CACHE/.INCOMPLETE"
-  CACHE_CAP=$(($(du -sb "$CACHE" | cut -f1) + bytes + ${MIRROR_TRANSFER_SLACK_MB:-256} * 1048576))
+  CACHE_CAP=$(($(du -sb "$CACHE" | cut -f1) + bytes + (${MIRROR_TRANSFER_SLACK_MB:-256} + aux_mb) * 1048576))
   for dim in $MIRROR_DIMS; do
     with_retries pull_dim "$stamp" "$dim" || mirror_die 1 "rsync of $dim failed (rc=$?); the server was not touched"
   done
@@ -371,6 +478,14 @@ main() {
   read -r got_files got_bytes < <(mirror_tree_stats "${paths[@]}")
   if [[ "$got_files" != "$files" || "$got_bytes" != "$bytes" ]]; then
     mirror_die 1 "the cache does not match the manifest: got $got_files files/$got_bytes B, expected $files/$bytes"
+  fi
+  for name in $PULL_EXTRAS; do
+    with_retries pull_extra "$stamp" "$name" || mirror_die 1 "rsync of the extra folder $name failed (rc=$?); the server was not touched"
+  done
+  if ((PULL_MODS)); then
+    with_retries pull_mods "$stamp" || mirror_die 1 "rsync of the mods failed (rc=$?); the server was not touched"
+    got_files="$(find "$CACHE/_mods" -maxdepth 1 -type f -name '*.jar' | wc -l | tr -d '[:space:]')"
+    [[ "$got_files" == "$mods_n" ]] || mirror_die 1 "the cache has $got_files mods, the manifest says $mods_n; the server was not touched"
   fi
   cp -- "$m" "$CACHE/MANIFEST"
   rm -f "$CACHE/.INCOMPLETE"
@@ -392,8 +507,15 @@ main() {
     done
   done
 
+  for name in $PULL_EXTRAS; do
+    mkdir -p "$INCOMING/_extras"
+    cp -a --reflink=auto -- "$CACHE/_extras/$name" "$INCOMING/_extras/$name"
+    rm -rf -- "$INCOMING/_extras/$name/.rsync-partial"
+  done
+  ((PULL_MODS == 0)) || stage_mods
+
   stop_server
-  mirror_log INFO "swapping mirrored dimensions: $MIRROR_DIMS"
+  mirror_log INFO "swapping mirrored dimensions: $MIRROR_DIMS${PULL_EXTRAS:+ and the folders $PULL_EXTRAS}$( ((PULL_MODS)) && echo ' and the mods')"
   swap_in
   if ((WAS_RUNNING == 0)); then
     printf '%s\n' "$stamp" > "$APPLIED"

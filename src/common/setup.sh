@@ -59,7 +59,10 @@ run_mirror_setup() {
       NO_START=true
       return 0
     fi
-    args+=(--source "$host")
+    # A server created as a target runs the source's mods and takes over its
+    # EssentialCommands homes, unless variables.json lists its own MIRROR.EXTRAS.
+    args+=(--source "$host" --sync-mods)
+    node -e "process.exit((require('$SCRIPT_DIR/variables.json').MIRROR||{}).EXTRAS?0:1)" 2> /dev/null || args+=(--homes)
   fi
   printf -v cmd '%q ' bash "$SCRIPT_DIR/mirror.sh" "${args[@]}"
   if ! run_or_echo "$cmd"; then

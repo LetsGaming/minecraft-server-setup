@@ -125,6 +125,52 @@ copy_dims() {
   done
 }
 
+EXTRAS_COPIED=""
+MODS_COPIED=0
+
+# World folders listed in MIRROR_EXTRAS (homes and the like), copied whole into
+# the snapshot's _extras. They are small, so they are bounded instead of linked.
+copy_extras() {
+  local world=$1 name mb rc
+  EXTRAS_COPIED=""
+  for name in $MIRROR_EXTRAS; do
+    if [[ ! -d "$world/$name" ]]; then
+      mirror_log WARN "extra folder $name does not exist in the world, skipped"
+      continue
+    fi
+    mb=$(($(du -sk "$world/$name" 2> /dev/null | cut -f1) / 1024))
+    ((mb <= MIRROR_EXTRAS_MAX_MB)) || mirror_die 1 "extra folder $name is ${mb} MiB, over MIRROR_EXTRAS_MAX_MB=$MIRROR_EXTRAS_MAX_MB"
+    mkdir -p "$TMP_SNAP/_extras/$name"
+    rc=0
+    timeout "$MIRROR_SAVE_OFF_MAX" rsync -rt --chmod=D2750,F640 -- "$world/$name/" "$TMP_SNAP/_extras/$name/" || rc=$?
+    case $rc in
+      0 | 24) ;;
+      *) mirror_die 1 "rsync failed for extra folder $name (rc=$rc)" ;;
+    esac
+    EXTRAS_COPIED+="${EXTRAS_COPIED:+ }$name"
+  done
+}
+
+# The jars of the server's mods folder (not mods/disabled), so a target can run
+# the same mods. Linked to the previous snapshot, so unchanged jars cost nothing.
+copy_mods() {
+  local prev=$1 mb rc
+  local -a link=()
+  MODS_COPIED=0
+  [[ "$MIRROR_EXPORT_MODS" == true && -d "$SERVER_DIR/mods" ]] || return 0
+  mb=$(($(find "$SERVER_DIR/mods" -maxdepth 1 -type f -name '*.jar' -printf '%s\n' | awk '{s += $1} END {print s + 0}') / 1048576))
+  ((mb <= MIRROR_MODS_MAX_MB)) || mirror_die 1 "the mods folder is ${mb} MiB, over MIRROR_MODS_MAX_MB=$MIRROR_MODS_MAX_MB"
+  mkdir -p "$TMP_SNAP/_mods"
+  [[ -n "$prev" && -d "$prev/_mods" ]] && link=("--link-dest=$prev/_mods")
+  rc=0
+  rsync -rt --chmod=D2750,F640 "${link[@]}" --include='/*.jar' --exclude='*' -- "$SERVER_DIR/mods/" "$TMP_SNAP/_mods/" || rc=$?
+  case $rc in
+    0 | 24) ;;
+    *) mirror_die 1 "rsync failed for the mods folder (rc=$rc)" ;;
+  esac
+  MODS_COPIED="$(find "$TMP_SNAP/_mods" -maxdepth 1 -type f -name '*.jar' | wc -l | tr -d '[:space:]')"
+}
+
 write_manifest() {
   local stamp=$1 files bytes version
   files="$(find "$TMP_SNAP" -type f -name 'r.*.*.mca' | wc -l | tr -d '[:space:]')"
@@ -140,6 +186,8 @@ write_manifest() {
     echo "worldgen_mods=$(mirror_worldgen_mods)"
     echo "level_seed=$(mirror_level_seed)"
     echo "dims=$MIRROR_DIMS"
+    echo "extras=$EXTRAS_COPIED"
+    echo "mods=$MODS_COPIED"
     echo "files=$files"
     echo "bytes=$bytes"
   } > "$TMP_SNAP/MANIFEST"
@@ -190,6 +238,7 @@ main() {
   fi
 
   mirror_validate_dims
+  mirror_validate_extras
   if [[ ! "$MIRROR_KEEP_SNAPSHOTS" =~ ^[0-9]+$ ]] || ((MIRROR_KEEP_SNAPSHOTS < 2)); then
     mirror_die "$EX_CONFIG" "MIRROR_KEEP_SNAPSHOTS must be >= 2 so a pull in progress never loses its snapshot"
   fi
@@ -231,6 +280,7 @@ main() {
     world="$STAGE_WORLD"
     space_preflight "$world" "$prev"
     copy_dims "$world" "$prev"
+    copy_extras "$world"
   else
     world="$SERVER_DIR/$level"
     [[ -d "$world/dimensions" ]] || mirror_die "$EX_UNAVAILABLE" "no 26.x world layout at $world/dimensions"
@@ -245,14 +295,17 @@ main() {
       disable_auto_save > /dev/null || mirror_die 1 "could not turn auto-save off"
       save_and_wait > /dev/null 2>&1 || mirror_die 1 "the server did not confirm the save; nothing was copied"
       copy_dims "$world" "$prev"
+      copy_extras "$world"
       save_on
       mirror_log INFO "save-off window: $((SECONDS - t0))s"
     else
       mirror_log INFO "server stopped: copying without a save window"
       copy_dims "$world" "$prev"
+      copy_extras "$world"
     fi
   fi
 
+  copy_mods "$prev"
   write_manifest "$stamp"
   publish "$stamp"
   prune "$MIRROR_KEEP_SNAPSHOTS"

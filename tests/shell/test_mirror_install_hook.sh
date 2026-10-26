@@ -80,7 +80,7 @@ test_a_target_is_set_up_then_prepared_with_the_configured_seed() {
   setup || { skip "mirror hook" "node is not available"; return 0; }
   config '{"MIRROR":{"ENABLED":true,"ROLE":"target","REMOTE":"mcsync@survival.example"},"JAVA":{"SERVER":{"SEED":"-446251370538060616"}}}'
   hook
-  assert_eq $'setup target --scripts-dir '"$T"$'/home/mc/scripts/creative --source survival.example\nprepare --scripts-dir '"$T"$'/home/mc/scripts/creative --seed -446251370538060616' "$(logged)" "setup first, then prepare with the seed"
+  assert_eq $'setup target --scripts-dir '"$T"$'/home/mc/scripts/creative --source survival.example --sync-mods --homes\nprepare --scripts-dir '"$T"$'/home/mc/scripts/creative --seed -446251370538060616' "$(logged)" "setup first, then prepare with the seed"
   assert_contains "$OUT" "NO_START=false" "a prepared target may start"
   assert_contains "$OUT" "docs/mirror.md" "the pairing is pointed out"
 }
