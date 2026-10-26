@@ -192,4 +192,33 @@ These suites were previously unverifiable on the Windows workstation (backup sui
 | S-5 | Low | The suite cannot pin the Fabric loader or mod versions (R-12), and the API wrapper's Node 22 requirement is not enforced by the installer on Debian 13 (Node 20) |
 | S-6 | Low | Test defects in 9.2 (umask, Sunday, systemctl shim) |
 
-Not changed: per your choice this section is report only; no suite code was changed other than the flag.
+This section was report only when written; S-1 to S-6 are fixed on branch `feat/timers-and-mirror` (see section 10).
+
+## 10. Implementation and verification (added after the build)
+
+The findings were implemented on `feat/timers-and-mirror`: the suite fixes S-1 to S-6, the move from cron to systemd timers (with a migration for installed servers), and the optional mirror (`mirror.sh`, `src/mirror/`, `docs/mirror.md`). The same two-VM setup was then used to verify the finished code. Labels as in section 0 (V verified on the VMs).
+
+| Check | Result |
+|---|---|
+| Fresh install creates timers, no cron line (V) | Pass |
+| Real cron to timer migration, idempotent, foreign cron lines kept, planted log symlink not written through by root (V) | Pass |
+| Existing survival server: `mirror.sh setup source` leaves the server running and untouched (V) | Pass |
+| Existing creative server: setup target, authorize, pin-host; `mirror.sh test` 6 of 6 (wrong fingerprint refused, `id` refused, writes refused, `..` and links refused) (V) | Pass |
+| Export through its service (1 s), auto-save restored; a killed save-off window is recovered by the next run (V) | Pass |
+| Pull through its service: survival markers (gold block, beacon, diamond block, sign) present on creative, no chunk read errors, `APPLIED` set (V) | Pass |
+| Idempotent re-run says "already applied" and does nothing (V) | Pass |
+| `mirror.sh doctor`, `manage.sh doctor`, `status` on both sides (V) | Pass; the one warning is the missing plot dimension on a creative server without FabricPlots |
+| Fresh target from a `variables.json` with a `MIRROR` block: real Modrinth downloads of Fabric API, FabricPlots and Dimensional Inventories (SHA-512 checked), creative properties, seed, pools file, no C2ME, plots dimension created on first start (V) | Pass |
+| Fresh target pairs, passes `mirror.sh test`, applies its first pull, markers present (V) | Pass |
+
+Defects found by this run and fixed:
+
+| Finding | Fix |
+|---|---|
+| Manifest `mc_version=unknown` once `latest.log` had rolled over, so the pull refused on a version mismatch | Version comes from the suite's record, then `versions/`, then the log |
+| rrsync "permission denied": snapshot folders ended up with the server's group instead of `mcsync` (cause not reproduced on a fresh tree) | Every export puts the snapshot tree back in the export folder's group |
+| A prepared target had no Fabric API on a plain Fabric server, so preparation failed | `prepare` installs the pinned Fabric API when it is missing |
+| `--api-server` kept the example's 33 character placeholder key, which the loader then rejects | The placeholder counts as no key and is replaced |
+| Re-running `mirror.sh setup` is what refreshes the installed mirror code under `<base>/mirror/` | Documented here; `prepare` uses the installed copy |
+
+Still not testable without a Minecraft 26.3 client: pool switching and `force-gamemode` behaviour with real players.

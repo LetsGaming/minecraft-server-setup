@@ -22,6 +22,8 @@ All notable changes to this project are documented here. The format follows
 - `--api-server` on a config without an API key no longer deploys a wrapper that crash-loops: setup generates a key, stores it in `variables.json` and never prints it. Setup and `doctor` warn when the host Node is older than the wrapper's `engines.node`.
 - `update-mods.js`, `update-server.js` and the other update scripts answer `--help` and `-h` with their usage and exit; `update-server.js` used to start a real update. `main.sh --check` finds `cron` and `setfacl` in `/usr/sbin` for a normal user. `doctor` warns instead of failing about a backups folder that the first backup has not created yet.
 - Tests no longer depend on the weekday (the daily/weekly tier tests failed on Sundays), the `systemctl` shim answers `list-unit-files` like systemd 257, and the migrate check for the retired web interface no longer treats every host as having its unit.
+- `--api-server` with the example config's placeholder API key now generates a real key instead of failing later in the loader.
+- Mirror exports keep every snapshot in the export folder's group, so the read-only account can always read them, and preparing a creative mirror target installs the pinned Fabric API when a plain Fabric server has none.
 
 ### Security
 
