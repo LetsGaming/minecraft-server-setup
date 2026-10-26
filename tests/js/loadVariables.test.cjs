@@ -180,6 +180,10 @@ test("MIRROR settings are validated", () => {
     [{ BWLIMIT_KIB: -1 }, /MIRROR\.BWLIMIT_KIB/],
     [{ MIN_REGION_RATIO_PCT: 101 }, /MIRROR\.MIN_REGION_RATIO_PCT/],
     [{ KEEP_SNAPSHOTS: 1 }, /MIRROR\.KEEP_SNAPSHOTS must be at least 2/],
+    [{ EXTRAS: ["players"] }, /MIRROR\.EXTRAS/],
+    [{ EXTRAS: ["../etc"] }, /MIRROR\.EXTRAS/],
+    [{ EXTRAS: "ec_player_profiles" }, /MIRROR\.EXTRAS/],
+    [{ SYNC_MODS: "yes" }, /MIRROR\.SYNC_MODS must be a boolean/],
   ];
   for (const [mirror, re] of cases) assert.throws(() => load(withMirror(mirror)), re, JSON.stringify(mirror));
   assert.doesNotThrow(() =>

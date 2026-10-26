@@ -44,4 +44,6 @@ Terms specific to this project that are easy to misread.
 
 **Mirrored dimension.** One of `dimensions/minecraft/{overworld,the_nether,the_end}` (by default only the overworld) whose chunk folders the nightly pull replaces on the creative server. The plot dimension (`dimensions/fabricplots/plots`), `level.dat`, `data/`, `players/` and the dimension's own `data/` folder are never copied.
 
+**Extra folder.** A world folder besides the dimensions that the mirror copies as a whole, listed in `MIRROR_EXTRAS` on both servers (for example `ec_player_profiles` and `essentialcommands`, which hold EssentialCommands homes, warps and spawn). Folders with server state such as `players` or `data` are refused.
+
 **Mirror role.** What a server is in the optional creative mirror: `source` (the survival server that publishes snapshots, through the read-only `mcsync` account) or `target` (the creative server that pulls them). Set by `mirror.sh setup source|target` or the `MIRROR` block of `variables.json`; a server without a role is not part of any mirror.

@@ -27,8 +27,9 @@ Usage: mirror.sh <command> [options]
 
 Setup
   setup source|target     install the mirror on this server (never restarts it)
-      source: --source-mode live|stage  --dims "minecraft/overworld"  --export-at HH:MM
+      source: --source-mode live|stage  --dims "minecraft/overworld"  --export-at HH:MM  --extras "folder ..." | --homes
       target: --source HOST  --ssh-port N  --pull-at HH:MM  --parity warn|refuse|off  --bwlimit KIB
+              --extras "folder ..." | --homes   --sync-mods (run the source's mods)
   prepare                 prepare a NEW creative instance (properties, pinned mods, pools)
   authorize               (source) allow the target's key: --from ADDR --key "ssh-ed25519 ..."
   fingerprint             (source) print this host's SSH host key fingerprint
@@ -60,7 +61,7 @@ fi
 
 SCRIPTS_DIR="" INSTANCE_ARG="" DRY_RUN=false PURGE=false
 O_SOURCE_MODE="" O_DIMS="" O_EXPORT_AT="" O_SOURCE="" O_SSH_PORT="" O_PULL_AT="" O_PARITY="" O_BWLIMIT=""
-O_FROM="" O_KEY="" O_HOST="" O_FINGERPRINT="" O_SEED="" O_FORCE=false
+O_EXTRAS="" O_SYNC_MODS="" O_FROM="" O_KEY="" O_HOST="" O_FINGERPRINT="" O_SEED="" O_FORCE=false
 PASS_ARGS=()
 while (($#)); do
   case "$1" in
@@ -76,6 +77,9 @@ while (($#)); do
     --pull-at) O_PULL_AT="$2"; shift 2 ;;
     --parity) O_PARITY="$2"; shift 2 ;;
     --bwlimit) O_BWLIMIT="$2"; shift 2 ;;
+    --extras) O_EXTRAS="$2"; shift 2 ;;
+    --homes) O_EXTRAS="ec_player_profiles essentialcommands"; shift ;;
+    --sync-mods) O_SYNC_MODS=true; shift ;;
     --from) O_FROM="$2"; shift 2 ;;
     --key) O_KEY="$2"; shift 2 ;;
     --host) O_HOST="$2"; shift 2 ;;
@@ -123,6 +127,15 @@ cfg() { mirror_config_value "$VARS_FILE" "$1"; }
 cfg_or() { local v; v="$(cfg "$1")"; printf '%s' "${v:-$2}"; }
 
 valid_time() { [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; }
+
+# World folders that hold this server's own state are never mirrored (same list as
+# src/mirror/lib/common.sh).
+valid_extras() {
+  local x deny='^(dimensions|players|playerdata|advancements|stats|data|datapacks|region|entities|poi|dimensional-inventories|level\.dat.*|session\.lock|\.|\.\.)$'
+  for x in $1; do
+    [[ "$x" =~ ^[A-Za-z0-9_.-]+$ && ! "$x" =~ $deny ]] || die "--extras may only list plain world folder names that are not server state (got $x)"
+  done
+}
 
 # Copies the mirror's code next to the instance's folders, outside scripts/<instance>
 # so migrate.sh never replaces it.
@@ -190,8 +203,11 @@ cmd_setup_source() {
   if [[ "$mode" == stage && "$(cfg BACKUP_STAGING_MODE)" != mirror ]]; then
     say "NOTE: stage mode copies the backup's staging mirror, which only exists with BACKUP_STAGING_MODE=mirror (it is '$(cfg_or BACKUP_STAGING_MODE auto)')."
   fi
+  local extras
+  extras="${O_EXTRAS:-$(cfg MIRROR_EXTRAS)}"
+  valid_extras "$extras"
   install_code
-  write_config source "MIRROR_SOURCE_MODE=$mode" "MIRROR_DIMS=$dims" "MIRROR_EXPORT_AT=$at"
+  write_config source "MIRROR_SOURCE_MODE=$mode" "MIRROR_DIMS=$dims" "MIRROR_EXPORT_AT=$at" "MIRROR_EXTRAS=$extras"
   run mkdir -p "$STATE/logs"
   root_helper source-account --user "$RUN_USER" --export-root "$EXPORT_ROOT"
   TIMER_EXEC_ARGS=(--scripts-dir "$SCRIPTS_DIR")
@@ -223,8 +239,12 @@ cmd_setup_target() {
   [[ "$bw" =~ ^[0-9]+$ ]] || die "--bwlimit must be a number (KiB/s, 0 = unlimited)"
   command -v rsync > /dev/null 2>&1 || die "rsync is not installed"
   command -v ssh > /dev/null 2>&1 || die "the ssh client is not installed"
+  local extras sync
+  extras="${O_EXTRAS:-$(cfg MIRROR_EXTRAS)}"
+  valid_extras "$extras"
+  sync="${O_SYNC_MODS:-$(cfg_or MIRROR_SYNC_MODS false)}"
   install_code
-  write_config target "MIRROR_REMOTE=$remote" "MIRROR_SSH_PORT=$port" "MIRROR_PULL_AT=$at" "MIRROR_PARITY=$parity" "MIRROR_BWLIMIT_KIB=$bw"
+  write_config target "MIRROR_REMOTE=$remote" "MIRROR_SSH_PORT=$port" "MIRROR_PULL_AT=$at" "MIRROR_PARITY=$parity" "MIRROR_BWLIMIT_KIB=$bw" "MIRROR_EXTRAS=$extras" "MIRROR_SYNC_MODS=$sync"
   run mkdir -p "$SSH_DIR" "$STATE/logs"
   run chmod 700 "$SSH_DIR"
   if [[ ! -f "$SSH_DIR/id_ed25519" ]]; then
@@ -295,11 +315,13 @@ cmd_status() {
   case "$(cfg MIRROR_ROLE)" in
     source)
       say "dimensions: $(cfg_or MIRROR_DIMS minecraft/overworld), mode: $(cfg_or MIRROR_SOURCE_MODE live)"
+      say "extra folders: $(cfg_or MIRROR_EXTRAS none), mods in snapshots: $(cfg_or MIRROR_EXPORT_MODS true)"
       m="$EXPORT_ROOT/LATEST"
       if [[ -f "$m" ]]; then say "latest snapshot: $(mirror_manifest "$m" snapshot) ($(mirror_manifest "$m" files) files, $(( $(mirror_manifest "$m" bytes) / 1048576 )) MiB)"; else say "latest snapshot: none yet"; fi
       ;;
     target)
       say "source:    $(cfg MIRROR_REMOTE)"
+      say "extra folders: $(cfg_or MIRROR_EXTRAS none), run the source mods: $(cfg_or MIRROR_SYNC_MODS false)"
       say "applied:   $(cat "$SYNC_ROOT/APPLIED" 2> /dev/null || echo none)"
       ;;
   esac

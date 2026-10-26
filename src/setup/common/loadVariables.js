@@ -236,6 +236,17 @@ function loadVariables() {
     if (mirror.MIN_REGION_RATIO_PCT !== undefined && (!Number.isInteger(mirror.MIN_REGION_RATIO_PCT) || mirror.MIN_REGION_RATIO_PCT < 0 || mirror.MIN_REGION_RATIO_PCT > 100)) {
       throw new Error("MIRROR.MIN_REGION_RATIO_PCT must be a whole number from 0 to 100.");
     }
+    if (mirror.EXTRAS !== undefined) {
+      const deny = /^(dimensions|players|playerdata|advancements|stats|data|datapacks|region|entities|poi|dimensional-inventories|level\.dat.*|session\.lock|\.|\.\.)$/;
+      if (!Array.isArray(mirror.EXTRAS) || mirror.EXTRAS.some((x) => typeof x !== "string" || !/^[A-Za-z0-9_.-]+$/.test(x) || deny.test(x))) {
+        throw new Error("MIRROR.EXTRAS must be a list of plain world folder names that are not server state (for example ec_player_profiles).");
+      }
+    }
+    for (const key of ["SYNC_MODS", "EXPORT_MODS"]) {
+      if (mirror[key] !== undefined && typeof mirror[key] !== "boolean") {
+        throw new Error(`MIRROR.${key} must be a boolean.`);
+      }
+    }
     if (mirror.KEEP_SNAPSHOTS !== undefined && (!Number.isInteger(mirror.KEEP_SNAPSHOTS) || mirror.KEEP_SNAPSHOTS < 2)) {
       throw new Error("MIRROR.KEEP_SNAPSHOTS must be at least 2 so a pull in progress never loses its snapshot.");
     }

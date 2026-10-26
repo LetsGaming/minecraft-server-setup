@@ -56,6 +56,19 @@ mirror_load() {
   # 0 means no cap on the snapshot size; a region file is never legitimately near 2 GiB.
   MIRROR_MAX_SNAPSHOT_GB="${MIRROR_MAX_SNAPSHOT_GB:-0}"
   MIRROR_MAX_FILE_SIZE="${MIRROR_MAX_FILE_SIZE:-2G}"
+  # World folders (besides the dimensions) copied as they are, for example
+  # EssentialCommands' homes: "ec_player_profiles essentialcommands". Empty = none.
+  MIRROR_EXTRAS="${MIRROR_EXTRAS:-}"
+  MIRROR_EXTRAS_MAX_MB="${MIRROR_EXTRAS_MAX_MB:-256}"
+  # Source: put the mods folder's jars into every snapshot. Target: replace this
+  # server's mods with the source's (off unless asked for).
+  MIRROR_EXPORT_MODS="${MIRROR_EXPORT_MODS:-true}"
+  MIRROR_SYNC_MODS="${MIRROR_SYNC_MODS:-false}"
+  MIRROR_MODS_MAX_MB="${MIRROR_MODS_MAX_MB:-1024}"
+  # Jar names (case-insensitive alternation) never taken from the source, and the
+  # ones of this server that survive a mods sync.
+  MIRROR_MODS_EXCLUDE="${MIRROR_MODS_EXCLUDE:-c2me}"
+  MIRROR_KEEP_MODS="${MIRROR_KEEP_MODS:-fabricplots|dimensional-inventories}"
   MIRROR_WARN_SECONDS="${MIRROR_WARN_SECONDS:-60}"
   MIRROR_STOP_TIMEOUT="${MIRROR_STOP_TIMEOUT:-360}"
   MIRROR_START_TIMEOUT="${MIRROR_START_TIMEOUT:-300}"
@@ -82,6 +95,20 @@ mirror_load() {
 mirror_require() {
   [[ "$MIRROR_ENABLED" == true ]] || mirror_die "$EX_CONFIG" "the mirror is not enabled for $INSTANCE_NAME (MIRROR_ENABLED is not true; run mirror.sh setup)"
   [[ "$MIRROR_ROLE" == "$1" ]] || mirror_die "$EX_CONFIG" "this job needs MIRROR_ROLE=$1, but $INSTANCE_NAME is '${MIRROR_ROLE:-unset}'"
+}
+
+# Names under the world folder that are never mirrored: they hold this server's
+# own state (inventories, advancements, level data, the dimensions themselves).
+MIRROR_EXTRAS_DENY='^(dimensions|players|playerdata|advancements|stats|data|datapacks|region|entities|poi|dimensional-inventories|level\.dat.*|session\.lock|\.|\.\.)$'
+
+mirror_validate_extras() {
+  local x
+  for x in $MIRROR_EXTRAS; do
+    [[ "$x" =~ ^[A-Za-z0-9_.-]+$ && ! "$x" =~ $MIRROR_EXTRAS_DENY ]] ||
+      mirror_die "$EX_CONFIG" "MIRROR_EXTRAS may only list plain folder names of the world that are not server state (got $x)"
+  done
+  [[ "$MIRROR_EXTRAS_MAX_MB" =~ ^[0-9]+$ && "$MIRROR_MODS_MAX_MB" =~ ^[0-9]+$ ]] ||
+    mirror_die "$EX_CONFIG" "MIRROR_EXTRAS_MAX_MB and MIRROR_MODS_MAX_MB must be numbers"
 }
 
 mirror_validate_dims() {

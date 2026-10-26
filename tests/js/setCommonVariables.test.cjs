@@ -61,13 +61,14 @@ test("an enabled mirror is written as MIRROR_ lines, dimensions joined by spaces
       ENABLED: true, ROLE: "target", REMOTE: "mcsync@survival.example", SSH_PORT: 2222,
       SOURCE_MODE: "stage", DIMS: ["minecraft/overworld", "minecraft/the_nether"], EXPORT_AT: "04:40",
       PULL_AT: "05:15", BWLIMIT_KIB: 1000, PARITY: "refuse", MIN_REGION_RATIO_PCT: 40, MAX_SNAPSHOT_GB: 80, KEEP_SNAPSHOTS: 3,
+      EXTRAS: ["ec_player_profiles", "essentialcommands"], SYNC_MODS: true,
     },
   });
   for (const line of [
     'MIRROR_ENABLED="true"', 'MIRROR_ROLE="target"', 'MIRROR_REMOTE="mcsync@survival.example"', 'MIRROR_SSH_PORT="2222"',
     'MIRROR_SOURCE_MODE="stage"', 'MIRROR_DIMS="minecraft/overworld minecraft/the_nether"', 'MIRROR_EXPORT_AT="04:40"',
     'MIRROR_PULL_AT="05:15"', 'MIRROR_BWLIMIT_KIB="1000"', 'MIRROR_PARITY="refuse"', 'MIRROR_MIN_REGION_RATIO_PCT="40"',
-    'MIRROR_MAX_SNAPSHOT_GB="80"', 'MIRROR_KEEP_SNAPSHOTS="3"',
+    'MIRROR_MAX_SNAPSHOT_GB="80"', 'MIRROR_KEEP_SNAPSHOTS="3"', 'MIRROR_EXTRAS="ec_player_profiles essentialcommands"', 'MIRROR_SYNC_MODS="true"',
   ]) {
     assert.ok(txt.includes(line), `missing ${line}`);
   }

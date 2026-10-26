@@ -11,6 +11,9 @@ All notable changes to this project are documented here. The format follows
 
 - `main.sh --default --mirror-target --mirror-remote=<host> --mirror-seed=<seed>` sets up a creative mirror target without a hand-written `variables.json`; the two values are asked for on a terminal, and without one the setup stops before changing anything. Setup flags can now take values (`--name=value` or `--name value`).
 
+- The mirror can copy extra world folders such as EssentialCommands' homes, warps and spawn (`mirror.sh setup source|target --homes` or `--extras`), so `/home` and `/spawn` work on the creative server and lead back from the plot dimension.
+- A mirror target can run the source's mods (`--sync-mods`, on by default for a server created with `--mirror-target`). The source puts its mods folder into every snapshot, the target swaps its mods in with the chunks and rolls them back with them if the server does not start. C2ME is never taken, and the target keeps its own FabricPlots and Dimensional Inventories.
+
 ### Changed
 
 - **Breaking: setup now installs a vanilla/Fabric server by default; `--modpack` selects a CurseForge modpack.** The `--vanilla` flag is removed (an unknown flag now stops with an error) and `npm run setup:vanilla` is replaced by `npm run setup:modpack`. Anyone who ran plain `main.sh` for a modpack must now pass `--modpack`. `main.sh --check` only reports the CurseForge settings when `--modpack` is given.

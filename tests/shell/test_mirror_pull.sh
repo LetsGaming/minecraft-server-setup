@@ -307,4 +307,97 @@ test_the_pull_refuses_a_mirror_that_is_off_or_a_target_without_a_world() {
   assert_rc 78 "$RC" "a disabled mirror is refused"
 }
 
+# Extras and mods: the source offers folders and jars, the target takes only what
+# its own config lists.
+extras_setup() {
+  pull_setup || return 1
+  mirror_set "$T/src" MIRROR_EXTRAS "ec_player_profiles essentialcommands"
+  mirror_set "$T/tgt" MIRROR_EXTRAS "ec_player_profiles"
+  mkdir -p "$T/src/server/world/ec_player_profiles" "$T/src/server/world/essentialcommands" "$T/tgt/server/world/ec_player_profiles"
+  echo "src-home" > "$T/src/server/world/ec_player_profiles/a.dat"
+  echo "src-warps" > "$T/src/server/world/essentialcommands/world_data.dat"
+  echo "tgt-home" > "$T/tgt/server/world/ec_player_profiles/b.dat"
+  touch "$T/src/server/mods/essential_commands-0.42.jar"
+  touch "$T/tgt/server/mods/fabricplots-1.0.2.jar"
+  SCREEN_SHIM_SAVE_LOG="$T/src/server/logs/latest.log" run_job src "$EXPORT_SH"
+  [[ "$RC" == 0 ]] || { echo "extras export failed: $OUT"; return 1; }
+  rm -f "$T/tgt/calls"
+}
+
+test_extra_folders_are_exported_and_replace_only_the_listed_folder() {
+  extras_setup || return 0
+  local snap
+  snap="$(snapshot_dir src)"
+  assert_eq "src-home" "$(cat "$snap/_extras/ec_player_profiles/a.dat")" "the snapshot carries the folder"
+  assert_contains "$(cat "$snap/MANIFEST")" "extras=ec_player_profiles essentialcommands" "and the manifest lists it"
+  run_job tgt "$PULL_SH"
+  assert_rc 0 "$RC" "pulled"
+  assert_eq "src-home" "$(cat "$T/tgt/server/world/ec_player_profiles/a.dat")" "the target has the source's homes"
+  assert_missing "$T/tgt/server/world/ec_player_profiles/b.dat" "its own profile folder was replaced"
+  assert_eq "tgt-home" "$(cat "$T/tgt/mirror/sync/rollback/_extras/ec_player_profiles/b.dat")" "and is kept for a rollback"
+  assert_missing "$T/tgt/server/world/essentialcommands" "a folder the target did not list is not taken"
+}
+
+test_an_extra_that_is_server_state_is_refused() {
+  pull_setup || return 0
+  mirror_set "$T/src" MIRROR_EXTRAS "players"
+  SCREEN_SHIM_SAVE_LOG="$T/src/server/logs/latest.log" run_job src "$EXPORT_SH"
+  assert_rc 78 "$RC" "the export refuses"
+  assert_contains "$OUT" "MIRROR_EXTRAS" "and names the setting"
+  mirror_set "$T/tgt" MIRROR_EXTRAS "../etc"
+  run_job tgt "$PULL_SH"
+  assert_rc 78 "$RC" "the pull refuses a path-like name"
+}
+
+test_the_mods_sync_runs_the_sources_mods_and_keeps_the_targets_own() {
+  extras_setup || return 0
+  mirror_set "$T/tgt" MIRROR_SYNC_MODS true
+  run_job tgt "$PULL_SH"
+  assert_rc 0 "$RC" "pulled"
+  local m="$T/tgt/server/mods"
+  assert_exists "$m/essential_commands-0.42.jar" "a source mod is installed"
+  assert_exists "$m/lithium-1.0.jar" "a shared mod is there"
+  assert_missing "$m/c2me-fabric-1.0.jar" "an excluded mod (C2ME) is not taken, and the target's own copy is gone"
+  assert_exists "$m/fabricplots-1.0.2.jar" "the target's own plot mod survives"
+  assert_exists "$T/tgt/mirror/sync/rollback/_mods/c2me-fabric-1.0.jar" "the old mods folder is kept for a rollback"
+}
+
+test_a_source_build_of_a_kept_mod_replaces_the_targets_instead_of_doubling_it() {
+  extras_setup || return 0
+  touch "$T/src/server/mods/fabricplots-1.0.3.jar"
+  SCREEN_SHIM_SAVE_LOG="$T/src/server/logs/latest.log" run_job src "$EXPORT_SH"
+  mirror_set "$T/tgt" MIRROR_SYNC_MODS true
+  run_job tgt "$PULL_SH"
+  assert_rc 0 "$RC" "pulled"
+  assert_exists "$T/tgt/server/mods/fabricplots-1.0.3.jar" "the source's build is used"
+  assert_missing "$T/tgt/server/mods/fabricplots-1.0.2.jar" "the target's older build is not kept next to it"
+}
+
+test_without_the_sync_option_the_mods_are_left_alone() {
+  extras_setup || return 0
+  run_job tgt "$PULL_SH"
+  assert_rc 0 "$RC" "pulled"
+  assert_exists "$T/tgt/server/mods/c2me-fabric-1.0.jar" "the target's mods are untouched"
+  assert_missing "$T/tgt/server/mods/essential_commands-0.42.jar" "and the source's are not copied"
+}
+
+test_a_failed_start_puts_the_old_mods_and_folders_back() {
+  extras_setup || return 0
+  mirror_set "$T/tgt" MIRROR_SYNC_MODS true
+  cat > "$T/tgt/start.sh" <<SH
+#!/bin/bash
+n=\$(cat "$T/tgt/starts" 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > "$T/tgt/starts"
+echo start >> "$T/tgt/calls"
+touch "$SHIM_STATE/screen_running"
+[ "\$n" -ge 2 ] && echo "[00:00:09] [Server thread/INFO]: Done (3.210s)! For help, type \"help\"" >> "$T/tgt/server/logs/latest.log"
+exit 0
+SH
+  mirror_set "$T/tgt" MIRROR_START_TIMEOUT 2
+  run_job tgt "$PULL_SH"
+  assert_rc 1 "$RC" "the run fails"
+  assert_exists "$T/tgt/server/mods/c2me-fabric-1.0.jar" "the old mods are back"
+  assert_missing "$T/tgt/server/mods/essential_commands-0.42.jar" "the source's mods are out again"
+  assert_eq "tgt-home" "$(cat "$T/tgt/server/world/ec_player_profiles/b.dat")" "the old homes are back"
+}
+
 run_tests

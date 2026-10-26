@@ -121,12 +121,15 @@ if (MIRROR.ENABLED === true) {
     MIN_REGION_RATIO_PCT: "MIRROR_MIN_REGION_RATIO_PCT",
     MAX_SNAPSHOT_GB: "MIRROR_MAX_SNAPSHOT_GB",
     KEEP_SNAPSHOTS: "MIRROR_KEEP_SNAPSHOTS",
+    SYNC_MODS: "MIRROR_SYNC_MODS",
+    EXPORT_MODS: "MIRROR_EXPORT_MODS",
   };
   lines.push(`MIRROR_ENABLED=${q(true)}`);
   for (const [key, name] of Object.entries(MIRROR_KEYS)) {
     if (MIRROR[key] !== undefined) lines.push(`${name}=${q(MIRROR[key])}`);
   }
   if (Array.isArray(MIRROR.DIMS)) lines.push(`MIRROR_DIMS=${q(MIRROR.DIMS.join(" "))}`);
+  if (Array.isArray(MIRROR.EXTRAS)) lines.push(`MIRROR_EXTRAS=${q(MIRROR.EXTRAS.join(" "))}`);
 }
 
 const variablesContent = lines.join("\n");
