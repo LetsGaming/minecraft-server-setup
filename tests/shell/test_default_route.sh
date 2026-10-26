@@ -165,6 +165,14 @@ test_name_collision_uses_next_name() {
   assert_exists "$T/home/minecraft-server/instances/server" "existing instance untouched"
 }
 
+test_the_default_route_takes_the_instance_name_from_the_flag() {
+  setup
+  local out
+  out="$(DRIVE_PRE='INSTANCE_NAME_FLAG=creative' drive default $'y\ny\n')"
+  assert_contains "$out" "rc=0" "route finishes"
+  assert_eq '"creative"' "$(cfg .INSTANCE_NAME)" "the flag's name is written"
+}
+
 test_existing_variables_json_is_never_overwritten() {
   setup
   echo '{"keep":"me"}' > "$T/repo/variables.json"

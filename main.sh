@@ -45,6 +45,7 @@ declare -A ARG_OPTS=(
 declare -A ARG_VALUE_OPTS=(
   ["--mirror-remote"]="MIRROR_REMOTE|Survival server for --mirror-target: host or IP (optionally mcsync@host)"
   ["--mirror-seed"]="MIRROR_SEED|Seed of the survival world for --mirror-target (its level-seed)"
+  ["--instance-name"]="INSTANCE_NAME_FLAG|Name of the server instance on the Default route (default: server)"
 )
 
 # Run lifecycle
@@ -64,6 +65,10 @@ fi
 
 check_platform
 select_route
+if [ -n "$INSTANCE_NAME_FLAG" ] && ! validate_instance_name "$INSTANCE_NAME_FLAG" > /dev/null; then
+  ui_notice error "--instance-name may only contain letters, numbers, hyphens and underscores. Nothing was changed." >&2
+  exit 1
+fi
 mirror_flags_check
 
 # Nothing below may call node before the prerequisite stage has made it available.

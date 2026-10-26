@@ -92,7 +92,7 @@ bash main.sh --default --agree-eula --mirror-source
 A target must know the survival server and the survival world's seed (`level-seed` in its `server.properties`), so give them as flags:
 
 ```bash
-bash main.sh --default --agree-eula --mirror-target --mirror-remote=192.168.1.20 --mirror-seed=-446251370538060616
+bash main.sh --default --agree-eula --instance-name=creative --mirror-target --mirror-remote=192.168.1.20 --mirror-seed=-446251370538060616
 ```
 
 On a terminal you can leave the two values out and the setup asks for them; without a terminal it stops before changing anything and names the missing flags. The flags work on the Guided route too and win over the wizard's answers.

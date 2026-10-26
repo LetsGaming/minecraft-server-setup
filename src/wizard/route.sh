@@ -202,7 +202,7 @@ run_default_route() {
   _wizard_resolve_default_version
   minecraft="$RESOLVED_MINECRAFT"
   dropped="$RESOLVED_DROPPED"
-  choose_instance_name server "$WIZARD_TARGET_DIR_NAME"
+  choose_instance_name "${INSTANCE_NAME_FLAG:-server}" "$WIZARD_TARGET_DIR_NAME"
   choose_server_port
   choose_heap ""
 
