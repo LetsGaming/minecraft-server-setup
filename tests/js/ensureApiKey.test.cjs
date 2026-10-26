@@ -28,6 +28,12 @@ test("an empty key is replaced by a 64 character hex key and the wrapper is enab
   assert.strictEqual(api.PORT, 3030, "other settings are kept");
 });
 
+test("the example placeholder key is replaced even though it is long enough", () => {
+  const file = tmpConfig({ ENABLED: true, API_KEY: "replace-with-a-long-random-secret" });
+  assert.strictEqual(ensureApiKey(file), true);
+  assert.match(read(file).API_SERVER.API_KEY, /^[0-9a-f]{64}$/);
+});
+
 test("a key that is too short is replaced", () => {
   const file = tmpConfig({ ENABLED: true, API_KEY: "short" });
   assert.strictEqual(ensureApiKey(file), true);

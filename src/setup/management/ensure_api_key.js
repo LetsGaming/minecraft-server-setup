@@ -13,12 +13,15 @@ const fs = require("fs");
 const crypto = require("crypto");
 
 const MIN_KEY_LENGTH = 32;
+// Long enough to pass the length check, but loadVariables rejects it.
+const EXAMPLE_API_KEYS = ["replace-with-a-long-random-secret"];
 
 function ensureApiKey(file) {
   const raw = fs.readFileSync(file, "utf8");
   const data = JSON.parse(raw);
   const api = data.API_SERVER && typeof data.API_SERVER === "object" ? data.API_SERVER : {};
-  const key = typeof api.API_KEY === "string" ? api.API_KEY : "";
+  const rawKey = typeof api.API_KEY === "string" ? api.API_KEY : "";
+  const key = EXAMPLE_API_KEYS.includes(rawKey) ? "" : rawKey;
   if (key.length >= MIN_KEY_LENGTH && api.ENABLED === true) return false;
 
   data.API_SERVER = { ...api, ENABLED: true };
