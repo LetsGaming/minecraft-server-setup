@@ -85,6 +85,17 @@ test_a_target_is_set_up_then_prepared_with_the_configured_seed() {
   assert_contains "$OUT" "docs/mirror.md" "the pairing is pointed out"
 }
 
+test_a_deployed_api_wrapper_is_refreshed_after_the_target_is_prepared() {
+  setup || { skip "mirror hook" "node is not available"; return 0; }
+  config '{"MIRROR":{"ENABLED":true,"ROLE":"target","REMOTE":"mcsync@survival.example"},"JAVA":{"SERVER":{"SEED":"7"}}}'
+  hook
+  assert_not_contains "$OUT" "API wrapper" "no wrapper, nothing to refresh"
+  mkdir -p "$T/home/mc/services/api-server"
+  echo '{"instances":{}}' > "$T/home/mc/services/api-server/api-server-config.json"
+  hook
+  assert_contains "$OUT" "Updating the API wrapper with the server's RCON settings" "a deployed wrapper is refreshed, because prepare turns RCON on"
+}
+
 test_a_target_without_a_source_is_not_started() {
   setup || { skip "mirror hook" "node is not available"; return 0; }
   config '{"JAVA":{"SERVER":{}}}'

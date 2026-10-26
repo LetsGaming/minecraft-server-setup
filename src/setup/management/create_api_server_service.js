@@ -132,9 +132,10 @@ config.instances[INSTANCE_NAME] = {
   serverPath,
   scriptsDir: SCRIPTS_DIR,
   linuxUser,
-  useRcon: serverCtrl.USE_RCON === true,
-  rconHost: serverCtrl.RCON_HOST || "localhost",
-  rconPort: serverCtrl.RCON_PORT || 25575,
+  // The deployed settings count too: a mirror target enables RCON after the install.
+  useRcon: serverCtrl.USE_RCON === true || deployedVars["USE_RCON"] === "true",
+  rconHost: serverCtrl.RCON_HOST || deployedVars["RCON_HOST"] || "localhost",
+  rconPort: serverCtrl.RCON_PORT || Number(deployedVars["RCON_PORT"]) || 25575,
   rconPassword: serverCtrl.RCON_PASSWORD || deployedVars["RCON_PASSWORD"] || "",
   backupsPath: deployedVars["BACKUPS_PATH"] || "",
 };

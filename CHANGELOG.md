@@ -24,6 +24,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A mirror target created together with the API wrapper now gives the wrapper its RCON settings: preparing the target turns RCON on after the wrapper was deployed, so the wrapper reported RCON as unconfigured and no player limit. Setup refreshes the wrapper afterwards.
 - `mirror.sh setup --homes` now copies the folder EssentialCommands really keeps `/home`s in (`modplayerdata`) together with the warps and spawn (`essentialcommands`); it used to name `ec_player_profiles`, which only holds empty stubs.
 - The mirror's parity check also compares build limit mods (such as Remove Buildlimit), because a creative server without them cannot read the survival world's taller chunks.
 - **Backups work again in the default (screen) mode on Minecraft 26.3.** 26.3 logs `System chat: Saved the game`, which the confirmed-save wait never matched, so every backup aborted after 120 s. The pattern is now anchored to the whole log line (timestamp and thread included, so chat cannot fake it) and accepts the 26.3 console and RCON forms. The same prefix change had hidden the player list in screen mode, so player-aware restarts could not read the count; fixed the same way (`common/server_control.sh`).

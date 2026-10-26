@@ -81,6 +81,11 @@ run_mirror_setup() {
       NO_START=true
       return 0
     fi
+    # prepare enabled RCON; a wrapper deployed earlier in this run still has it off.
+    if [[ -f "$MAIN_DIR/$TARGET_DIR_NAME/services/api-server/api-server-config.json" ]]; then
+      log "Updating the API wrapper with the server's RCON settings..."
+      run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_api_server_service.js\"" || warn "Could not update the API wrapper; run main.sh --api-server again to refresh it."
+    fi
   fi
   log "The mirror still has to be paired with the other server: see docs/mirror.md."
 }
