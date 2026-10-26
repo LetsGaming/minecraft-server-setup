@@ -126,6 +126,22 @@ test_a_stopped_server_is_copied_without_a_save_window() {
   assert_contains "$OUT" "server stopped" "the log says so"
 }
 
+test_every_export_puts_the_snapshots_back_in_the_export_folders_group() {
+  mirror_setup || return 0
+  local g1 g2
+  g1="$(id -g)"
+  g2="$(id -G | tr ' ' '\n' | grep -vx "$g1" | head -n 1)"
+  if [[ -z "$g2" ]]; then skip "snapshot group" "the test user has only one group"; return 0; fi
+  mkdir -p "$T/src/mirror/export/snapshots/20200101T000000Z/minecraft"
+  chgrp "$g2" "$T/src/mirror/export"
+  chgrp "$g1" "$T/src/mirror/export/snapshots" "$T/src/mirror/export/snapshots/20200101T000000Z" "$T/src/mirror/export/snapshots/20200101T000000Z/minecraft"
+  run_job src "$EXPORT_SH"
+  assert_rc 0 "$RC" "exported"
+  assert_eq "$g2" "$(stat -c %g "$T/src/mirror/export/snapshots")" "the snapshots folder is back in the export folder's group"
+  assert_eq "$g2" "$(stat -c %g "$T/src/mirror/export/snapshots/20200101T000000Z/minecraft")" "so is an old snapshot's content"
+  assert_eq "$g2" "$(stat -c %g "$(snapshot_dir src)/minecraft/overworld/region")" "and the new one"
+}
+
 test_the_version_comes_from_the_suites_record_before_the_server_log() {
   mirror_setup || return 0
   printf '{"gameVersion":"26.4","modLoader":"fabric"}' > "$T/src/scripts/common/downloaded_versions.json"

@@ -195,6 +195,14 @@ main() {
   fi
   mkdir -p "$SNAP_DIR"
   chmod 2750 "$EXPORT_ROOT" "$SNAP_DIR" 2> /dev/null || true
+  # The read-only account reads the snapshots through the export folder's group. A
+  # recursive chown by an admin or a restore would reset it, and the pull would
+  # then fail with "permission denied", so every run puts the group back.
+  local group
+  group="$(stat -c %G "$EXPORT_ROOT" 2> /dev/null || true)"
+  if [[ -n "$group" && "$group" != UNKNOWN ]]; then
+    find "$SNAP_DIR" ! -group "$group" -exec chgrp "$group" {} + 2> /dev/null || true
+  fi
 
   trap on_exit EXIT
   trap 'exit 143' TERM
