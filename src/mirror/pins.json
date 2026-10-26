@@ -4,6 +4,7 @@
   "mods": [
     { "slug": "fabric-api", "pin": { "26.3": "0.165.0+26.3" } },
     { "slug": "fabricplots", "pin": { "26.3": "1.0.2+26.3" } },
-    { "slug": "dimensional-inventories", "pin": { "26.3": "2.2.2+26.3" } }
+    { "slug": "dimensional-inventories", "pin": { "26.3": "2.2.2+26.3" } },
+    { "slug": "luckperms", "pin": { "26.3": "v5.5.85-fabric" } }
   ]
 }

@@ -15,8 +15,8 @@ _mirror_ask() { # prompt
 # Called after the route is chosen and before anything is changed.
 mirror_flags_check() {
   if [[ "${MIRROR_TARGET:-false}" != true ]]; then
-    if [[ -n "${MIRROR_REMOTE:-}" || -n "${MIRROR_SEED:-}" ]]; then
-      ui_notice error "--mirror-remote and --mirror-seed only make sense together with --mirror-target." >&2
+    if [[ -n "${MIRROR_REMOTE:-}" || -n "${MIRROR_SEED:-}" || "${MIRROR_NO_PERMISSIONS:-false}" == true ]]; then
+      ui_notice error "--mirror-remote, --mirror-seed and --mirror-no-permissions only make sense together with --mirror-target." >&2
       exit 1
     fi
     return 0

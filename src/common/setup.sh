@@ -74,6 +74,9 @@ run_mirror_setup() {
     seed=$(node -e "console.log(String((require('$SCRIPT_DIR/variables.json').JAVA.SERVER||{}).SEED||''))" 2> /dev/null || true)
     args=(prepare --scripts-dir "$scripts_dir")
     [[ -z "$seed" ]] || args+=(--seed "$seed")
+    if [[ "${MIRROR_NO_PERMISSIONS:-false}" == true ]] || node -e "process.exit((require('$SCRIPT_DIR/variables.json').MIRROR||{}).PERMISSIONS===false?0:1)" 2> /dev/null; then
+      args+=(--no-permissions)
+    fi
     printf -v cmd '%q ' bash "$SCRIPT_DIR/mirror.sh" "${args[@]}"
     if ! run_or_echo "$cmd"; then
       warn "Preparing the creative server failed (see above). It was NOT started, so no world exists yet."

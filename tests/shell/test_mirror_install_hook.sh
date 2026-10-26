@@ -96,6 +96,17 @@ test_a_deployed_api_wrapper_is_refreshed_after_the_target_is_prepared() {
   assert_contains "$OUT" "Updating the API wrapper with the server's RCON settings" "a deployed wrapper is refreshed, because prepare turns RCON on"
 }
 
+test_the_permissions_opt_out_reaches_prepare() {
+  setup || { skip "mirror hook" "node is not available"; return 0; }
+  config '{"MIRROR":{"ENABLED":true,"ROLE":"target","REMOTE":"mcsync@survival.example"},"JAVA":{"SERVER":{"SEED":"7"}}}'
+  MIRROR_NO_PERMISSIONS=true hook
+  assert_contains "$(logged)" "prepare --scripts-dir $T/home/mc/scripts/creative --seed 7 --no-permissions" "the flag is passed on"
+  : > "$MIRROR_STUB_LOG"
+  config '{"MIRROR":{"ENABLED":true,"ROLE":"target","REMOTE":"mcsync@survival.example","PERMISSIONS":false},"JAVA":{"SERVER":{"SEED":"7"}}}'
+  hook
+  assert_contains "$(logged)" "--no-permissions" "so is the variables.json setting"
+}
+
 test_a_target_without_a_source_is_not_started() {
   setup || { skip "mirror hook" "node is not available"; return 0; }
   config '{"JAVA":{"SERVER":{}}}'

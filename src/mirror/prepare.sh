@@ -7,7 +7,8 @@
 # started, and a server that is running or a world that already exists is refused
 # (a seed cannot be changed on an existing world).
 #
-# Usage: prepare.sh --scripts-dir DIR [--seed SEED] [--force] [--dry-run]
+# Usage: prepare.sh --scripts-dir DIR [--seed SEED] [--no-permissions] [--force] [--dry-run]
+#   --no-permissions  do not install LuckPerms (by default every player may use /gamemode)
 #   --force    go ahead although a world already exists (the seed stays as it is)
 #   --dry-run  say what would change, change nothing
 #
@@ -19,14 +20,15 @@ if [[ -f "$HERE/lib/config.sh" ]]; then LIB="$HERE/lib"; else LIB="$HERE/src/mir
 # shellcheck source=lib/config.sh
 source "$LIB/config.sh"
 
-SCRIPTS_DIR="" SEED="" FORCE=false DRY_RUN=false
+SCRIPTS_DIR="" SEED="" FORCE=false DRY_RUN=false PERMISSIONS=true
 while (($#)); do
   case "$1" in
     --scripts-dir) SCRIPTS_DIR="$2"; shift 2 ;;
     --seed) SEED="$2"; shift 2 ;;
+    --no-permissions) PERMISSIONS=false; shift ;;
     --force) FORCE=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
-    -h | --help) sed -n '2,18p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h | --help) sed -n '2,19p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -120,6 +122,7 @@ else
   [[ -n "$MC_VERSION" ]] || die "could not read the Minecraft version from downloaded_versions.json"
   mods_args=(--mods-dir "$SERVER_PATH/mods" --mc-version "$MC_VERSION" --pins "$HERE/pins.json")
   [[ -f "$HERE/pins.json" ]] || mods_args[5]="$HERE/src/mirror/pins.json"
+  $PERMISSIONS || mods_args+=(--skip luckperms)
   $DRY_RUN && mods_args+=(--dry-run)
   mods_js="$HERE/prepare_mods.js"
   [[ -f "$mods_js" ]] || mods_js="$HERE/src/mirror/prepare_mods.js"
@@ -151,6 +154,42 @@ else
     awk 'BEGIN { d = 0 } /^manage-gamemode=/ { if (!d) print "manage-gamemode=false"; d = 1; next } { print } END { if (!d) print "manage-gamemode=false" }' "$plots_cfg" > "$plots_cfg.new" && mv -f -- "$plots_cfg.new" "$plots_cfg"
   else
     echo "manage-gamemode=false" > "$plots_cfg"
+  fi
+fi
+
+# --- LuckPerms: every player may use /gamemode ---------------------------------
+# Vanilla ties /gamemode to op. LuckPerms is told to keep its data in plain JSON so
+# the default group can be written before the first start; its other settings keep
+# their defaults. Files that exist are never overwritten (an admin's rules win).
+if $PERMISSIONS; then
+  LP_DIR="$CONFIG_DIR/luckperms"
+  LP_CONF="$LP_DIR/luckperms.conf"
+  LP_GROUP="$LP_DIR/json-storage/groups/default.json"
+  if $DRY_RUN; then
+    say "would let every player use /gamemode (LuckPerms: group default gets minecraft.command.gamemode)"
+  else
+    mkdir -p "$LP_DIR/json-storage/groups"
+    if [[ -f "$LP_CONF" ]]; then
+      say "LuckPerms settings exist already; left as they are"
+    else
+      printf 'storage-method = "json"\n' > "$LP_CONF"
+    fi
+    if [[ -f "$LP_GROUP" ]]; then
+      say "LuckPerms default group exists already; left as it is"
+    else
+      cat > "$LP_GROUP" <<'JSON'
+{
+  "name": "default",
+  "permissions": [
+    {
+      "permission": "minecraft.command.gamemode",
+      "value": true
+    }
+  ]
+}
+JSON
+      say "every player may use /gamemode (LuckPerms group default); change it with /lp or pass --no-permissions to skip LuckPerms"
+    fi
   fi
 fi
 

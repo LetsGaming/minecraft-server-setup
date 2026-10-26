@@ -89,6 +89,8 @@ test_the_power_route_does_not_need_the_flags_and_other_misuse_is_refused() {
   assert_rc 0 "$RC" "the file supplies them on the power route"
   MIRROR_TARGET=false MIRROR_REMOTE="h" MIRROR_SEED="" MIRROR_SOURCE=false check default < /dev/null
   assert_rc 1 "$RC" "a remote without --mirror-target"
+  MIRROR_TARGET=false MIRROR_REMOTE="" MIRROR_SEED="" MIRROR_NO_PERMISSIONS=true MIRROR_SOURCE=false check default < /dev/null
+  assert_rc 1 "$RC" "--mirror-no-permissions without --mirror-target"
   MIRROR_TARGET=true MIRROR_REMOTE="h" MIRROR_SEED="1" MIRROR_SOURCE=true check default < /dev/null
   assert_rc 1 "$RC" "source and target together"
 }

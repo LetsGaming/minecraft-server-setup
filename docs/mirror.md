@@ -115,7 +115,17 @@ A target needs `MIRROR.REMOTE` and, in `JAVA.SERVER.SEED`, the survival world's 
 - RCON on (the suite's own RCON mode, used for the nightly swap),
 - Fabric API (a plain Fabric server has none), FabricPlots and Dimensional Inventories from Modrinth by exact version, with the SHA-512 checked (see `src/mirror/pins.json`; for a Minecraft version without a pin the newest release is used and the output says so),
 - FabricPlots without its own game-mode switching, and Dimensional Inventories pools so the plots, the mirrored overworld and the Nether with the End (one shared pool) each keep their own inventory, all creative,
-- C2ME turned off on a new server (see below).
+- C2ME turned off on a new server (see below),
+- LuckPerms, set up so **every player may use `/gamemode`** without being op (see below).
+
+### Letting players change their game mode
+
+Vanilla ties `/gamemode` to op, with no setting in between. `prepare` therefore installs LuckPerms (a pinned release, hash-checked) and writes its data in plain JSON before the first start, with the `default` group (everyone) holding `minecraft.command.gamemode`. Nothing else is granted. Change it with `/lp` in the console or in game as an op, for example `lp group default permission unset minecraft.command.gamemode` to take it away again or `lp creategroup builder` for a group with more.
+
+- Skip all of this with `--no-permissions` (`mirror.sh prepare`), `--mirror-no-permissions` (`main.sh --mirror-target`) or `"PERMISSIONS": false` in the `MIRROR` block.
+- Files that exist are never overwritten, so an admin's LuckPerms rules survive a second `prepare`.
+- LuckPerms is on the default `MIRROR_KEEP_MODS` list, so a mods sync does not remove it, and the mirror does not copy its data.
+- Dimensional Inventories sets the game mode of each pool (all creative here). A player who changes to survival with `/gamemode` is put back to the pool's mode when they enter another dimension.
 
 On Minecraft 26.3 the whitelist is on by default: add players, or turn it off on purpose.
 
@@ -149,7 +159,7 @@ bash mirror.sh setup target --instance creative --sync-mods
 A server created as a target (`main.sh --mirror-target`) does this by default. At each pull the target builds the new mods folder next to the old one, swaps it in with the chunks and starts the server. If the server does not come up, the old mods go back with the old chunks. Two lists tune it, as `MIRROR_` settings in `variables.txt`:
 
 - `MIRROR_MODS_EXCLUDE` (default `c2me`): jar names that are never taken from the source.
-- `MIRROR_KEEP_MODS` (default `fabricplots|dimensional-inventories`): the target's own jars that survive. If the source has its own build of one of them, the source's replaces it instead of running twice.
+- `MIRROR_KEEP_MODS` (default `fabricplots|dimensional-inventories|luckperms`): the target's own jars that survive. If the source has its own build of one of them, the source's replaces it instead of running twice.
 
 **Trust:** a mods sync means the target runs the jars the source sends, so whoever controls the source can run code on the target. The link is the read-only SSH account and a pinned host key, the file names are checked, and the target decides on its own to sync (the source cannot turn it on), but the jars themselves are not signed or hashed against a list. Use it only between servers you run yourself; leave it off (`--sync-mods` is opt-in on an existing server) when the source is not yours. Excluded world-generation mods (C2ME by default) are named in the pull's warning, so the parity check is never silent.
 
@@ -220,6 +230,7 @@ Switched on by `mirror.sh setup` (which keeps a marked block in `common/variable
 | `KEEP_SNAPSHOTS` | snapshots kept on the source, at least 2 | `2` |
 | `EXTRAS` | extra world folders to mirror, for example `["modplayerdata", "essentialcommands"]` | none |
 | `SYNC_MODS`, `EXPORT_MODS` | target: run the source's mods; source: put its mods in the snapshots | off, on |
+| `PERMISSIONS` | target: install LuckPerms so every player may use `/gamemode`; `false` skips it | `true` |
 
 The same keys exist in `variables.txt` with a `MIRROR_` prefix. Other `MIRROR_*` tuning (timeouts, retries, lock wait) is read from the same file; see `src/mirror/lib/common.sh` for the full list.
 

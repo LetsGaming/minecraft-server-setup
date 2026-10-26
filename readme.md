@@ -209,6 +209,7 @@ Options (`--help` lists them):
 | `--mirror-target` | Also prepare this server as the creative side of the mirror. With `--default` or `--guided` add `--mirror-remote` and `--mirror-seed`, or you are asked for them |
 | `--mirror-remote=HOST` | The survival server for `--mirror-target`: a host or IP, optionally `mcsync@host` |
 | `--mirror-seed=SEED` | The survival world's `level-seed`, for `--mirror-target` |
+| `--mirror-no-permissions` | With `--mirror-target`: do not install LuckPerms (by default every player may use `/gamemode`) |
 | `--instance-name=NAME` | Name of the server instance on the Default route (default `server`); the service, the folders and the bot's instance id use it |
 | `--modpack` | Set up a CurseForge modpack server instead of the default vanilla/Fabric server |
 | `--y` | Skip the prompts and take the defaults. This **accepts the EULA** |

@@ -111,6 +111,16 @@ test("the pinned versions are installed, not the newest ones", async () => {
   assert.ok(!r.out.includes("not pinned"), "nothing is reported as unpinned");
 });
 
+test("--skip leaves the named mods out and installs the rest", async () => {
+  tamper = false;
+  const s = setup();
+  const r = await run(s, ["--skip", "dimensional-inventories"]);
+  assert.strictEqual(r.code, 0, r.err);
+  assert.ok(fs.existsSync(path.join(s.mods, "fabricplots-1.0.2+26.3.jar")), "the other mod is installed");
+  assert.ok(!fs.existsSync(path.join(s.mods, "dimensional-inventories-2.2.2+26.3.jar")), "the skipped one is not");
+  assert.match(r.out, /dimensional-inventories: skipped/);
+});
+
 test("without a pin the newest release is used and the run says so", async () => {
   tamper = false;
   const s = setup({ requires: [], mods: [{ slug: "fabricplots", pin: {} }] }, []);

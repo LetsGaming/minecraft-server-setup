@@ -68,7 +68,7 @@ mirror_load() {
   # Jar names (case-insensitive alternation) never taken from the source, and the
   # ones of this server that survive a mods sync.
   MIRROR_MODS_EXCLUDE="${MIRROR_MODS_EXCLUDE:-c2me}"
-  MIRROR_KEEP_MODS="${MIRROR_KEEP_MODS:-fabricplots|dimensional-inventories}"
+  MIRROR_KEEP_MODS="${MIRROR_KEEP_MODS:-fabricplots|dimensional-inventories|luckperms}"
   MIRROR_WARN_SECONDS="${MIRROR_WARN_SECONDS:-60}"
   MIRROR_STOP_TIMEOUT="${MIRROR_STOP_TIMEOUT:-360}"
   MIRROR_START_TIMEOUT="${MIRROR_START_TIMEOUT:-300}"

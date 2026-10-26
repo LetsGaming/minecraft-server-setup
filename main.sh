@@ -37,6 +37,7 @@ declare -A ARG_OPTS=(
   ["--modpack"]="MODPACK=false|Set up a CurseForge modpack server instead of a vanilla/Fabric server"
   ["--mirror-source"]="MIRROR_SOURCE=false|Also set this server up as the survival side of the optional creative mirror"
   ["--mirror-target"]="MIRROR_TARGET=false|Also prepare this server as the creative side of the optional creative mirror (with --default or --guided it needs --mirror-remote and --mirror-seed, or asks for them)"
+  ["--mirror-no-permissions"]="MIRROR_NO_PERMISSIONS=false|With --mirror-target: do not install LuckPerms (by default every player may use /gamemode)"
   ["--default"]="DEFAULT_ROUTE=false|Quick setup with safe defaults and almost no questions"
   ["--guided"]="GUIDED_ROUTE=false|Guided setup wizard with explanations for each choice"
   ["--allow-nodesource"]="ALLOW_NODESOURCE=false|Allow adding the NodeSource apt repository when Node.js is too old"

@@ -242,7 +242,7 @@ function loadVariables() {
         throw new Error("MIRROR.EXTRAS must be a list of plain world folder names that are not server state (for example modplayerdata).");
       }
     }
-    for (const key of ["SYNC_MODS", "EXPORT_MODS"]) {
+    for (const key of ["SYNC_MODS", "EXPORT_MODS", "PERMISSIONS"]) {
       if (mirror[key] !== undefined && typeof mirror[key] !== "boolean") {
         throw new Error(`MIRROR.${key} must be a boolean.`);
       }

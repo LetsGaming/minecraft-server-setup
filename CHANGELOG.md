@@ -16,6 +16,8 @@ All notable changes to this project are documented here. The format follows
 
 - `main.sh --default --instance-name=NAME` names the instance on the Default route, so a second server (for example the creative mirror) can be created with its own service, folders and API wrapper id without a hand-written `variables.json`.
 
+- A new mirror target lets every player use `/gamemode` without being op: `mirror.sh prepare` installs LuckPerms (pinned, hash-checked), stores its data as JSON and writes the `default` group with `minecraft.command.gamemode` before the first start. Skip it with `--no-permissions`, `--mirror-no-permissions` (with `main.sh --mirror-target`) or `MIRROR.PERMISSIONS: false`. Existing LuckPerms files are never overwritten, and LuckPerms is kept by a mods sync.
+
 ### Changed
 
 - **Breaking: setup now installs a vanilla/Fabric server by default; `--modpack` selects a CurseForge modpack.** The `--vanilla` flag is removed (an unknown flag now stops with an error) and `npm run setup:vanilla` is replaced by `npm run setup:modpack`. Anyone who ran plain `main.sh` for a modpack must now pass `--modpack`. `main.sh --check` only reports the CurseForge settings when `--modpack` is given.

@@ -30,7 +30,8 @@ Setup
       source: --source-mode live|stage  --dims "minecraft/overworld"  --export-at HH:MM  --extras "folder ..." | --homes
       target: --source HOST  --ssh-port N  --pull-at HH:MM  --parity warn|refuse|off  --bwlimit KIB
               --extras "folder ..." | --homes   --sync-mods (run the source's mods)
-  prepare                 prepare a NEW creative instance (properties, pinned mods, pools)
+  prepare                 prepare a NEW creative instance (properties, pinned mods, pools,
+                          LuckPerms so every player may use /gamemode; --no-permissions skips it)
   authorize               (source) allow the target's key: --from ADDR --key "ssh-ed25519 ..."
   fingerprint             (source) print this host's SSH host key fingerprint
   pin-host                (target) pin the source's host key: --host H [--fingerprint SHA256:...]
@@ -61,7 +62,7 @@ fi
 
 SCRIPTS_DIR="" INSTANCE_ARG="" DRY_RUN=false PURGE=false
 O_SOURCE_MODE="" O_DIMS="" O_EXPORT_AT="" O_SOURCE="" O_SSH_PORT="" O_PULL_AT="" O_PARITY="" O_BWLIMIT=""
-O_EXTRAS="" O_SYNC_MODS="" O_FROM="" O_KEY="" O_HOST="" O_FINGERPRINT="" O_SEED="" O_FORCE=false
+O_EXTRAS="" O_SYNC_MODS="" O_NO_PERMS=false O_FROM="" O_KEY="" O_HOST="" O_FINGERPRINT="" O_SEED="" O_FORCE=false
 PASS_ARGS=()
 while (($#)); do
   case "$1" in
@@ -80,6 +81,7 @@ while (($#)); do
     --extras) O_EXTRAS="$2"; shift 2 ;;
     --homes) O_EXTRAS="modplayerdata essentialcommands"; shift ;;
     --sync-mods) O_SYNC_MODS=true; shift ;;
+    --no-permissions) O_NO_PERMS=true; shift ;;
     --from) O_FROM="$2"; shift 2 ;;
     --key) O_KEY="$2"; shift 2 ;;
     --host) O_HOST="$2"; shift 2 ;;
@@ -445,6 +447,7 @@ cmd_prepare() {
   [[ -f "$MIRROR_HOME/prepare.sh" ]] || die "run mirror.sh setup target first"
   local args=(--scripts-dir "$SCRIPTS_DIR")
   [[ -z "$O_SEED" ]] || args+=(--seed "$O_SEED")
+  ! $O_NO_PERMS || args+=(--no-permissions)
   ! $O_FORCE || args+=(--force)
   ! $DRY_RUN || args+=(--dry-run)
   bash "$MIRROR_HOME/prepare.sh" "${args[@]}"

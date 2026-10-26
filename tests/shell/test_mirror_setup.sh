@@ -415,6 +415,33 @@ test_prepare_sets_up_a_new_creative_instance() {
   assert_not_contains "$OUT" "$pw" "the password is not printed"
 }
 
+test_prepare_lets_every_player_use_gamemode_through_luckperms_and_never_overwrites_rules() {
+  prep_setup || { skip "prepare" "node is not available"; return 0; }
+  local lp="$T/tgt/server/config/luckperms"
+  prepare --seed 9
+  assert_rc 0 "$RC" "prepared"
+  assert_eq 'storage-method = "json"' "$(cat "$lp/luckperms.conf")" "LuckPerms keeps its data in JSON so the group can be written first"
+  assert_contains "$(cat "$lp/json-storage/groups/default.json")" '"permission": "minecraft.command.gamemode"' "the default group may use /gamemode"
+  assert_contains "$OUT" "every player may use /gamemode" "and the output says so"
+  echo "admin-rules" > "$lp/json-storage/groups/default.json"
+  echo "admin-conf" > "$lp/luckperms.conf"
+  rm -rf "$T/tgt/server/world"
+  prepare --seed 9
+  assert_eq "admin-rules" "$(cat "$lp/json-storage/groups/default.json")" "an existing group is left as it is"
+  assert_eq "admin-conf" "$(cat "$lp/luckperms.conf")" "and so are the settings"
+}
+
+test_prepare_can_skip_the_permissions() {
+  prep_setup || { skip "prepare" "node is not available"; return 0; }
+  prepare --seed 9 --no-permissions
+  assert_rc 0 "$RC" "prepared"
+  assert_missing "$T/tgt/server/config/luckperms" "no LuckPerms files"
+  rm -rf "$T/tgt/server/world"
+  prepare --seed 9 --dry-run
+  assert_missing "$T/tgt/server/config/luckperms" "a dry run writes nothing"
+  assert_contains "$OUT" "would let every player use /gamemode" "but says what it would do"
+}
+
 test_prepare_needs_a_seed_and_refuses_a_bad_one() {
   prep_setup || { skip "prepare" "node is not available"; return 0; }
   prepare

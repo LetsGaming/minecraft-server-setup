@@ -5,7 +5,7 @@
 // by exact version where one is pinned (pins.json), with the SHA-512 Modrinth
 // publishes checked before a jar is kept. Needs Node 18 or newer (fetch).
 //
-// Usage: node prepare_mods.js --mods-dir DIR --mc-version V [--pins FILE] [--dry-run]
+// Usage: node prepare_mods.js --mods-dir DIR --mc-version V [--pins FILE] [--skip slug,slug] [--dry-run]
 // Env:   MODRINTH_API  base URL of the API (tests point it at a local server)
 // Exit:  0 done, 1 a mod could not be installed.
 
@@ -23,6 +23,7 @@ function parseArgs(argv) {
     if (a === "--mods-dir") out.modsDir = argv[++i];
     else if (a === "--mc-version") out.mcVersion = argv[++i];
     else if (a === "--pins") out.pins = argv[++i];
+    else if (a === "--skip") out.skip = String(argv[++i] || "").split(",").filter(Boolean);
     else if (a === "--dry-run") out.dryRun = true;
     else throw new Error(`unknown argument: ${a}`);
   }
@@ -101,7 +102,13 @@ async function main() {
   for (const slug of cfg.requires || []) {
     if (jarsFor(opts.modsDir, slug).length === 0) throw new Error(`${slug} is required but not installed; set up the server first`);
   }
-  for (const m of cfg.mods) await installMod(m.slug, opts, pins);
+  for (const m of cfg.mods) {
+    if ((opts.skip || []).includes(m.slug)) {
+      console.log(`${m.slug}: skipped`);
+      continue;
+    }
+    await installMod(m.slug, opts, pins);
+  }
 }
 
 module.exports = { chooseVersion, jarsFor, parseArgs };

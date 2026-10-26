@@ -184,6 +184,7 @@ test("MIRROR settings are validated", () => {
     [{ EXTRAS: ["../etc"] }, /MIRROR\.EXTRAS/],
     [{ EXTRAS: "ec_player_profiles" }, /MIRROR\.EXTRAS/],
     [{ SYNC_MODS: "yes" }, /MIRROR\.SYNC_MODS must be a boolean/],
+    [{ PERMISSIONS: "no" }, /MIRROR\.PERMISSIONS must be a boolean/],
   ];
   for (const [mirror, re] of cases) assert.throws(() => load(withMirror(mirror)), re, JSON.stringify(mirror));
   assert.doesNotThrow(() =>
