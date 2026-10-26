@@ -206,7 +206,9 @@ Options (`--help` lists them):
 | `--no-backup` | Skip creating the backup job |
 | `--api-server` | Set up the minecraft-bot API wrapper service |
 | `--mirror-source` | Also set this server up as the survival side of the optional creative mirror ([docs/mirror.md](docs/mirror.md)) |
-| `--mirror-target` | Also prepare this server as the creative side of the mirror; needs `MIRROR.REMOTE` in `variables.json` |
+| `--mirror-target` | Also prepare this server as the creative side of the mirror. With `--default` or `--guided` add `--mirror-remote` and `--mirror-seed`, or you are asked for them |
+| `--mirror-remote=HOST` | The survival server for `--mirror-target`: a host or IP, optionally `mcsync@host` |
+| `--mirror-seed=SEED` | The survival world's `level-seed`, for `--mirror-target` |
 | `--modpack` | Set up a CurseForge modpack server instead of the default vanilla/Fabric server |
 | `--y` | Skip the prompts and take the defaults. This **accepts the EULA** |
 | `--default` | Run the Default route: safe defaults, almost no questions. Without a terminal it needs `--agree-eula` |

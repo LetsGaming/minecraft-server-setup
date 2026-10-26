@@ -89,15 +89,21 @@ A source needs nothing but a flag, so the Default route is enough:
 bash main.sh --default --agree-eula --mirror-source
 ```
 
-A target must know the survival server and its seed, so it uses your own `variables.json` (the Power-user route). `--default` refuses to run when that file exists, and the Default route would have no `MIRROR.REMOTE`. Put the optional block in the file, set `JAVA.SERVER.SEED` to the survival world's `level-seed`, and run setup without `--default` (the `--mirror-target` flag is then optional). The Guided wizard asks for the same things.
+A target must know the survival server and the survival world's seed (`level-seed` in its `server.properties`), so give them as flags:
+
+```bash
+bash main.sh --default --agree-eula --mirror-target --mirror-remote=192.168.1.20 --mirror-seed=-446251370538060616
+```
+
+On a terminal you can leave the two values out and the setup asks for them; without a terminal it stops before changing anything and names the missing flags. The flags work on the Guided route too and win over the wizard's answers.
+
+If you prefer a file, the Power-user route reads the same settings from `variables.json` (setup without `--default`; `--default` refuses to run when that file exists):
 
 ```json
 "MIRROR": { "ENABLED": true, "ROLE": "target", "REMOTE": "mcsync@192.168.1.20" }
 ```
 
-```bash
-bash main.sh --agree-eula
-```
+with `JAVA.SERVER.SEED` set to the survival seed, then `bash main.sh --agree-eula`.
 
 A target needs `MIRROR.REMOTE` and, in `JAVA.SERVER.SEED`, the survival world's seed. The mirror setup runs after the install, so a problem with it never rolls the install back. **If the preparation of a target fails, the server is not started**, because the first start would create a world with the wrong seed. Fix it, then run `mirror.sh prepare` and start the server.
 
