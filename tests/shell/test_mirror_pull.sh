@@ -400,4 +400,25 @@ SH
   assert_eq "tgt-home" "$(cat "$T/tgt/server/world/ec_player_profiles/b.dat")" "the old homes are back"
 }
 
+test_a_mods_sync_names_the_worldgen_mods_it_leaves_out() {
+  extras_setup || return 0
+  mirror_set "$T/tgt" MIRROR_SYNC_MODS true
+  run_job tgt "$PULL_SH"
+  assert_rc 0 "$RC" "pulled"
+  assert_contains "$OUT" "not installed here on purpose (c2me-fabric-1.0.jar)" "the excluded C2ME is reported"
+}
+
+test_the_parity_check_still_runs_when_the_snapshot_carries_no_mods() {
+  pull_setup || return 0
+  mirror_set "$T/src" MIRROR_EXPORT_MODS false
+  SCREEN_SHIM_SAVE_LOG="$T/src/server/logs/latest.log" run_job src "$EXPORT_SH"
+  rm -f "$T/tgt/server/mods/c2me-fabric-1.0.jar"
+  mirror_set "$T/tgt" MIRROR_SYNC_MODS true
+  run_job tgt "$PULL_SH"
+  assert_rc 0 "$RC" "pulled"
+  assert_contains "$OUT" "carries no mods" "the missing mods are reported"
+  assert_contains "$OUT" "worldgen mods differ" "and the parity warning is not suppressed"
+  assert_exists "$T/tgt/server/mods/lithium-1.0.jar" "the target's mods are untouched"
+}
+
 run_tests

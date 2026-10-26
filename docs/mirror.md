@@ -151,6 +151,8 @@ A server created as a target (`main.sh --mirror-target`) does this by default. A
 - `MIRROR_MODS_EXCLUDE` (default `c2me`): jar names that are never taken from the source.
 - `MIRROR_KEEP_MODS` (default `fabricplots|dimensional-inventories`): the target's own jars that survive. If the source has its own build of one of them, the source's replaces it instead of running twice.
 
+**Trust:** a mods sync means the target runs the jars the source sends, so whoever controls the source can run code on the target. The link is the read-only SSH account and a pinned host key, the file names are checked, and the target decides on its own to sync (the source cannot turn it on), but the jars themselves are not signed or hashed against a list. Use it only between servers you run yourself; leave it off (`--sync-mods` is opt-in on an existing server) when the source is not yours. Excluded world-generation mods (C2ME by default) are named in the pull's warning, so the parity check is never silent.
+
 Mod **settings** (the `config/` folder) are not copied; a mod starts with its defaults on the target unless you copy its file by hand.
 
 ## Parity: what has to match

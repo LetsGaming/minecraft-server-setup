@@ -209,7 +209,9 @@ stage_mods() {
   local jar alt dest="$INCOMING/_mods"
   mkdir -p "$dest"
   for jar in "$CACHE/_mods"/*.jar; do
-    [[ -f "$jar" ]] || continue
+    [[ -f "$jar" && ! -L "$jar" ]] || continue
+    # A file name from the source becomes a path here: plain jar names only.
+    [[ "$(basename "$jar")" =~ ^[A-Za-z0-9._+\ -]+\.jar$ ]] || mirror_die 1 "the source sent a mod with an unexpected file name; nothing was changed"
     if [[ -n "$MIRROR_MODS_EXCLUDE" ]] && grep -qiE "$MIRROR_MODS_EXCLUDE" <<< "$(basename "$jar")"; then continue; fi
     cp -a --reflink=auto -- "$jar" "$dest/"
   done
@@ -338,8 +340,16 @@ check_parity() {
   lm="$(mirror_worldgen_mods)"
   local problem=""
   [[ -z "$rl" || "$rl" == "$ll" ]] || problem+="Fabric Loader differs (source $rl, here $ll). "
-  # With a mods sync this server runs the source's mods after the swap.
-  [[ "$MIRROR_SYNC_MODS" != true ]] || rm=""
+  # When this run takes the source's mods, this server runs them after the swap, so
+  # only the ones left out on purpose (MIRROR_MODS_EXCLUDE) can still differ.
+  if ((PULL_MODS)); then
+    local left_out=""
+    if [[ -n "$MIRROR_MODS_EXCLUDE" && "$rm" != none ]]; then
+      left_out="$(tr '|' '\n' <<< "$rm" | grep -iE -- "$MIRROR_MODS_EXCLUDE" | paste -sd ' ' -)" || left_out=""
+    fi
+    [[ -z "$left_out" ]] || problem+="world-generation mods of the source are not installed here on purpose ($left_out). "
+    rm=""
+  fi
   [[ -z "$rm" || "$rm" == "$lm" ]] || problem+="worldgen mods differ (source: $rm; here: $lm). "
   [[ -z "$problem" ]] && return 0
   if [[ "$MIRROR_PARITY" == refuse ]]; then
@@ -400,22 +410,6 @@ main() {
     mirror_log INFO "snapshot $stamp already applied, nothing to do"
     exit 0
   fi
-  check_parity "$m"
-  seed="$(mirror_manifest_get level_seed "$m")"
-  lseed="$(mirror_level_seed)"
-  if [[ -n "$seed" && "$seed" != unknown && "$lseed" != unknown && "$seed" != "$lseed" ]]; then
-    mirror_log WARN "level-seed differs (source $seed, this server $lseed); chunks generated later will not continue the mirrored terrain"
-  fi
-  files="$(mirror_manifest_get files "$m")"
-  bytes="$(mirror_manifest_get bytes "$m")"
-  [[ "$files" =~ ^(0|[1-9][0-9]*)$ && "$bytes" =~ ^(0|[1-9][0-9]*)$ ]] || mirror_die "$EX_STALE" "the manifest lacks valid files/bytes"
-  # More digits than these would wrap around in the shell arithmetic below and
-  # could make a huge snapshot look small to the space check.
-  ((${#files} <= 9 && ${#bytes} <= 15)) || mirror_die "$EX_STALE" "the manifest sizes are not plausible (files=$files bytes=$bytes)"
-  if ((MIRROR_MAX_SNAPSHOT_GB > 0 && bytes > MIRROR_MAX_SNAPSHOT_GB * 1024 * 1024 * 1024)); then
-    mirror_die "$EX_STALE" "the snapshot is $((bytes / 1073741824)) GiB, over MIRROR_MAX_SNAPSHOT_GB=$MIRROR_MAX_SNAPSHOT_GB"
-  fi
-
   # The extra folders and the mods this run takes from the snapshot: only what is
   # configured here and also offered there (the source never decides on its own).
   local name xs mods_n aux_mb=0
@@ -437,6 +431,22 @@ main() {
     else
       mirror_log WARN "the snapshot carries no mods (is MIRROR_EXPORT_MODS off there?); this server's mods are left as they are"
     fi
+  fi
+
+  check_parity "$m"
+  seed="$(mirror_manifest_get level_seed "$m")"
+  lseed="$(mirror_level_seed)"
+  if [[ -n "$seed" && "$seed" != unknown && "$lseed" != unknown && "$seed" != "$lseed" ]]; then
+    mirror_log WARN "level-seed differs (source $seed, this server $lseed); chunks generated later will not continue the mirrored terrain"
+  fi
+  files="$(mirror_manifest_get files "$m")"
+  bytes="$(mirror_manifest_get bytes "$m")"
+  [[ "$files" =~ ^(0|[1-9][0-9]*)$ && "$bytes" =~ ^(0|[1-9][0-9]*)$ ]] || mirror_die "$EX_STALE" "the manifest lacks valid files/bytes"
+  # More digits than these would wrap around in the shell arithmetic below and
+  # could make a huge snapshot look small to the space check.
+  ((${#files} <= 9 && ${#bytes} <= 15)) || mirror_die "$EX_STALE" "the manifest sizes are not plausible (files=$files bytes=$bytes)"
+  if ((MIRROR_MAX_SNAPSHOT_GB > 0 && bytes > MIRROR_MAX_SNAPSHOT_GB * 1024 * 1024 * 1024)); then
+    mirror_die "$EX_STALE" "the snapshot is $((bytes / 1073741824)) GiB, over MIRROR_MAX_SNAPSHOT_GB=$MIRROR_MAX_SNAPSHOT_GB"
   fi
 
   # Space is checked before anything is deleted. The previous rollback is last
