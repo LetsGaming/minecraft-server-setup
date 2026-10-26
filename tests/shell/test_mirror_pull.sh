@@ -317,7 +317,7 @@ extras_setup() {
   echo "src-home" > "$T/src/server/world/ec_player_profiles/a.dat"
   echo "src-warps" > "$T/src/server/world/essentialcommands/world_data.dat"
   echo "tgt-home" > "$T/tgt/server/world/ec_player_profiles/b.dat"
-  touch "$T/src/server/mods/essential_commands-0.42.jar"
+  touch "$T/src/server/mods/essential_commands-0.42.jar" "$T/src/server/mods/sit!-1.2.6.4+26.3.jar"
   touch "$T/tgt/server/mods/fabricplots-1.0.2.jar"
   SCREEN_SHIM_SAVE_LOG="$T/src/server/logs/latest.log" run_job src "$EXPORT_SH"
   [[ "$RC" == 0 ]] || { echo "extras export failed: $OUT"; return 1; }
@@ -357,6 +357,7 @@ test_the_mods_sync_runs_the_sources_mods_and_keeps_the_targets_own() {
   local m="$T/tgt/server/mods"
   assert_exists "$m/essential_commands-0.42.jar" "a source mod is installed"
   assert_exists "$m/lithium-1.0.jar" "a shared mod is there"
+  assert_exists "$m/sit!-1.2.6.4+26.3.jar" "a file name with punctuation is fine"
   assert_missing "$m/c2me-fabric-1.0.jar" "an excluded mod (C2ME) is not taken, and the target's own copy is gone"
   assert_exists "$m/fabricplots-1.0.2.jar" "the target's own plot mod survives"
   assert_exists "$T/tgt/mirror/sync/rollback/_mods/c2me-fabric-1.0.jar" "the old mods folder is kept for a rollback"

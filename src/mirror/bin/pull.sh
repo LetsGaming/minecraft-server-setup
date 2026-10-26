@@ -211,7 +211,7 @@ stage_mods() {
   for jar in "$CACHE/_mods"/*.jar; do
     [[ -f "$jar" && ! -L "$jar" ]] || continue
     # A file name from the source becomes a path here: plain jar names only.
-    [[ "$(basename "$jar")" =~ ^[A-Za-z0-9._+\ -]+\.jar$ ]] || mirror_die 1 "the source sent a mod with an unexpected file name; nothing was changed"
+    [[ "$(basename "$jar")" =~ ^[^-.\/[:cntrl:]][^\/[:cntrl:]]*\.jar$ ]] || mirror_die 1 "the source sent a mod with an unexpected file name; nothing was changed"
     if [[ -n "$MIRROR_MODS_EXCLUDE" ]] && grep -qiE "$MIRROR_MODS_EXCLUDE" <<< "$(basename "$jar")"; then continue; fi
     cp -a --reflink=auto -- "$jar" "$dest/"
   done
