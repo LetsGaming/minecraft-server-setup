@@ -7,6 +7,9 @@ set -e
 # exists once it is deployed), and the service starts only when both are done.
 setup_api_wrapper() {
   local svc scripts_dir node_path bash_path
+  # The wrapper refuses to start without a key; --api-server on a config that has
+  # none (the Default route writes an empty one) would deploy a crash loop.
+  run_or_echo "node \"$SCRIPT_DIR/src/setup/management/ensure_api_key.js\" \"$SCRIPT_DIR/variables.json\""
   svc=$(node -e "const v=require('$SCRIPT_DIR/variables.json'); console.log(v.API_SERVER?.SERVICE_USER || '')" 2>/dev/null)
   if [ -z "$svc" ]; then
     run_or_echo "node \"$SCRIPT_DIR/src/setup/management/create_api_server_service.js\""
@@ -23,6 +26,60 @@ setup_api_wrapper() {
   log "Granting '$svc' access to the deployed wrapper..."
   run_or_echo "$su"
   run_or_echo "sudo systemctl restart \"${TARGET_DIR_NAME}-api-server.service\""
+}
+
+# The optional creative mirror (docs/mirror.md): set up from the MIRROR block of
+# variables.json, or from --mirror-source / --mirror-target. It runs after the
+# install already counts as a success, so it can never roll the install back. On a
+# target a failure also blocks the automatic start: the first start would create a
+# world with the wrong seed and no plot dimension.
+run_mirror_setup() {
+  local role="" remote host seed scripts_dir cmd
+  local -a args
+  if [[ "${MIRROR_SOURCE:-false}" == true && "${MIRROR_TARGET:-false}" == true ]]; then
+    warn "--mirror-source and --mirror-target cannot be used together; the mirror was not set up."
+    return 0
+  fi
+  [[ "${MIRROR_SOURCE:-false}" == true ]] && role=source
+  [[ "${MIRROR_TARGET:-false}" == true ]] && role=target
+  if [[ -z "$role" ]]; then
+    role=$(node -e "const m=require('$SCRIPT_DIR/variables.json').MIRROR||{};console.log(m.ENABLED===true?(m.ROLE||''):'')" 2> /dev/null || true)
+  fi
+  [[ "$role" == source || "$role" == target ]] || return 0
+
+  scripts_dir="$MAIN_DIR/$TARGET_DIR_NAME/scripts/$INSTANCE_NAME"
+  log "Setting up the creative mirror ($role)..."
+  args=(setup "$role" --scripts-dir "$scripts_dir")
+  if [[ "$role" == target ]]; then
+    remote=$(node -e "const m=require('$SCRIPT_DIR/variables.json').MIRROR||{};console.log(m.REMOTE||'')" 2> /dev/null || true)
+    host="${remote#mcsync@}"
+    if [[ -z "$host" ]]; then
+      warn "A mirror target needs MIRROR.REMOTE (mcsync@address of the survival server) in variables.json; the mirror was not set up."
+      warn "The server is not started, so it does not create the wrong world. Run mirror.sh setup target and mirror.sh prepare, then start it."
+      NO_START=true
+      return 0
+    fi
+    args+=(--source "$host")
+  fi
+  printf -v cmd '%q ' bash "$SCRIPT_DIR/mirror.sh" "${args[@]}"
+  if ! run_or_echo "$cmd"; then
+    warn "Setting up the creative mirror failed (see above); the server itself is installed."
+    [[ "$role" == target ]] && NO_START=true
+    return 0
+  fi
+  if [[ "$role" == target ]]; then
+    seed=$(node -e "console.log(String((require('$SCRIPT_DIR/variables.json').JAVA.SERVER||{}).SEED||''))" 2> /dev/null || true)
+    args=(prepare --scripts-dir "$scripts_dir")
+    [[ -z "$seed" ]] || args+=(--seed "$seed")
+    printf -v cmd '%q ' bash "$SCRIPT_DIR/mirror.sh" "${args[@]}"
+    if ! run_or_echo "$cmd"; then
+      warn "Preparing the creative server failed (see above). It was NOT started, so no world exists yet."
+      warn "Fix the problem, run 'mirror.sh prepare --instance $INSTANCE_NAME', then start the server."
+      NO_START=true
+      return 0
+    fi
+  fi
+  log "The mirror still has to be paired with the other server: see docs/mirror.md."
 }
 
 # variables.json holds this install's secrets, so it is not tracked by git
@@ -112,7 +169,7 @@ run_vanilla_setup() {
 }
 
 run_server_setup() {
-  if [ "$VANILLA" = true ]; then run_vanilla_setup; else run_modpack_setup; fi
+  if [ "$MODPACK" = true ]; then run_modpack_setup; else run_vanilla_setup; fi
 }
 
 run_post_mod_config() {
@@ -132,7 +189,7 @@ run_post_mod_config() {
 }
 
 run_server_cleanup() {
-  if [ "$VANILLA" = true ]; then run_vanilla_cleanup; else run_modpack_cleanup; fi
+  if [ "$MODPACK" = true ]; then run_modpack_cleanup; else run_vanilla_cleanup; fi
 }
 
 run_setup_startup() {
@@ -227,8 +284,11 @@ _rollback_paths() {
   return 0
 }
 
+# Units this run may create. The backup and restart jobs are a service plus a
+# timer each; the removal below handles both files of a name.
 _rollback_units() {
-  printf '%s\n' "$INSTANCE_NAME" "${TARGET_DIR_NAME}-api-server" "${TARGET_DIR_NAME}-manager"
+  printf '%s\n' "$INSTANCE_NAME" "${TARGET_DIR_NAME}-api-server" "${TARGET_DIR_NAME}-manager" \
+    "${INSTANCE_NAME}-backup" "${INSTANCE_NAME}-restart"
 }
 
 # Call once, after the config is validated and before the first change.
@@ -242,7 +302,7 @@ snapshot_setup_state() {
     if [[ -e "$p" ]]; then _PRE_PATH_EXISTED["$p"]=true; else _PRE_PATH_EXISTED["$p"]=false; fi
   done < <(_rollback_paths)
   while IFS= read -r u; do
-    if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" ]]; then _PRE_UNIT_EXISTED["$u"]=true; else _PRE_UNIT_EXISTED["$u"]=false; fi
+    if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" || -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.timer" ]]; then _PRE_UNIT_EXISTED["$u"]=true; else _PRE_UNIT_EXISTED["$u"]=false; fi
   done < <(_rollback_units)
   local api_config="$base/services/api-server/api-server-config.json"
   if [[ -f "$api_config" ]]; then
@@ -280,16 +340,19 @@ run_rollback() {
 
   # Units this run installed. A unit that existed before (the shared
   # api-server unit of an earlier instance) is left running and in place.
-  local u removed_unit=false
+  local u ext removed_unit=false
   while IFS= read -r u; do
     [[ "${_PRE_UNIT_EXISTED[$u]:-true}" == false ]] || continue
-    if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service" ]]; then
-      log "Removing service: ${u}.service"
-      sudo systemctl stop    "${u}.service" 2>/dev/null || true
-      sudo systemctl disable "${u}.service" 2>/dev/null || true
-      sudo rm -f "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.service"
-      removed_unit=true
-    fi
+    # The timer goes first so it cannot start its service again.
+    for ext in timer service; do
+      if [[ -e "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.${ext}" ]]; then
+        log "Removing ${ext}: ${u}.${ext}"
+        sudo systemctl stop    "${u}.${ext}" 2>/dev/null || true
+        sudo systemctl disable "${u}.${ext}" 2>/dev/null || true
+        sudo rm -f "${SYSTEMD_UNIT_DIR:-/etc/systemd/system}/${u}.${ext}"
+        removed_unit=true
+      fi
+    done
   done < <(_rollback_units)
   [[ "$removed_unit" == true ]] && { sudo systemctl daemon-reload 2>/dev/null || true; }
 
@@ -456,8 +519,10 @@ run_preflight_check() {
 
   # 4. Check required tools
   echo "[CHECK] Required tools..."
+  # cron and setfacl live in /usr/sbin, which a normal user's PATH can lack.
+  local tool_path="$PATH:${PREFLIGHT_EXTRA_PATH:-/usr/sbin:/sbin}"
   for tool in screen rsync zstd tar curl jq unzip cron setfacl; do
-    if command -v "$tool" &>/dev/null; then
+    if PATH="$tool_path" command -v "$tool" &>/dev/null; then
       echo "  ✓ $tool"
     else
       echo "  ✗ $tool not found"
@@ -465,10 +530,12 @@ run_preflight_check() {
     fi
   done
 
-  # 5. Check CurseForge API config (for modpack mode)
+  # 5. Check CurseForge API config (only needed with --modpack)
   echo "[CHECK] CurseForge config..."
   local cf_config="$SCRIPT_DIR/src/setup/download/json/curseforge_variables.json"
-  if [ -f "$cf_config" ]; then
+  if [ "${MODPACK:-false}" != true ]; then
+    echo "  - skipped (vanilla/Fabric setup; use --modpack for a CurseForge pack)"
+  elif [ -f "$cf_config" ]; then
     local api_key pack_id
     api_key=$(node -e "console.log(require('$cf_config').api_key)" 2>/dev/null)
     pack_id=$(node -e "console.log(require('$cf_config').pack_id)" 2>/dev/null)

@@ -53,16 +53,17 @@ Setup does not configure your router and cannot tell whether it is configured. A
 - **Backup System:** Grandfather-father-son rotation with zstd compression, archive validation, configurable retention, and crash-safe auto-save handling.
 - **Server Rollback:** One-command rollback to the most recent pre-update backup.
 - **Smart Restart:** Player-aware restarts that skip warnings when nobody is online.
-- **Scheduled Restarts:** Configurable automatic restart cron with player-count awareness.
+- **Scheduled Restarts:** Configurable automatic restart on a systemd timer with player-count awareness.
 - **Mod Conflict Detection:** Update checker warns about incompatible mods before applying changes.
 - **Preflight Check:** `--check` flag validates config, tools, disk space, and API keys without running setup.
 - **Multi-Instance CLI (`manage.sh`):** Status overview, start/stop/restart/backup across multiple server instances from the shell.
 - **Remote control via the API wrapper:** Optional HTTP service (`API_SERVER`) that exposes these scripts to the [minecraft-bot](https://github.com/LetsGaming/minecraft-bot) Discord bot and its web dashboard — console, backups, rollback, and live logs, without a second panel on this host.
 - **Maintenance Mode:** MOTD swap, non-admin kick monitoring, automatic cleanup on exit.
+- **Creative mirror (optional):** a second server where players build in creative mode on a nightly copy of your survival world, with flat build plots next to it. Set up on existing servers or together with a new one; nothing else in the suite depends on it. See [docs/mirror.md](docs/mirror.md).
 
 ## Prerequisites
 
-- **OS:** Linux with systemd and cron (Ubuntu/Debian recommended)
+- **OS:** Linux with systemd (Ubuntu/Debian recommended). The backup and restart jobs run as systemd timers; on a host without a running systemd (a container, WSL) setup falls back to cron lines, which is why `cron` is still installed
 - **Bash:** 4.3+
 - **Tools:** setup installs only what is missing, with `apt`, before it asks anything: `curl`, `screen`, `unzip`, `cron`, `rsync`, `zstd`, `jq`, `acl` (`setfacl`), Node.js with `npm`, and `whiptail` on the Guided route only. It runs `npm ci --omit=dev` for you, so there is no `npm install` step. It does not upgrade the system unless you set `MC_SETUP_UPGRADE_SYSTEM=true`.
 - **Node.js 18+:** setup applies this policy. An installed Node 18 or newer is used as is. Otherwise, if the distribution's own `nodejs` package is 18 or newer, that package is installed. Otherwise (for example Ubuntu 22.04 or Debian 11) Node 22 would come from the NodeSource apt repository, which is a third-party repository, so setup only does that when you pass `--allow-nodesource`. Without the flag it stops and prints the manual commands.
@@ -158,7 +159,7 @@ bash <target>/scripts/<instance>/misc/xaero_config.sh apply <server_dir>
 
 Restart the server afterwards for the change to take effect.
 
-For modpack setup, also configure:
+For modpack setup (`--modpack`), also configure:
 - [`curseforge_variables.json`](./src/setup/download/json/curseforge_variables.example.json) — API key and pack ID. This file is git-ignored (it holds your API key). Copy the template first:
   ```bash
   cp src/setup/download/json/curseforge_variables.example.json \
@@ -178,11 +179,11 @@ bash main.sh
 # Read-only check of config, tools and disk space (separate from the three routes)
 sudo -u <user> bash main.sh --check
 
-# Power-user route: run setup from your own variables.json (modpack server; use sudo -u <user> to run it as another user)
+# Power-user route: run setup from your own variables.json (vanilla/Fabric server; use sudo -u <user> to run it as another user)
 sudo -u <user> bash main.sh
 
-# Vanilla/Fabric server
-sudo -u <user> bash main.sh --vanilla
+# CurseForge modpack server instead (needs curseforge_variables.json)
+sudo -u <user> bash main.sh --modpack
 
 # With minecraft-bot API wrapper (for remote bot deployments)
 sudo -u <user> bash main.sh --api-server
@@ -204,7 +205,11 @@ Options (`--help` lists them):
 | `--no-service` | Skip creating the systemd service |
 | `--no-backup` | Skip creating the backup job |
 | `--api-server` | Set up the minecraft-bot API wrapper service |
-| `--vanilla` | Set up a vanilla/Fabric server instead of a modpack |
+| `--mirror-source` | Also set this server up as the survival side of the optional creative mirror ([docs/mirror.md](docs/mirror.md)) |
+| `--mirror-target` | Also prepare this server as the creative side of the mirror. With `--default` or `--guided` add `--mirror-remote` and `--mirror-seed`, or you are asked for them |
+| `--mirror-remote=HOST` | The survival server for `--mirror-target`: a host or IP, optionally `mcsync@host` |
+| `--mirror-seed=SEED` | The survival world's `level-seed`, for `--mirror-target` |
+| `--modpack` | Set up a CurseForge modpack server instead of the default vanilla/Fabric server |
 | `--y` | Skip the prompts and take the defaults. This **accepts the EULA** |
 | `--default` | Run the Default route: safe defaults, almost no questions. Without a terminal it needs `--agree-eula` |
 | `--guided` | Run the Guided route: the whiptail wizard. Needs a terminal |
@@ -256,7 +261,7 @@ sudo bash manage.sh doctor survival --test-webhook
 Run it as an admin with sudo. It prints one `OK`, `WARN`, `FAIL` or `SKIP` line per check and exits 1 when any check fails:
 
 - the systemd unit is enabled and running, and has crash-loop limits in `[Unit]` (`migrate.sh` adds them to older units)
-- the hourly backup cron job (and the restart job when `RESTART_SCHEDULE.ENABLED`) is in the server user's crontab
+- the hourly backup job (and the restart job when `RESTART_SCHEDULE.ENABLED`) is scheduled: a `<instance>-backup.timer` (and `<instance>-restart.timer`) that is enabled and whose last run succeeded, or a crontab line on a host without systemd; it warns when a job has both and would run twice
 - backup usage against `MAX_STORAGE_GB` (warns from 90%, fails above 100%) and free disk space where the backups live (warns under 5 GB)
 - the last backup run recorded in `.meta/last_backup.json` (fails when it failed, warns when the last success is 3 hours old or more)
 - the wrapper's sudoers file passes `visudo -c` (skipped without an `API_SERVER.SERVICE_USER`)
@@ -289,6 +294,8 @@ Supports Discord webhooks (auto-detected, sends embeds) and generic JSON webhook
 | `rollback_start`, `rollback_complete` | A rollback began and finished |
 | `update_start` | A version upgrade began |
 | `update_complete`, `update_failed` | A version upgrade or update finished or failed |
+| `mirror_export_failed` | Only with the optional creative mirror: the survival server's nightly export failed |
+| `mirror_sync_complete`, `mirror_sync_failed` | Only with the optional creative mirror: the creative server's nightly refresh finished or failed (an interrupted swap that was repaired is reported as complete) |
 
 If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. A name in the list that no script sends is accepted, but setup warns about it.
 
@@ -303,6 +310,7 @@ If `NOTIFICATIONS.WEBHOOK_EVENTS` is empty, every event is sent. A name in the l
 | Running the wrapper as its own unprivileged user | [docs/service-user.md](docs/service-user.md) |
 | Bringing an installed server up to the current suite (`migrate.sh`) | [docs/migrations.md](docs/migrations.md) |
 | Moving to a new Minecraft version | [docs/upgrade.md](docs/upgrade.md) |
+| A creative server that mirrors the survival world nightly (optional) | [docs/mirror.md](docs/mirror.md) |
 | Deleting unused chunks before an upgrade | [docs/chunk-pruning.md](docs/chunk-pruning.md), [benchmarks](docs/prune-benchmarks.md) |
 | Terms used across the docs | [docs/GLOSSARY.md](docs/GLOSSARY.md) |
 | Retiring the bundled web interface | [docs/retiring-web-interface.md](docs/retiring-web-interface.md) |

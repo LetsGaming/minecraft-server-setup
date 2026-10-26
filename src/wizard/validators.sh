@@ -113,6 +113,14 @@ validate_webhook_url() { # value
   return 1
 }
 
+validate_mirror_remote() { # value
+  if [[ "$1" =~ ^mcsync@[A-Za-z0-9._:-]+$ ]]; then
+    return 0
+  fi
+  echo "Type it as mcsync@ followed by the survival server's address, for example mcsync@192.168.1.20."
+  return 1
+}
+
 validate_curseforge_pack_id() { # value
   if [[ "$1" =~ ^[0-9]+$ ]] && [ "${#1}" -le 12 ] && [ $(( 10#$1 )) -gt 0 ]; then
     return 0

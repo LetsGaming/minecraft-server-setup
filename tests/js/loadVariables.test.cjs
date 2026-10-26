@@ -146,3 +146,55 @@ test("JAVA.SERVER.VANILLA.MODS.EXCLUDE is optional and must be an array of slugs
     );
   }
 });
+
+function withMirror(mirror) {
+  return { ...FULL, MIRROR: mirror };
+}
+
+test("the optional MIRROR block is inert when absent, empty or switched off", () => {
+  for (const ok of [undefined, {}, { ENABLED: false }, { ENABLED: false, ROLE: "target" }]) {
+    assert.doesNotThrow(() => load(ok === undefined ? FULL : withMirror(ok)), `MIRROR=${JSON.stringify(ok)}`);
+  }
+});
+
+test("an enabled mirror needs a role, and a target needs its source", () => {
+  assert.throws(() => load(withMirror({ ENABLED: true })), /MIRROR\.ROLE is required/);
+  assert.throws(() => load(withMirror({ ENABLED: true, ROLE: "target" })), /MIRROR\.REMOTE .* is required for a target/);
+  assert.doesNotThrow(() => load(withMirror({ ENABLED: true, ROLE: "source" })));
+  assert.doesNotThrow(() => load(withMirror({ ENABLED: true, ROLE: "target", REMOTE: "mcsync@survival.example" })));
+});
+
+test("MIRROR settings are validated", () => {
+  const cases = [
+    [{ ROLE: "both" }, /MIRROR\.ROLE must be/],
+    [{ ENABLED: "yes" }, /MIRROR\.ENABLED must be a boolean/],
+    [{ REMOTE: "root@host" }, /MIRROR\.REMOTE must look like mcsync@host/],
+    [{ REMOTE: "mcsync@host;rm" }, /MIRROR\.REMOTE must look like mcsync@host/],
+    [{ SSH_PORT: 70000 }, /MIRROR\.SSH_PORT/],
+    [{ SOURCE_MODE: "push" }, /MIRROR\.SOURCE_MODE/],
+    [{ DIMS: [] }, /MIRROR\.DIMS/],
+    [{ DIMS: ["minecraft/overworld", "../etc"] }, /MIRROR\.DIMS/],
+    [{ EXPORT_AT: "25:00" }, /MIRROR\.EXPORT_AT/],
+    [{ PULL_AT: "5:15" }, /MIRROR\.PULL_AT/],
+    [{ PARITY: "maybe" }, /MIRROR\.PARITY/],
+    [{ BWLIMIT_KIB: -1 }, /MIRROR\.BWLIMIT_KIB/],
+    [{ MIN_REGION_RATIO_PCT: 101 }, /MIRROR\.MIN_REGION_RATIO_PCT/],
+    [{ KEEP_SNAPSHOTS: 1 }, /MIRROR\.KEEP_SNAPSHOTS must be at least 2/],
+  ];
+  for (const [mirror, re] of cases) assert.throws(() => load(withMirror(mirror)), re, JSON.stringify(mirror));
+  assert.doesNotThrow(() =>
+    load(
+      withMirror({
+        ENABLED: true,
+        ROLE: "source",
+        SOURCE_MODE: "stage",
+        DIMS: ["minecraft/overworld", "minecraft/the_nether"],
+        EXPORT_AT: "04:40",
+        BWLIMIT_KIB: 0,
+        PARITY: "refuse",
+        MIN_REGION_RATIO_PCT: 50,
+        KEEP_SNAPSHOTS: 3,
+      }),
+    ),
+  );
+});

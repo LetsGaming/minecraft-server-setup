@@ -1,17 +1,18 @@
 #!/bin/bash
 set -e
 
-# Replaces create_restart_job.js: installs the scheduled-restart cron entry if
-# restarts are enabled. The schedule fields (RESTART_ENABLED,
+# Installs the scheduled-restart job if restarts are enabled: a systemd timer
+# where systemd is running (timer_lib.sh), otherwise a cron entry. The schedule fields (RESTART_ENABLED,
 # RESTART_INTERVAL_HOURS) are read from the variables.txt that
 # set_common_variables.js generated and copy_scripts.sh deployed, so no JSON
-# parsing is needed here. Uses `crontab -` (stdin), idempotently.
+# parsing is needed here. Idempotent; the cron fallback uses `crontab -` (stdin).
 
 : "${MAIN_DIR:?MAIN_DIR not set}"
 : "${TARGET_DIR_NAME:?TARGET_DIR_NAME not set}"
 : "${INSTANCE_NAME:?INSTANCE_NAME not set}"
 
 source "$(dirname "${BASH_SOURCE[0]}")/cron_lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/timer_lib.sh"
 
 SCRIPTS_DIR="$MAIN_DIR/$TARGET_DIR_NAME/scripts/$INSTANCE_NAME"
 VARS_FILE="$SCRIPTS_DIR/common/variables.txt"
@@ -46,8 +47,21 @@ case "$INTERVAL_HOURS" in
 esac
 INTERVAL_HOURS=$((10#$INTERVAL_HOURS))
 
-# cron's */N restarts the count at midnight, so only a divisor of 24 is an even
-# interval; a multiple of 24 becomes every N/24 days at midnight.
+# cron's */N and the timer's 00/N both restart the count at midnight, so only a
+# divisor of 24 is an even interval; a multiple of 24 becomes every N/24 days at
+# midnight.
+if systemd_usable; then
+  if ! CALENDAR="$(timer_restart_calendar "$INTERVAL_HOURS")"; then
+    echo "RESTART_INTERVAL_HOURS must divide 24 (1, 2, 3, 4, 6, 8, 12, 24) or be a multiple of 24, got $INTERVAL_HOURS." >&2
+    exit 1
+  fi
+  timer_install restart "Scheduled restart of $INSTANCE_NAME (every ${INTERVAL_HOURS}h)" "$RESTART_SCRIPT" "$CALENDAR" "$LOGS_DIR/restart.log" false "$SCRIPTS_DIR"
+  if crontab -l 2> /dev/null | grep -qF -- "$(cron_quote "$RESTART_SCRIPT")"; then
+    echo "Note: the crontab still has a restart line from an earlier install; run migrate.sh to move it to the timer." >&2
+  fi
+  exit 0
+fi
+
 if [ "$INTERVAL_HOURS" -ge 1 ] && [ "$INTERVAL_HOURS" -le 24 ] && [ $((24 % INTERVAL_HOURS)) -eq 0 ]; then
   SCHEDULE="0 */$INTERVAL_HOURS * * *"
 elif [ "$INTERVAL_HOURS" -gt 24 ] && [ $((INTERVAL_HOURS % 24)) -eq 0 ]; then

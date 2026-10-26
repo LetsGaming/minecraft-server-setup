@@ -67,8 +67,8 @@ test_existing_flags_still_parse() {
   out="$(
     eval "$(sed -n '/^declare -A ARG_OPTS=(/,/^)/p' "$REPO/main.sh")"
     source "$REPO/src/common/args.sh"
-    parse_args --default --guided --allow-nodesource --check --dry-run --verbose --no-start --no-service --no-backup --agree-eula --api-server --vanilla --y
-    echo "$DEFAULT_ROUTE $GUIDED_ROUTE $ALLOW_NODESOURCE $CHECK_ONLY $DRY_RUN $VERBOSE $NO_START $NO_SERVICE $NO_BACKUP $EULA $SETUP_API_SERVER $VANILLA $ACCEPT_ALL"
+    parse_args --default --guided --allow-nodesource --check --dry-run --verbose --no-start --no-service --no-backup --agree-eula --api-server --modpack --y
+    echo "$DEFAULT_ROUTE $GUIDED_ROUTE $ALLOW_NODESOURCE $CHECK_ONLY $DRY_RUN $VERBOSE $NO_START $NO_SERVICE $NO_BACKUP $EULA $SETUP_API_SERVER $MODPACK $ACCEPT_ALL"
   )"
   assert_eq "true true true true true true true true true true true true true" "$out" "every flag sets its variable"
 }

@@ -1,0 +1,9 @@
+#!/bin/bash
+# Pins the weekday number (+%u) and the day of the month (+%d) when
+# DATE_SHIM_DOW / DATE_SHIM_DOM are set, so tests that depend on the calendar do
+# not depend on the day they run. Everything else is the real date.
+case "$*" in
+  "+%u") [[ -n "${DATE_SHIM_DOW:-}" ]] && { echo "$DATE_SHIM_DOW"; exit 0; } ;;
+  "+%d") [[ -n "${DATE_SHIM_DOM:-}" ]] && { echo "$DATE_SHIM_DOM"; exit 0; } ;;
+esac
+exec "$REAL_DATE" "$@"

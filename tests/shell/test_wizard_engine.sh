@@ -24,8 +24,9 @@ load_wizard() {
   source "$REPO/src/wizard/engine.sh"
 }
 
-# Replies for the guided steps after server_kind when it is not a modpack (11 steps).
-REST_REPLIES=$'0|1.21.4\n0|6G\n0|20\n0|Hello\n0|hard\n1|\n0|optional\n1|\n1|\n0|https://example.com/hook\n1|'
+# Replies for the guided steps after server_kind when it is not a modpack (12 steps,
+# the last one is the creative mirror question, answered no).
+REST_REPLIES=$'0|1.21.4\n0|6G\n0|20\n0|Hello\n0|hard\n1|\n0|optional\n1|\n1|\n0|https://example.com/hook\n1|\n1|'
 
 # The same without the Minecraft version step, which a modpack does not ask.
 MODPACK_REST_REPLIES="${REST_REPLIES#*$'\n'}"
@@ -256,7 +257,7 @@ test_manifest_records_are_well_formed() {
     case "${_ENGINE_F[3]%%:*}" in input | password | yesno | menu | radiolist | checklist) ;; *) assert_eq ok "bad widget ${_ENGINE_F[3]}" "widget of $id" ;; esac
     n=$(( n + 1 ))
   done < <(wizard_manifest)
-  assert_eq 15 "$n" "guided steps present"
+  assert_eq 18 "$n" "guided steps present"
   fields="$(wizard_manifest | cut -f1 | tr '\n' ' ')"
   assert_contains "$fields" "instance_name server_kind" "ids in order"
   assert_not_contains "$(wizard_manifest | cut -f6)" "default" "Default route shows no steps"

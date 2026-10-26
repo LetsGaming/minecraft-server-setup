@@ -23,6 +23,7 @@ const fs = require("fs");
 const path = require("path");
 // Serialized with other mod changes and with restore, rollback and upgrade
 // (S-024): re-runs this script under the instance's operation lock.
+require("./lib/args").exitOnHelp("Usage: node remove-mod.js <slug-or-project-id> [--json]");
 require("./lib/opLock").guardModOperation();
 const { readManifest, writeManifest } = require("./lib/manifest");
 const { parseArgs } = require("./lib/args");

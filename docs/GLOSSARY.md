@@ -37,3 +37,11 @@ Terms specific to this project that are easy to misread.
 **Safe heap.** The Java memory size the wizard picks from the memory available (the lower of `MemAvailable` and the cgroup limit): it reserves the larger of 1 GB or 25% of it for the system and gives the server the rest, capped at 8 GB, with a floor of 1 GB.
 
 **Prerequisite stage.** The first part of `main.sh`, before any question or any use of Node: it installs only the missing system tools (and Node 18 or newer by the policy in the README), plus `whiptail` on the Guided route.
+
+**Export snapshot.** In the optional creative mirror (`docs/mirror.md`), an immutable, flushed copy of the mirrored dimensions' `region/`, `entities/` and `poi/` folders that the survival server publishes under `<target>/mirror/<instance>/export/snapshots/<stamp>/`, with a `MANIFEST`. The creative server pulls it read-only and never reads the live world. Not the same as the backup staging mirror, although `MIRROR_SOURCE_MODE=stage` builds it from that mirror.
+
+**Pull cache.** The creative server's persistent copy of the last pulled export snapshot (`<target>/mirror/<instance>/sync/cache/`), kept so each night transfers only the changed region files. It sits outside the server folder, so creative backups do not include it.
+
+**Mirrored dimension.** One of `dimensions/minecraft/{overworld,the_nether,the_end}` (by default only the overworld) whose chunk folders the nightly pull replaces on the creative server. The plot dimension (`dimensions/fabricplots/plots`), `level.dat`, `data/`, `players/` and the dimension's own `data/` folder are never copied.
+
+**Mirror role.** What a server is in the optional creative mirror: `source` (the survival server that publishes snapshots, through the read-only `mcsync` account) or `target` (the creative server that pulls them). Set by `mirror.sh setup source|target` or the `MIRROR` block of `variables.json`; a server without a role is not part of any mirror.

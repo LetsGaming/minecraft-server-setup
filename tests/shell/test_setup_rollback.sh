@@ -44,6 +44,23 @@ run_rollback_after() { # body to run between snapshot and rollback
   ) > "$T/out" 2>&1
 }
 
+test_a_failed_run_removes_the_timers_it_created_and_keeps_older_ones() {
+  setup
+  touch "$SYSTEMD_UNIT_DIR/first-backup.service" "$SYSTEMD_UNIT_DIR/first-backup.timer"
+  INSTANCE_NAME=first
+  run_rollback_after '
+    touch "$SYSTEMD_UNIT_DIR/first-restart.service" "$SYSTEMD_UNIT_DIR/first-restart.timer"
+  '
+  assert_exists "$SYSTEMD_UNIT_DIR/first-backup.timer" "a timer from before the run is kept"
+  assert_exists "$SYSTEMD_UNIT_DIR/first-backup.service" "and its service"
+  assert_missing "$SYSTEMD_UNIT_DIR/first-restart.timer" "a timer this run created is removed"
+  assert_missing "$SYSTEMD_UNIT_DIR/first-restart.service" "and its service"
+  local calls; calls="$(cat "$T/calls" 2>/dev/null)"
+  assert_contains "$calls" "stop first-restart.timer" "the timer is stopped"
+  assert_contains "$calls" "disable first-restart.timer" "and disabled"
+  assert_not_contains "$calls" "first-backup" "the older timer is left running"
+}
+
 test_existing_instances_survive_a_failed_second_instance() {
   setup
   local base="$MAIN_DIR/mc"

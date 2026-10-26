@@ -1,0 +1,27 @@
+#!/bin/bash
+# Stand-in for ssh in the mirror tests: the "remote" is this machine, so rsync's
+# `ssh host rsync --server ...` just runs the server side locally.
+#   SSH_SHIM_ROOT         directory the remote command runs in (rrsync's root)
+#   SSH_SHIM_FAIL=1       every connection fails like a refused one (exit 255)
+#   SSH_SHIM_FAIL_AFTER=N connections after the first N fail (the transfer drops
+#                         after the manifest was fetched)
+echo "ssh $*" >> "$SHIM_LOG"
+calls=0
+[[ -f "$SHIM_STATE/ssh_calls" ]] && calls="$(cat "$SHIM_STATE/ssh_calls")"
+calls=$((calls + 1))
+echo "$calls" > "$SHIM_STATE/ssh_calls"
+if [[ "${SSH_SHIM_FAIL:-}" == 1 ]] || { [[ -n "${SSH_SHIM_FAIL_AFTER:-}" ]] && ((calls > SSH_SHIM_FAIL_AFTER)); }; then
+  echo "ssh: connect to host failed: Connection timed out" >&2
+  exit 255
+fi
+# Skip the options (some take a value), then the host; what is left is the command.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -i | -p | -o | -l | -F | -J | -L | -R | -D | -b | -c | -m | -S | -E | -B | -O | -W | -w) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+shift # the host
+cd "${SSH_SHIM_ROOT:-/}" || exit 255
+exec "$@"

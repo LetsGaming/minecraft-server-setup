@@ -19,6 +19,9 @@ if [[ "$_running_rc" -ne 0 ]]; then
 else
     SERVER_RUNNING="Running"
     PLAYER_LIST=$(get_player_list) || PLAYER_LIST="unknown (the server did not answer /list)"
+    if [[ "$PLAYER_LIST" == unknown* ]] && ! _use_rcon; then
+        PLAYER_LIST="unknown (the server did not answer /list; RCON gives a reliable answer, see SERVER_CONTROL.USE_RCON)"
+    fi
 fi
 
 # Create status message

@@ -22,6 +22,9 @@ const KNOWN_WEBHOOK_EVENTS = [
   "update_complete",
   "update_failed",
   "storage_warning",
+  "mirror_export_failed",
+  "mirror_sync_complete",
+  "mirror_sync_failed",
 ];
 
 function loadVariables() {
@@ -183,6 +186,58 @@ function loadVariables() {
     }
     if (rs.WARN_SECONDS !== undefined && (typeof rs.WARN_SECONDS !== "number" || rs.WARN_SECONDS < 5)) {
       throw new Error("RESTART_SCHEDULE.WARN_SECONDS must be at least 5.");
+    }
+  }
+
+  // ── MIRROR (optional; nothing else depends on it) ──
+  if (data.MIRROR) {
+    const mirror = data.MIRROR;
+    if (typeof mirror !== "object" || Array.isArray(mirror)) throw new Error("MIRROR must be an object.");
+    if (mirror.ENABLED !== undefined && typeof mirror.ENABLED !== "boolean") {
+      throw new Error("MIRROR.ENABLED must be a boolean.");
+    }
+    if (mirror.ROLE !== undefined && mirror.ROLE !== "source" && mirror.ROLE !== "target") {
+      throw new Error('MIRROR.ROLE must be "source" (the survival server) or "target" (the creative server).');
+    }
+    if (mirror.ENABLED && !mirror.ROLE) {
+      throw new Error('MIRROR.ROLE is required when MIRROR.ENABLED is true ("source" or "target").');
+    }
+    if (mirror.REMOTE !== undefined && mirror.REMOTE !== "" && !/^mcsync@[A-Za-z0-9._:-]+$/.test(String(mirror.REMOTE))) {
+      throw new Error("MIRROR.REMOTE must look like mcsync@host (the survival server's read-only account).");
+    }
+    if (mirror.ENABLED && mirror.ROLE === "target" && !mirror.REMOTE) {
+      throw new Error("MIRROR.REMOTE (mcsync@host of the survival server) is required for a target.");
+    }
+    if (mirror.SSH_PORT !== undefined && (!Number.isInteger(mirror.SSH_PORT) || mirror.SSH_PORT < 1 || mirror.SSH_PORT > 65535)) {
+      throw new Error("MIRROR.SSH_PORT must be a valid port number (1-65535).");
+    }
+    if (mirror.SOURCE_MODE !== undefined && mirror.SOURCE_MODE !== "live" && mirror.SOURCE_MODE !== "stage") {
+      throw new Error('MIRROR.SOURCE_MODE must be "live" or "stage".');
+    }
+    if (mirror.DIMS !== undefined) {
+      const allowed = ["minecraft/overworld", "minecraft/the_nether", "minecraft/the_end"];
+      if (!Array.isArray(mirror.DIMS) || mirror.DIMS.length === 0 || mirror.DIMS.some((d) => !allowed.includes(d))) {
+        throw new Error(`MIRROR.DIMS must be a non-empty list of ${allowed.join(", ")}.`);
+      }
+    }
+    for (const key of ["EXPORT_AT", "PULL_AT"]) {
+      if (mirror[key] !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(mirror[key]))) {
+        throw new Error(`MIRROR.${key} must be a time as HH:MM.`);
+      }
+    }
+    if (mirror.PARITY !== undefined && !["warn", "refuse", "off"].includes(mirror.PARITY)) {
+      throw new Error('MIRROR.PARITY must be "warn", "refuse" or "off".');
+    }
+    for (const key of ["BWLIMIT_KIB", "MAX_SNAPSHOT_GB"]) {
+      if (mirror[key] !== undefined && (!Number.isInteger(mirror[key]) || mirror[key] < 0)) {
+        throw new Error(`MIRROR.${key} must be a whole number of 0 or more.`);
+      }
+    }
+    if (mirror.MIN_REGION_RATIO_PCT !== undefined && (!Number.isInteger(mirror.MIN_REGION_RATIO_PCT) || mirror.MIN_REGION_RATIO_PCT < 0 || mirror.MIN_REGION_RATIO_PCT > 100)) {
+      throw new Error("MIRROR.MIN_REGION_RATIO_PCT must be a whole number from 0 to 100.");
+    }
+    if (mirror.KEEP_SNAPSHOTS !== undefined && (!Number.isInteger(mirror.KEEP_SNAPSHOTS) || mirror.KEEP_SNAPSHOTS < 2)) {
+      throw new Error("MIRROR.KEEP_SNAPSHOTS must be at least 2 so a pull in progress never loses its snapshot.");
     }
   }
 

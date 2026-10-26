@@ -5,7 +5,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib/assert.sh"
 source "$HERE/lib/fixture.sh"
 
-setup() { make_fixture; trap cleanup_fixture EXIT; }
+# The weekday is pinned (a Wednesday): on a Sunday the weekly tier is due first
+# and the tests that expect a daily would fail.
+setup() { make_fixture; trap cleanup_fixture EXIT; export DATE_SHIM_DOW=3 DATE_SHIM_DOM=15; }
 RUN_BACKUP="backup/automation/run_backup.sh"
 
 set_var() { echo "$1=\"$2\"" >> "$T/scripts/common/variables.txt"; }

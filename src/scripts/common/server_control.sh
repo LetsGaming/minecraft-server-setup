@@ -225,9 +225,10 @@ strip_log_prefix() {
 # ── Player info ──
 
 # The server's own answer to /list in the log: its bracketed tags, then the
-# sentence at the start of the message. A chat line starts with <name> and
-# /say with [Server], so neither can pass for it.
-_LIST_REPLY_RE='^(\[[^]]*\][[:space:]]*)+: There are [0-9]+(/| of a max of )[0-9]+ players online'
+# sentence at the start of the message (Minecraft 26.3 puts "System chat: " in
+# front of it). A chat line starts with <name> and /say with [Server], so
+# neither can pass for it.
+_LIST_REPLY_RE='^\[[0-9:]+\] \[[^]/]+/INFO\]: (System chat: )?There are [0-9]+(/| of a max of )[0-9]+ players online'
 
 # _list_reply_since <byte-offset>
 # The last /list answer written to the log after the offset, if any.
@@ -308,6 +309,13 @@ _log_has_since() {
 
 SAVE_TIMEOUT_SECONDS="${SAVE_TIMEOUT_SECONDS:-120}"
 
+# The server's own "Saved the game" line, anchored at both ends (timestamp and
+# thread included) so a player typing the phrase, even with a fake prefix, cannot
+# match. Minecraft 26.3 logs it as "System chat: Saved the game" (and
+# "System chat: [Rcon: Saved the game]" for an RCON command); older versions log
+# it bare after "INFO]: ".
+SAVED_LINE_RE='^[[][0-9:]+[]] [[]Server thread/INFO[]]: (System chat: )?([[]Rcon: )?Saved the (game|world)[]]?[[:space:]]*$'
+
 # wait_for_save_completion [timeout-seconds] [log-offset]
 # The offset must be taken BEFORE the save command is sent (see save_and_wait);
 # a save that finishes quickly would otherwise be written before the wait
@@ -337,7 +345,7 @@ wait_for_save_completion() {
   for ((waited = 0; waited < timeout; waited++)); do
     # The server's own line only (S-009): the old bare "Saved" also matched
     # any player who typed the word in chat.
-    if _log_has_since "$offset" '\]: Saved the (game|world)'; then
+    if _log_has_since "$offset" "$SAVED_LINE_RE"; then
       echo "Save completed."
       return 0
     fi

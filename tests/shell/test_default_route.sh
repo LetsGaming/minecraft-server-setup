@@ -254,6 +254,7 @@ test_guided_applies_safety_rules_to_typed_answers() {
 1|
 0|
 1|
+1|
 EOF
   export WHIPTAIL_SHIM_REPLIES="$T/replies"
   local out
@@ -334,22 +335,22 @@ test_eula_accepts_only_an_explicit_yes() {
   assert_eq 0 "$(eula_rc YES)" "YES is accepted"
 }
 
-test_wizard_apply_flags_keeps_user_flags_and_sets_vanilla() {
+test_wizard_apply_flags_keeps_user_flags_and_sets_modpack() {
   local out
   out="$(
     source "$REPO/src/wizard/route.sh"
     declare -A ANSWERS=([server_kind]=fabric)
-    NO_START=true NO_SERVICE=false NO_BACKUP=false SETUP_API_SERVER=true EULA=false ACCEPT_ALL=false VANILLA=false
+    NO_START=true NO_SERVICE=false NO_BACKUP=false SETUP_API_SERVER=true EULA=false ACCEPT_ALL=false MODPACK=true
     wizard_apply_flags
-    echo "$NO_START $NO_SERVICE $NO_BACKUP $SETUP_API_SERVER $EULA $ACCEPT_ALL $VANILLA"
+    echo "$NO_START $NO_SERVICE $NO_BACKUP $SETUP_API_SERVER $EULA $ACCEPT_ALL $MODPACK"
     ANSWERS=([server_kind]=modpack [backups]=false)
     wizard_apply_flags
-    echo "$VANILLA $NO_BACKUP"
+    echo "$MODPACK $NO_BACKUP"
     ANSWERS=([server_kind]=vanilla)
     wizard_apply_flags
-    echo "$VANILLA"
+    echo "$MODPACK"
   )"
-  assert_eq $'true false false true true true true\nfalse true\ntrue' "$out" "flags kept, vanilla follows the server type"
+  assert_eq $'true false false true true true false\ntrue true\nfalse' "$out" "flags kept, modpack follows the server type"
 }
 
 test_invalid_memory_size_falls_back_to_safe_heap_with_correction() {
@@ -411,7 +412,7 @@ main_setup() {
   printf 'ID=ubuntu\n' > "$T/os-release"
   export MC_SETUP_SYSTEMD_DIR="$T/systemd" MC_SETUP_OS_RELEASE="$T/os-release"
   cat >> "$T/repo/src/common/setup.sh" <<'EOF'
-run_server_setup() { echo "PROBE NO_BACKUP=$NO_BACKUP SETUP_API_SERVER=$SETUP_API_SERVER VANILLA=$VANILLA EULA=$EULA"; [ -z "${PROBE_FAIL:-}" ] || return 3; }
+run_server_setup() { echo "PROBE NO_BACKUP=$NO_BACKUP SETUP_API_SERVER=$SETUP_API_SERVER MODPACK=$MODPACK EULA=$EULA"; [ -z "${PROBE_FAIL:-}" ] || return 3; }
 run_optional_setup() { :; }
 run_server_cleanup() { :; }
 maybe_start_server() { :; }
@@ -458,11 +459,12 @@ test_main_guided_answers_survive_into_the_pipeline() {
 1|
 0|
 1|
+1|
 EOF
   export WHIPTAIL_SHIM_REPLIES="$T/replies"
   local out
   out="$(run_main_wiz $'y\ny\n' --guided)"
-  assert_contains "$out" "PROBE NO_BACKUP=true SETUP_API_SERVER=false VANILLA=true EULA=true" "backups answer reaches the pipeline"
+  assert_contains "$out" "PROBE NO_BACKUP=true SETUP_API_SERVER=false MODPACK=false EULA=true" "backups answer reaches the pipeline"
 }
 
 test_main_dry_run_writes_nothing() {

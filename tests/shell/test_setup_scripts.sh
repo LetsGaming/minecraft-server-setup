@@ -17,6 +17,8 @@ setup() {
   : > "$R/scripts/testinst/backup/automation/run_backup.sh"
   : > "$R/scripts/testinst/backup/automation/scheduled_restart.sh"
   export MAIN_DIR="$T" TARGET_DIR_NAME="mc-root" INSTANCE_NAME="testinst" USER="tester" SYSTEMD_UNIT_DIR="$T/units"
+  # These cases cover the cron fallback; test_timers.sh covers the systemd path.
+  export SYSTEMD_USABLE=false
   mkdir -p "$T/units"
 
   # Writes through tee only, and only where the test pointed it.

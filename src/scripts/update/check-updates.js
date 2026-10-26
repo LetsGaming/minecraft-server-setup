@@ -5,7 +5,8 @@ const axios = require("axios");
 // all during an upgrade, with the server stopped and the lock held. File
 // downloads set their own deadlines (lib/download.js).
 axios.defaults.timeout = axios.defaults.timeout || 30_000;
-const { parseArgs } = require("./lib/args");
+const { parseArgs, exitOnHelp } = require("./lib/args");
+exitOnHelp("Usage: node check-updates.js [mcVersion] [--mcVersion=<ver>] [--only=<slug>] [--json]");
 const { pickVersion, newestFirst } = require("./lib/versions");
 
 // Usage:

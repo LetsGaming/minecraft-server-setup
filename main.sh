@@ -8,6 +8,7 @@ source "$(dirname "$0")/src/common/logging.sh"
 source "$(dirname "$0")/src/common/args.sh"
 source "$(dirname "$0")/src/common/prompts.sh"
 source "$(dirname "$0")/src/common/flags.sh"
+source "$(dirname "$0")/src/common/mirror_flags.sh"
 source "$(dirname "$0")/src/common/setup.sh"
 source "$(dirname "$0")/src/common/ui.sh"
 source "$(dirname "$0")/src/common/prereqs.sh"
@@ -33,10 +34,17 @@ declare -A ARG_OPTS=(
   ["--verbose"]="VERBOSE=false|Print additional logging info"
   ["--y"]="ACCEPT_ALL=false|Accept all defaults and skip prompts"
   ["--check"]="CHECK_ONLY=false|Validate config and environment without running setup"
-  ["--vanilla"]="VANILLA=false|Set up a vanilla/Fabric server instead of a modpack"
+  ["--modpack"]="MODPACK=false|Set up a CurseForge modpack server instead of a vanilla/Fabric server"
+  ["--mirror-source"]="MIRROR_SOURCE=false|Also set this server up as the survival side of the optional creative mirror"
+  ["--mirror-target"]="MIRROR_TARGET=false|Also prepare this server as the creative side of the optional creative mirror (with --default or --guided it needs --mirror-remote and --mirror-seed, or asks for them)"
   ["--default"]="DEFAULT_ROUTE=false|Quick setup with safe defaults and almost no questions"
   ["--guided"]="GUIDED_ROUTE=false|Guided setup wizard with explanations for each choice"
   ["--allow-nodesource"]="ALLOW_NODESOURCE=false|Allow adding the NodeSource apt repository when Node.js is too old"
+)
+
+declare -A ARG_VALUE_OPTS=(
+  ["--mirror-remote"]="MIRROR_REMOTE|Survival server for --mirror-target: host or IP (optionally mcsync@host)"
+  ["--mirror-seed"]="MIRROR_SEED|Seed of the survival world for --mirror-target (its level-seed)"
 )
 
 # Run lifecycle
@@ -56,6 +64,7 @@ fi
 
 check_platform
 select_route
+mirror_flags_check
 
 # Nothing below may call node before the prerequisite stage has made it available.
 if [ "$ROUTE" = power ]; then
@@ -76,6 +85,8 @@ if [ "$ROUTE" = power ]; then
   prompt_for_flags
 fi
 
+mirror_flags_apply
+
 # Arm the rollback trap now that we are about to make real changes.
 _SETUP_SUCCESS=false
 # Record what exists before the first change, so a failure removes only what
@@ -95,6 +106,8 @@ run_post_mod_config
 run_optional_setup
 # Mark success before cleanup/start so those failures don't trigger rollback
 _SETUP_SUCCESS=true
+# Optional and after the success mark: a mirror problem never rolls the install back.
+run_mirror_setup
 run_server_cleanup
 maybe_start_server
 

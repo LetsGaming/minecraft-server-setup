@@ -3,6 +3,13 @@
 # Sourced by migrate.sh: functions and constants only, nothing runs when it is loaded.
 # shellcheck disable=SC2154  # reads globals that migrate.sh and the other modules set
 
+# True when systemd knows a unit file of that name. The exit status of
+# `list-unit-files <name>` is not enough: it depends on the systemd version
+# (older ones exit 0 with "0 unit files listed"), so the listing itself decides.
+_unit_installed() {
+  systemctl list-unit-files "$1" --no-legend 2> /dev/null | grep -q .
+}
+
 # Detects whether the install uses the old flat layout and needs directories moved.
 detect_structure() {
   _old_instance_dir="$BASE_DIR/$INSTANCE_NAME"
@@ -31,7 +38,7 @@ detect_structure() {
   # The web interface is retired rather than relocated: a unit that still exists
   # is a listening, credentialed service the operator believes is gone.
   if [[ -d "$_old_manager_dir" || -d "$_new_manager_dir" ]] \
-     || systemctl list-unit-files "$_manager_svc_name" &>/dev/null; then
+     || _unit_installed "$_manager_svc_name"; then
     NEEDS_MANAGER_RETIRE=true
     info "RETIRE  the bundled web interface (service + deployment)"
   fi
@@ -143,7 +150,7 @@ apply_structural_migration() {
       log "Retiring the bundled web interface"
 
       _mgr_svc_file="/etc/systemd/system/$_manager_svc_name"
-      if systemctl list-unit-files "$_manager_svc_name" &>/dev/null || [[ -f "$_mgr_svc_file" ]]; then
+      if _unit_installed "$_manager_svc_name" || [[ -f "$_mgr_svc_file" ]]; then
         if ! $DRY_RUN; then
           sudo systemctl stop    "$_manager_svc_name" 2>/dev/null || true
           sudo systemctl disable "$_manager_svc_name" 2>/dev/null || true

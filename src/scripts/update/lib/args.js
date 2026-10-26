@@ -91,4 +91,19 @@ function parseArgs(spec = {}) {
   return { get, bool, extra };
 }
 
-module.exports = { parseArgs };
+/**
+ * Prints the usage and exits 0 when --help or -h is among the arguments. Call it
+ * before anything that has a side effect: these scripts change servers, and a
+ * help request must never start an update.
+ *
+ * @param {string} usage
+ * @param {string[]} [argv]
+ */
+function exitOnHelp(usage, argv = process.argv.slice(2)) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(usage);
+    process.exit(0);
+  }
+}
+
+module.exports = { parseArgs, exitOnHelp };

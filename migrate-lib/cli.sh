@@ -104,7 +104,8 @@ What is NEVER touched:
   - common/server-migrations.log, common/migration-backups/, common/upgrade-status.ndjson,
     .locks/ (migration records, replaced units, the last job's status, operation locks)
   - World data, mods, server.jar, server.properties
-  - Cron jobs, and systemd units beyond the server-side migrations above
+  - Cron lines other than the suite's own backup and restart jobs (those move to
+    systemd timers), and systemd units beyond the server-side migrations above
 EOF
 }
 

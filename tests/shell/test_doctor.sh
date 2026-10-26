@@ -24,7 +24,7 @@ test_a_healthy_instance_passes() {
   setup
   run_script "$DOCTOR"
   assert_rc 0 "$RC" "no failures"
-  assert_contains "$OUT" "[OK] cron: hourly backup job present" "backup job found"
+  assert_contains "$OUT" "[OK] schedule: hourly backup runs from a crontab line" "a host with only a cron line is fine"
   assert_contains "$OUT" "[OK] crash-loop-limits" "start limits found"
   assert_contains "$OUT" "[SKIP] sudoers" "no service user, nothing to check"
   assert_contains "$OUT" "[SKIP] wrapper" "wrapper not enabled"
@@ -36,7 +36,7 @@ test_a_missing_backup_job_fails() {
   export CRONTAB_SHIM_TEXT="0 4 * * * echo unrelated"
   run_script "$DOCTOR"
   assert_rc 1 "$RC" "the run fails"
-  assert_contains "$OUT" "[FAIL] cron: no hourly backup job" "says which job is missing"
+  assert_contains "$OUT" "[FAIL] schedule: no hourly backup timer or cron line" "says which job is missing"
 }
 
 test_a_user_without_a_crontab_fails_the_backup_check() {
@@ -44,7 +44,7 @@ test_a_user_without_a_crontab_fails_the_backup_check() {
   export CRONTAB_SHIM_NONE=1
   run_script "$DOCTOR"
   assert_rc 1 "$RC" "the run fails"
-  assert_contains "$OUT" "[FAIL] cron" "an empty crontab has no backup job"
+  assert_contains "$OUT" "[FAIL] schedule" "an empty crontab has no backup job"
 }
 
 test_an_enabled_restart_schedule_needs_its_job() {
@@ -52,7 +52,41 @@ test_an_enabled_restart_schedule_needs_its_job() {
   set_var RESTART_ENABLED true
   run_script "$DOCTOR"
   assert_rc 1 "$RC" "the run fails"
-  assert_contains "$OUT" "no scheduled restart job" "the restart job is missing"
+  assert_contains "$OUT" "no scheduled restart timer or cron line" "the restart job is missing"
+}
+
+test_a_timer_counts_and_shows_its_next_run() {
+  setup
+  export CRONTAB_SHIM_NONE=1 SYSTEMCTL_SHIM_UNITS="testinst-backup.timer"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a timer is enough"
+  assert_contains "$OUT" "[OK] schedule: hourly backup runs from testinst-backup.timer (next: Mon 2026-10-26 04:20:00 UTC)" "the timer and its next run are shown"
+  assert_not_contains "$OUT" "[WARN] schedule" "nothing to warn about"
+}
+
+test_a_timer_and_a_cron_line_together_warn_about_running_twice() {
+  setup
+  export SYSTEMCTL_SHIM_UNITS="testinst-backup.timer"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a warning does not fail the run"
+  assert_contains "$OUT" "[WARN] schedule: the hourly backup runs from testinst-backup.timer and from a crontab line" "says it runs twice"
+  assert_contains "$OUT" "migrate.sh" "and what to do"
+}
+
+test_a_failed_last_timer_run_is_a_warning() {
+  setup
+  export CRONTAB_SHIM_NONE=1 SYSTEMCTL_SHIM_UNITS="testinst-backup.timer" SYSTEMCTL_SHIM_RESULT="exit-code"
+  run_script "$DOCTOR"
+  assert_contains "$OUT" "[WARN] schedule: the last hourly backup run of testinst-backup.service ended with 'exit-code'" "the failed run is reported"
+}
+
+test_an_enabled_restart_schedule_is_satisfied_by_its_timer() {
+  setup
+  set_var RESTART_ENABLED true
+  export CRONTAB_SHIM_NONE=1 SYSTEMCTL_SHIM_UNITS="testinst-backup.timer testinst-restart.timer"
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "both timers present"
+  assert_contains "$OUT" "scheduled restart runs from testinst-restart.timer" "the restart timer is found"
 }
 
 test_storage_over_the_limit_fails_and_near_it_warns() {
@@ -68,12 +102,13 @@ test_storage_over_the_limit_fails_and_near_it_warns() {
   assert_contains "$OUT" "[WARN] storage" "reported as a warning"
 }
 
-test_a_missing_backups_folder_fails() {
+test_a_missing_backups_folder_only_warns_before_the_first_backup() {
   setup
   rm -rf "$T/backups"
   run_script "$DOCTOR"
-  assert_rc 1 "$RC" "the run fails"
-  assert_contains "$OUT" "does not exist" "names the problem"
+  assert_rc 0 "$RC" "a fresh install is not a failure"
+  assert_contains "$OUT" "[WARN] storage: backups folder" "says the folder is missing"
+  assert_contains "$OUT" "does not exist yet" "and that the first backup creates it"
 }
 
 test_a_unit_without_start_limits_warns() {
@@ -93,6 +128,65 @@ test_sudoers_files_are_checked_with_visudo() {
   run_script "$DOCTOR"
   assert_rc 1 "$RC" "a file visudo rejects fails the run"
   assert_contains "$OUT" "[FAIL] sudoers" "reported as sudoers"
+}
+
+test_the_mirror_check_is_skipped_unless_the_mirror_is_switched_on() {
+  setup
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "an instance without a mirror is healthy"
+  assert_contains "$OUT" "[SKIP] mirror: not configured" "the mirror check is skipped, not failed"
+}
+
+test_an_enabled_mirror_that_is_not_installed_is_a_warning() {
+  setup
+  set_var MIRROR_ENABLED true
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a warning does not fail the run"
+  assert_contains "$OUT" "[WARN] mirror: MIRROR_ENABLED is true but the mirror is not installed" "named"
+}
+
+test_an_enabled_mirror_reports_through_its_own_doctor_with_a_prefix() {
+  setup
+  set_var MIRROR_ENABLED true
+  # the mirror lives two folders above the scripts folder; here that is the test root
+  mkdir -p "$T/../mirror-doctor-$$"
+  local base="$T/../mirror-doctor-$$"
+  mkdir -p "$base/mirror"
+  cat > "$base/mirror/mirror.sh" <<'SH'
+#!/bin/bash
+echo "[OK] timer: the pull timer is enabled"
+echo "[FAIL] snapshot: the newest snapshot is 40h old"
+echo "some other line"
+SH
+  # point the check at it through the same relative path the real layout has
+  mkdir -p "$base/mc/scripts"
+  rm -rf "$base/mc/scripts/testinst"
+  cp -r "$T/scripts" "$base/mc/scripts/testinst"
+  mkdir -p "$base/mc/mirror"
+  cp "$base/mirror/mirror.sh" "$base/mc/mirror/mirror.sh"
+  OUT="$(cd "$base/mc/scripts/testinst" && bash "$DOCTOR" 2>&1 < /dev/null)"; RC=$?
+  rm -rf "$base"
+  assert_rc 1 "$RC" "a failure in the mirror fails the run"
+  assert_contains "$OUT" "[OK] mirror-timer: the pull timer is enabled" "its lines carry a mirror- prefix"
+  assert_contains "$OUT" "[FAIL] mirror-snapshot: the newest snapshot is 40h old" "and its failure counts"
+  assert_not_contains "$OUT" "some other line" "other output is not shown as a result"
+}
+
+test_an_old_node_for_the_wrapper_warns_but_does_not_fail() {
+  setup
+  set_var API_SERVER_ENABLED true
+  set_var API_SERVER_PORT 3030
+  set_var API_SERVER_KEY "secret-key-0123456789"
+  mkdir -p "$T/wrapper"
+  echo '{"engines":{"node":">=22"}}' > "$T/wrapper/package.json"
+  export DOCTOR_WRAPPER_DIR="$T/wrapper" DOCTOR_NODE_MAJOR=20
+  run_script "$DOCTOR"
+  assert_rc 0 "$RC" "a warning does not fail the run"
+  assert_contains "$OUT" "[WARN] wrapper-node: Node 20 is older than the >=22" "says which Node is needed"
+  export DOCTOR_NODE_MAJOR=22
+  run_script "$DOCTOR"
+  assert_not_contains "$OUT" "wrapper-node" "a new enough Node is silent"
+  unset DOCTOR_WRAPPER_DIR DOCTOR_NODE_MAJOR
 }
 
 test_wrapper_key_is_checked_and_kept_off_the_command_line() {

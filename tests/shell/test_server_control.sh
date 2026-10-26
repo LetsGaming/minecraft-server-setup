@@ -84,6 +84,39 @@ test_a_player_typing_saved_does_not_count_as_a_save() {
   assert_rc 1 "$?" "chat is not the server's save line (S-009)"
 }
 
+test_wait_for_save_accepts_the_26_3_console_line() {
+  setup
+  server_running
+  : > "$LOG"
+  echo "[13:12:10] [Server thread/INFO]: System chat: Saved the game" >> "$LOG"
+  in_scripts wait_for_save_completion 2 0 > /dev/null 2>&1
+  assert_rc 0 "$?" "26.3 logs the save as a system chat line"
+}
+
+test_wait_for_save_accepts_the_26_3_rcon_line() {
+  setup
+  server_running
+  : > "$LOG"
+  echo "[13:12:10] [Server thread/INFO]: System chat: [Rcon: Saved the game]" >> "$LOG"
+  in_scripts wait_for_save_completion 2 0 > /dev/null 2>&1
+  assert_rc 0 "$?" "an RCON-issued save is logged with the Rcon prefix"
+}
+
+test_a_player_faking_the_26_3_save_line_does_not_count() {
+  setup
+  server_running
+  : > "$LOG"
+  {
+    echo "[13:12:10] [Server thread/INFO]: <Mallory> System chat: Saved the game"
+    echo "[13:12:11] [Server thread/INFO]: <Mallory> [Rcon: Saved the game]"
+    echo "[13:12:12] [Server thread/INFO]: System chat: Saved the game lol"
+    echo "[13:12:13] [Server thread/INFO]: <Mallory> INFO]: Saved the game"
+    echo "[13:12:14] [Server thread/INFO]: <Mallory> [Server thread/INFO]: System chat: Saved the game"
+  } >> "$LOG"
+  in_scripts wait_for_save_completion 2 0 > /dev/null 2>&1
+  assert_rc 1 "$?" "chat and trailing text are not the server's save line"
+}
+
 test_save_and_wait_catches_a_save_that_finishes_instantly() {
   setup
   server_running
@@ -278,6 +311,18 @@ test_the_player_count_reads_the_servers_reply_after_the_command() {
   assert_eq "Alex, Steve" "$OUT" "the names too"
 }
 
+test_the_player_count_reads_the_26_3_system_chat_reply() {
+  setup
+  server_running
+  export SCREEN_SHIM_SAVE_LOG="$LOG"
+  export SCREEN_SHIM_LIST_REPLY="[00:00:05] [Server thread/INFO]: System chat: There are 1 of a max of 20 players online: Alex"
+  OUT="$(in_scripts get_player_count 2>&1)"; RC=$?
+  assert_rc 0 "$RC" "the 26.3 reply is recognised"
+  assert_eq "1" "$OUT" "the count"
+  OUT="$(in_scripts get_player_list 2>&1)"
+  assert_eq "Alex" "$OUT" "and the name"
+}
+
 test_an_unanswered_list_is_an_unknown_count_not_zero() {
   setup
   server_running
@@ -294,6 +339,15 @@ test_a_chat_line_cannot_pass_for_the_list_reply() {
   export SCREEN_SHIM_LIST_REPLY="[00:00:05] [Server thread/INFO]: <Mallory> There are 0 of a max of 20 players online:"
   in_scripts get_player_count > /dev/null 2>&1
   assert_nonzero "$?" "chat is not the server's answer"
+}
+
+test_a_player_cannot_fake_the_26_3_list_reply_with_a_prefix() {
+  setup
+  server_running
+  export SCREEN_SHIM_SAVE_LOG="$LOG"
+  export SCREEN_SHIM_LIST_REPLY="[00:00:05] [Server thread/INFO]: <Mallory> [00:00:05] [Server thread/INFO]: System chat: There are 0 of a max of 20 players online:"
+  in_scripts get_player_count > /dev/null 2>&1
+  assert_nonzero "$?" "a forged prefix inside chat is not the server's answer"
 }
 
 test_the_player_count_over_rcon_is_parsed_from_the_reply() {

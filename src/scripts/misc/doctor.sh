@@ -70,46 +70,74 @@ check_service() {
   fi
 }
 
-check_cron() {
-  local tab rc=0
-  if ! command -v crontab > /dev/null 2>&1; then
-    report SKIP cron "crontab not found"
-    return
-  fi
+# The scheduled jobs run from systemd timers (<instance>-backup.timer and
+# <instance>-restart.timer); hosts without systemd use cron lines instead. A job
+# that has both would run twice, which is worth a warning.
+CRON_TAB=""
+CRON_TAB_READABLE=false
+read_cron_tab() {
+  local rc=0
+  command -v crontab > /dev/null 2>&1 || return 0
   if [[ "$(id -un)" == "$USER" ]]; then
-    tab="$(crontab -l 2>&1)" || rc=$?
+    CRON_TAB="$(crontab -l 2>&1)" || rc=$?
   else
-    tab="$(sudo -n crontab -u "$USER" -l 2>&1)" || rc=$?
+    CRON_TAB="$(sudo -n crontab -u "$USER" -l 2>&1)" || rc=$?
   fi
   if [[ $rc -ne 0 ]]; then
-    if printf '%s' "$tab" | grep -qi 'no crontab'; then
-      tab=""
+    if printf '%s' "$CRON_TAB" | grep -qi 'no crontab'; then
+      CRON_TAB=""
     else
-      report SKIP cron "cannot read the crontab of $USER without sudo"
-      return
+      CRON_TAB=""
+      return 0
     fi
   fi
+  CRON_TAB_READABLE=true
+}
 
-  local backup_job restart_job
-  backup_job="$(printf '%q' "$SCRIPTS_DIR/backup/automation/run_backup.sh")"
-  if printf '%s\n' "$tab" | grep -qF -- "$backup_job"; then
-    report OK cron "hourly backup job present"
-  else
-    report FAIL cron "no hourly backup job for $USER; backups are not running"
-  fi
-  if [[ "${RESTART_ENABLED:-false}" == true ]]; then
-    restart_job="$(printf '%q' "$SCRIPTS_DIR/backup/automation/scheduled_restart.sh")"
-    if printf '%s\n' "$tab" | grep -qF -- "$restart_job"; then
-      report OK cron "scheduled restart job present"
-    else
-      report FAIL cron "RESTART_ENABLED is true but there is no scheduled restart job for $USER"
+timer_enabled() { [[ "$(systemctl is-enabled "$1" 2> /dev/null)" == enabled ]]; }
+
+# check_job <name> <timer-suffix> <script> <when-missing: FAIL text>
+check_job() {
+  local name="$1" suffix="$2" script="$3" missing="$4" unit timer=false cron=false next result
+  unit="$INSTANCE_NAME-$suffix"
+  if command -v systemctl > /dev/null 2>&1 && timer_enabled "$unit.timer"; then timer=true; fi
+  if [[ "$CRON_TAB_READABLE" == true ]] && printf '%s\n' "$CRON_TAB" | grep -qF -- "$(printf '%q' "$script")"; then cron=true; fi
+
+  if [[ "$timer" == true && "$cron" == true ]]; then
+    report WARN schedule "the $name runs from $unit.timer and from a crontab line, so it runs twice; run migrate.sh to drop the cron line"
+  elif [[ "$timer" == true ]]; then
+    next="$(systemctl show -p NextElapseUSecRealtime --value "$unit.timer" 2> /dev/null)"
+    result="$(systemctl show -p Result --value "$unit.service" 2> /dev/null)"
+    report OK schedule "$name runs from $unit.timer${next:+ (next: $next)}"
+    if [[ -n "$result" && "$result" != success ]]; then
+      report WARN schedule "the last $name run of $unit.service ended with '$result'"
     fi
+  elif [[ "$cron" == true ]]; then
+    report OK schedule "$name runs from a crontab line (no systemd timer)"
+  else
+    report FAIL schedule "$missing"
+  fi
+}
+
+check_schedule() {
+  read_cron_tab
+  if ! command -v systemctl > /dev/null 2>&1 && [[ "$CRON_TAB_READABLE" != true ]]; then
+    report SKIP schedule "neither systemctl nor a readable crontab"
+    return
+  fi
+  check_job "hourly backup" backup "$SCRIPTS_DIR/backup/automation/run_backup.sh" \
+    "no hourly backup timer or cron line for $USER; backups are not running"
+  if [[ "${RESTART_ENABLED:-false}" == true ]]; then
+    check_job "scheduled restart" restart "$SCRIPTS_DIR/backup/automation/scheduled_restart.sh" \
+      "RESTART_ENABLED is true but there is no scheduled restart timer or cron line for $USER"
   fi
 }
 
 check_storage() {
   if [[ ! -d "$BACKUPS_PATH" ]]; then
-    report FAIL storage "backups folder $BACKUPS_PATH does not exist"
+    # The first backup creates it, so a fresh install has none yet; a folder that is
+    # still missing after backups should have run shows up in last-backup too.
+    report WARN storage "backups folder $BACKUPS_PATH does not exist yet (the first backup creates it)"
     return
   fi
   local used_bytes max_bytes pct
@@ -192,6 +220,22 @@ api_status() {
     --connect-timeout 3 --max-time 5 --config - "http://127.0.0.1:${API_SERVER_PORT:-3000}$1" 2> /dev/null
 }
 
+# The wrapper declares the Node it needs in its package.json (engines.node,
+# ">=N"). A host with an older Node still runs it, so this only warns.
+# DOCTOR_WRAPPER_DIR and DOCTOR_NODE_MAJOR exist for the tests.
+check_wrapper_node() {
+  local pkg="${DOCTOR_WRAPPER_DIR:-$SCRIPTS_DIR/../../services/api-server}/package.json" range need have
+  [[ -f "$pkg" ]] || return 0
+  range="$(awk '/"engines"/ { f = 1 } f && /"node"/ { sub(/.*"node"[[:space:]]*:[[:space:]]*"/, ""); sub(/".*/, ""); print; exit }' "$pkg" 2> /dev/null)"
+  [[ "$range" =~ ^\>=[[:space:]]*([0-9]+) ]] || return 0
+  need="${BASH_REMATCH[1]}"
+  have="${DOCTOR_NODE_MAJOR:-$(node -p 'process.versions.node.split(".")[0]' 2> /dev/null)}"
+  [[ "$have" =~ ^[0-9]+$ ]] || return 0
+  if (( have < need )); then
+    report WARN wrapper-node "Node $have is older than the >=$need the wrapper asks for"
+  fi
+}
+
 check_wrapper() {
   if [[ "${API_SERVER_ENABLED:-false}" != true ]]; then
     report SKIP wrapper "API_SERVER is not enabled"
@@ -204,6 +248,7 @@ check_wrapper() {
     return
   fi
   report OK wrapper "answers on port ${API_SERVER_PORT:-3000}"
+  check_wrapper_node
   code="$(api_status "/instances/$INSTANCE_NAME/running")"
   case "$code" in
     200) report OK wrapper-key "the configured API key is accepted" ;;
@@ -259,14 +304,36 @@ check_xaero_config() {
   fi
 }
 
+# The optional creative mirror: skipped unless it is switched on for this instance.
+# When it is, the mirror's own doctor does the checking and its lines are shown
+# here with a mirror- prefix. Nothing else in the suite needs the mirror.
+check_mirror() {
+  if [[ "${MIRROR_ENABLED:-false}" != true ]]; then
+    report SKIP mirror "not configured"
+    return
+  fi
+  local entry="$SCRIPTS_DIR/../../mirror/mirror.sh" out line
+  if [[ ! -f "$entry" ]]; then
+    report WARN mirror "MIRROR_ENABLED is true but the mirror is not installed ($entry is missing); run mirror.sh setup"
+    return
+  fi
+  out="$(bash "$entry" doctor --scripts-dir "$SCRIPTS_DIR" 2>&1)" || true
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^\[(OK|WARN|FAIL|SKIP)\]\ ([^:]+):\ (.*)$ ]]; then
+      report "${BASH_REMATCH[1]}" "mirror-${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    fi
+  done <<< "$out"
+}
+
 echo "Doctor: $INSTANCE_NAME"
 check_service
-check_cron
+check_schedule
 check_storage
 check_last_backup
 check_sudoers
 check_wrapper
 check_xaero_config
+check_mirror
 check_webhook
 
 echo "Summary: $N_OK ok, $N_WARN warnings, $N_FAIL failed, $N_SKIP skipped"

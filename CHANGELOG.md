@@ -5,6 +5,28 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **An optional creative mirror (`mirror.sh`, `docs/mirror.md`).** A second server where players build in creative mode on a nightly copy of the survival world, with flat build plots beside it. The survival server exports an immutable snapshot of its chunk folders (a short save-off window, or none with `stage` mode); the creative server pulls it over SSH with a read-only `rrsync` account and swaps the chunk folders in a few seconds. It installs on servers that already run (`mirror.sh setup source|target`, which never restarts them) or together with a new one (`--mirror-source`, `--mirror-target`, the `MIRROR` block of `variables.json`, a Guided wizard question). `mirror.sh prepare` readies a new creative server (seed, creative mode, pinned FabricPlots and Dimensional Inventories with a checked SHA-512, pools). Pairing is `authorize` plus `pin-host`, and `mirror.sh test` checks that writes, shell commands, path escapes and a wrong host key are refused. Safety behaviour: refuses a snapshot that is empty, much smaller or of another Minecraft version, stops a transfer that outgrows its manifest, checks disk space before deleting anything, rolls back a server that does not start, and puts a swap that was killed half way back consistently. `manage.sh mirror ...` and `manage.sh doctor` show it; without it nothing in the suite changes. Webhook events `mirror_export_failed`, `mirror_sync_complete`, `mirror_sync_failed`.
+
+- `main.sh --default --mirror-target --mirror-remote=<host> --mirror-seed=<seed>` sets up a creative mirror target without a hand-written `variables.json`; the two values are asked for on a terminal, and without one the setup stops before changing anything. Setup flags can now take values (`--name=value` or `--name value`).
+
+### Changed
+
+- **Breaking: setup now installs a vanilla/Fabric server by default; `--modpack` selects a CurseForge modpack.** The `--vanilla` flag is removed (an unknown flag now stops with an error) and `npm run setup:vanilla` is replaced by `npm run setup:modpack`. Anyone who ran plain `main.sh` for a modpack must now pass `--modpack`. `main.sh --check` only reports the CurseForge settings when `--modpack` is given.
+
+- **The hourly backup and the scheduled restart now run from systemd timers instead of the crontab.** Setup writes `<instance>-backup.timer` and `<instance>-restart.timer` (oneshot services run as the server owner; no sandboxing options, because the jobs use `sudo` and screen). `migrate.sh` moves an existing install over (new server migration `cron_to_timers`): the timers are enabled and verified first, then only the suite's own cron lines are removed, with the old crontab kept and any unusual schedule or missing `sudo` reported as a manual step. Hosts without a running systemd keep cron lines. `manage.sh doctor` checks the timers (next run, last result) and warns when a job has both a timer and a cron line.
+
+### Fixed
+
+- **Backups work again in the default (screen) mode on Minecraft 26.3.** 26.3 logs `System chat: Saved the game`, which the confirmed-save wait never matched, so every backup aborted after 120 s. The pattern is now anchored to the whole log line (timestamp and thread included, so chat cannot fake it) and accepts the 26.3 console and RCON forms. The same prefix change had hidden the player list in screen mode, so player-aware restarts could not read the count; fixed the same way (`common/server_control.sh`).
+- **The backup staging mirror stays private after a refresh.** `rsync -a` copied the group-write bit of a world created under `umask 002` (the Debian and Ubuntu default) back onto the mirror; the refresh now strips group and other write (`backup/lib/bk_stage.sh`). CI runs the backup suites under `umask 002` as well.
+- `--api-server` on a config without an API key no longer deploys a wrapper that crash-loops: setup generates a key, stores it in `variables.json` and never prints it. Setup and `doctor` warn when the host Node is older than the wrapper's `engines.node`.
+- `update-mods.js`, `update-server.js` and the other update scripts answer `--help` and `-h` with their usage and exit; `update-server.js` used to start a real update. `main.sh --check` finds `cron` and `setfacl` in `/usr/sbin` for a normal user. `doctor` warns instead of failing about a backups folder that the first backup has not created yet.
+- Tests no longer depend on the weekday (the daily/weekly tier tests failed on Sundays), the `systemctl` shim answers `list-unit-files` like systemd 257, and the migrate check for the retired web interface no longer treats every host as having its unit.
+- `--api-server` with the example config's placeholder API key now generates a real key instead of failing later in the loader.
+- Mirror exports keep every snapshot in the export folder's group, so the read-only account can always read them, and preparing a creative mirror target installs the pinned Fabric API when a plain Fabric server has none.
+
 ### Security
 
 - **A failed setup run no longer deletes the whole install.** The rollback removed the entire base directory, so a failure while adding a second instance (or any re-run) took every instance, world and default backup with it. Setup now records what exists before its first change and rolls back only the paths and units it created, puts the crontab back exactly and restores the shared wrapper's config. `TARGET_DIR_NAME` must be a plain folder name (`src/common/setup.sh`, `src/setup/common/loadVariables.js`).

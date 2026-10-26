@@ -16,6 +16,7 @@ const fs = require("fs");
 const path = require("path");
 // Serialized with other mod changes and with restore, rollback and upgrade
 // (S-024): re-runs this script under the instance's operation lock.
+require("./lib/args").exitOnHelp("Usage: node toggle-mod.js <slug-or-project-id> --enable|--disable [--json]");
 require("./lib/opLock").guardModOperation();
 const { parseArgs } = require("./lib/args");
 const { createJsonMode } = require("./lib/json-mode");
