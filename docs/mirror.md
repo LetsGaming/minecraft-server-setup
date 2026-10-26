@@ -132,6 +132,7 @@ Never copied: `level.dat`, `data/` (scoreboard, maps, game rules, world border),
 - **Fabric Loader and world-generation mods:** differences are a warning by default (`MIRROR_PARITY=warn`; `refuse` stops the pull, `off` is silent).
 - **Generation is only approximate even with everything matching.** In the audit's test, newly generated chunks on two identical servers differed in small features (kelp, ore blobs, leaves) in roughly two thirds of the chunks, and with C2ME the number of differing blocks was about three times higher. Large terrain and biomes line up. Plan for the edge of the mirrored area not being block-perfect.
 - **C2ME:** the installer and `doctor` warn when it is installed. On a new target `prepare` turns it off. On an existing survival server nothing is removed for you.
+- **Mods that change the world height** (a build limit mod such as Remove Buildlimit) must be installed on the creative server too. Without it the creative server cannot read the taller chunks (it logs "Ignoring heightmap data") and may clip them when it saves. The default `MIRROR_WORLDGEN_MODS` list includes `buildlimit`, so the pull warns when only one side has it. Copy the jar from the survival server's `mods` folder.
 
 ## Every night
 
