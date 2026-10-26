@@ -225,7 +225,12 @@ stage_mods() {
       if grep -qiE -- "$alt" <<< "$(basename "$jar")"; then cp -a --reflink=auto -- "$jar" "$dest/"; fi
     done
   done
-  [[ ! -d "$SERVER_DIR/mods/disabled" ]] || cp -a --reflink=auto -- "$SERVER_DIR/mods/disabled" "$dest/disabled"
+  # Everything in the folder that is not a jar stays: mods/disabled, and the data
+  # folders some mods keep there (LuckPerms' groups and users live in mods/luckperms).
+  for jar in "$SERVER_DIR/mods"/* "$SERVER_DIR/mods"/.[!.]*; do
+    [[ -e "$jar" && ! "$jar" == *.jar ]] || continue
+    cp -a --reflink=auto -- "$jar" "$dest/"
+  done
 }
 
 # Moves the live chunk folders aside and the pre-staged ones in. Every step is

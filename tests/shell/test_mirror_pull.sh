@@ -351,6 +351,9 @@ test_an_extra_that_is_server_state_is_refused() {
 
 test_the_mods_sync_runs_the_sources_mods_and_keeps_the_targets_own() {
   extras_setup || return 0
+  mkdir -p "$T/tgt/server/mods/luckperms/json-storage/groups" "$T/tgt/server/mods/disabled"
+  echo lp-rules > "$T/tgt/server/mods/luckperms/json-storage/groups/default.json"
+  touch "$T/tgt/server/mods/disabled/old-mod.jar"
   mirror_set "$T/tgt" MIRROR_SYNC_MODS true
   run_job tgt "$PULL_SH"
   assert_rc 0 "$RC" "pulled"
@@ -360,6 +363,8 @@ test_the_mods_sync_runs_the_sources_mods_and_keeps_the_targets_own() {
   assert_exists "$m/sit!-1.2.6.4+26.3.jar" "a file name with punctuation is fine"
   assert_missing "$m/c2me-fabric-1.0.jar" "an excluded mod (C2ME) is not taken, and the target's own copy is gone"
   assert_exists "$m/fabricplots-1.0.2.jar" "the target's own plot mod survives"
+  assert_eq "lp-rules" "$(cat "$m/luckperms/json-storage/groups/default.json")" "a mod's data folder inside mods/ survives the swap"
+  assert_exists "$m/disabled/old-mod.jar" "and so does mods/disabled"
   assert_exists "$T/tgt/mirror/sync/rollback/_mods/c2me-fabric-1.0.jar" "the old mods folder is kept for a rollback"
 }
 

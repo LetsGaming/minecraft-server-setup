@@ -160,15 +160,17 @@ fi
 # --- LuckPerms: every player may use /gamemode ---------------------------------
 # Vanilla ties /gamemode to op. LuckPerms is told to keep its data in plain JSON so
 # the default group can be written before the first start; its other settings keep
-# their defaults. Files that exist are never overwritten (an admin's rules win).
+# their defaults. The settings live in config/luckperms, but on Fabric the data
+# (groups, users) lives in mods/luckperms. Files that exist are never overwritten
+# (an admin's rules win).
 if $PERMISSIONS; then
   LP_DIR="$CONFIG_DIR/luckperms"
   LP_CONF="$LP_DIR/luckperms.conf"
-  LP_GROUP="$LP_DIR/json-storage/groups/default.json"
+  LP_GROUP="$SERVER_PATH/mods/luckperms/json-storage/groups/default.json"
   if $DRY_RUN; then
     say "would let every player use /gamemode (LuckPerms: group default gets minecraft.command.gamemode)"
   else
-    mkdir -p "$LP_DIR/json-storage/groups"
+    mkdir -p "$LP_DIR" "$(dirname "$LP_GROUP")"
     if [[ -f "$LP_CONF" ]]; then
       say "LuckPerms settings exist already; left as they are"
     else
