@@ -78,7 +78,7 @@ while (($#)); do
     --parity) O_PARITY="$2"; shift 2 ;;
     --bwlimit) O_BWLIMIT="$2"; shift 2 ;;
     --extras) O_EXTRAS="$2"; shift 2 ;;
-    --homes) O_EXTRAS="ec_player_profiles essentialcommands"; shift ;;
+    --homes) O_EXTRAS="modplayerdata essentialcommands"; shift ;;
     --sync-mods) O_SYNC_MODS=true; shift ;;
     --from) O_FROM="$2"; shift 2 ;;
     --key) O_KEY="$2"; shift 2 ;;

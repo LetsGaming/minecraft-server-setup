@@ -239,7 +239,7 @@ function loadVariables() {
     if (mirror.EXTRAS !== undefined) {
       const deny = /^(dimensions|players|playerdata|advancements|stats|data|datapacks|region|entities|poi|dimensional-inventories|level\.dat.*|session\.lock|\.|\.\.)$/;
       if (!Array.isArray(mirror.EXTRAS) || mirror.EXTRAS.some((x) => typeof x !== "string" || !/^[A-Za-z0-9_.-]+$/.test(x) || deny.test(x))) {
-        throw new Error("MIRROR.EXTRAS must be a list of plain world folder names that are not server state (for example ec_player_profiles).");
+        throw new Error("MIRROR.EXTRAS must be a list of plain world folder names that are not server state (for example modplayerdata).");
       }
     }
     for (const key of ["SYNC_MODS", "EXPORT_MODS"]) {

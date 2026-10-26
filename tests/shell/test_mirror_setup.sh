@@ -215,6 +215,22 @@ test_setup_source_installs_settings_code_and_an_export_timer_without_touching_th
   assert_contains "$OUT" "the running server was not touched" "and the output says so"
 }
 
+test_homes_and_extras_options_are_stored_and_state_folders_are_refused() {
+  setup
+  inst src source
+  mirror_run setup source --scripts-dir "$T/src/scripts" --homes
+  assert_rc 0 "$RC" "--homes is accepted"
+  assert_contains "$(cat "$T/src/scripts/common/variables.txt")" 'MIRROR_EXTRAS="modplayerdata essentialcommands"' "it stands for EssentialCommands' real homes and warps folders"
+  mirror_run setup source --scripts-dir "$T/src/scripts" --extras "players"
+  assert_nonzero "$RC" "a folder with server state is refused"
+  mirror_run setup source --scripts-dir "$T/src/scripts" --extras "../etc"
+  assert_nonzero "$RC" "and so is a path"
+  inst tgt target
+  mirror_run setup target --scripts-dir "$T/tgt/scripts" --source survival.example --sync-mods --extras "modplayerdata"
+  assert_rc 0 "$RC" "a target takes the options too"
+  assert_contains "$(cat "$T/tgt/scripts/common/variables.txt")" 'MIRROR_SYNC_MODS="true"' "the mods sync is stored"
+}
+
 test_setup_source_rejects_bad_options() {
   setup
   inst src source

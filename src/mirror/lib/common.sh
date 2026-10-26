@@ -57,7 +57,7 @@ mirror_load() {
   MIRROR_MAX_SNAPSHOT_GB="${MIRROR_MAX_SNAPSHOT_GB:-0}"
   MIRROR_MAX_FILE_SIZE="${MIRROR_MAX_FILE_SIZE:-2G}"
   # World folders (besides the dimensions) copied as they are, for example
-  # EssentialCommands' homes: "ec_player_profiles essentialcommands". Empty = none.
+  # EssentialCommands' homes: "modplayerdata essentialcommands". Empty = none.
   MIRROR_EXTRAS="${MIRROR_EXTRAS:-}"
   MIRROR_EXTRAS_MAX_MB="${MIRROR_EXTRAS_MAX_MB:-256}"
   # Source: put the mods folder's jars into every snapshot. Target: replace this

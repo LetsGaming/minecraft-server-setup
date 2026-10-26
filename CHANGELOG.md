@@ -22,6 +22,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `mirror.sh setup --homes` now copies the folder EssentialCommands really keeps `/home`s in (`modplayerdata`) together with the warps and spawn (`essentialcommands`); it used to name `ec_player_profiles`, which only holds empty stubs.
 - The mirror's parity check also compares build limit mods (such as Remove Buildlimit), because a creative server without them cannot read the survival world's taller chunks.
 - **Backups work again in the default (screen) mode on Minecraft 26.3.** 26.3 logs `System chat: Saved the game`, which the confirmed-save wait never matched, so every backup aborted after 120 s. The pattern is now anchored to the whole log line (timestamp and thread included, so chat cannot fake it) and accepts the 26.3 console and RCON forms. The same prefix change had hidden the player list in screen mode, so player-aware restarts could not read the count; fixed the same way (`common/server_control.sh`).
 - **The backup staging mirror stays private after a refresh.** `rsync -a` copied the group-write bit of a world created under `umask 002` (the Debian and Ubuntu default) back onto the mirror; the refresh now strips group and other write (`backup/lib/bk_stage.sh`). CI runs the backup suites under `umask 002` as well.

@@ -127,14 +127,14 @@ Never copied: `level.dat`, `data/` (scoreboard, maps, game rules, world border),
 
 ### Extra folders (homes, warps, spawn)
 
-Some mods keep player-facing data in their own world folder. EssentialCommands keeps `/home`s in `ec_player_profiles/` and `/warp`s and `/spawn` in `essentialcommands/`. List such folders on **both** servers and they are copied along with the chunks and swapped in the same stop window:
+Some mods keep player-facing data in their own world folder. EssentialCommands keeps `/home`s in `modplayerdata/` (one file per player; `ec_player_profiles/` holds only empty stubs) and `/warp`s and `/spawn` in `essentialcommands/`. List such folders on **both** servers and they are copied along with the chunks and swapped in the same stop window:
 
 ```bash
 bash mirror.sh setup source --instance survival --homes     # or --extras "folder another-folder"
 bash mirror.sh setup target --instance creative --homes
 ```
 
-`--homes` is short for `--extras "ec_player_profiles essentialcommands"`. The target only takes folders it lists itself, so the source cannot choose what is written on the creative server. Folders that hold the server's own state (`players`, `playerdata`, `advancements`, `stats`, `data`, `level.dat*` and the dimensions) are refused. The folder is replaced as a whole, so homes someone set on the creative server are overwritten by the survival ones at the next pull; the old folder is kept in the rollback copy. `MIRROR_EXTRAS_MAX_MB` (default 256) caps one folder.
+`--homes` is short for `--extras "modplayerdata essentialcommands"`. The target only takes folders it lists itself, so the source cannot choose what is written on the creative server. Folders that hold the server's own state (`players`, `playerdata`, `advancements`, `stats`, `data`, `level.dat*` and the dimensions) are refused. The folder is replaced as a whole, so homes someone set on the creative server are overwritten by the survival ones at the next pull; the old folder is kept in the rollback copy. `MIRROR_EXTRAS_MAX_MB` (default 256) caps one folder.
 
 Homes are coordinates in the mirrored overworld, so they land in the right place. With the homes and the spawn mirrored, `/home` and `/spawn` also take a player out of the plot dimension and back to the survival world.
 
@@ -218,7 +218,7 @@ Switched on by `mirror.sh setup` (which keeps a marked block in `common/variable
 | `MIN_REGION_RATIO_PCT` | refuse a snapshot with fewer region files than this share of the current mirror | `50` |
 | `MAX_SNAPSHOT_GB` | refuse a larger snapshot, 0 for no limit | `0` |
 | `KEEP_SNAPSHOTS` | snapshots kept on the source, at least 2 | `2` |
-| `EXTRAS` | extra world folders to mirror, for example `["ec_player_profiles", "essentialcommands"]` | none |
+| `EXTRAS` | extra world folders to mirror, for example `["modplayerdata", "essentialcommands"]` | none |
 | `SYNC_MODS`, `EXPORT_MODS` | target: run the source's mods; source: put its mods in the snapshots | off, on |
 
 The same keys exist in `variables.txt` with a `MIRROR_` prefix. Other `MIRROR_*` tuning (timeouts, retries, lock wait) is read from the same file; see `src/mirror/lib/common.sh` for the full list.
