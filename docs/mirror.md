@@ -104,7 +104,7 @@ A target needs `MIRROR.REMOTE` and, in `JAVA.SERVER.SEED`, the survival world's 
 
 - game mode creative, `force-gamemode` off, region compression `deflate`, the seed,
 - RCON on (the suite's own RCON mode, used for the nightly swap),
-- FabricPlots and Dimensional Inventories from Modrinth by exact version, with the SHA-512 checked (see `src/mirror/pins.json`; for a Minecraft version without a pin the newest release is used and the output says so),
+- Fabric API (a plain Fabric server has none), FabricPlots and Dimensional Inventories from Modrinth by exact version, with the SHA-512 checked (see `src/mirror/pins.json`; for a Minecraft version without a pin the newest release is used and the output says so),
 - FabricPlots without its own game-mode switching, and Dimensional Inventories pools so the plots, the mirrored overworld and the Nether with the End (one shared pool) each keep their own inventory, all creative,
 - C2ME turned off on a new server (see below).
 
